@@ -12,8 +12,8 @@ const __dirname = path.dirname(__filename);
 const VOICE_DIR = path.join(__dirname, 'voice_cache');
 if (!fs.existsSync(VOICE_DIR)) fs.mkdirSync(VOICE_DIR, { recursive: true });
 
-// 默认音色：曼波
-const DEFAULT_VOICE_ID = '2aec4123eb4d51d43bbb47b91e1ece27';
+// 默认音色
+const DEFAULT_VOICE_ID = '793689b9fc5fb783dc74ccace331a49d';
 
 export async function textToSpeech(text, voiceId = DEFAULT_VOICE_ID) {
     const url = `https://api-v2.yuafeng.cn/API/kktts.php?content=${encodeURIComponent(text)}&action=voice&voice_id=${voiceId}`;
