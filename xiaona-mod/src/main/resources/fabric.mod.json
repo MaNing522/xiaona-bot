@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "xiaona",
+  "version": "${version}",
+  "name": "Xiaona MC Bridge",
+  "description": "小钠 QQ 机器人的服务器侧桥：把游戏内聊天/进出服事件推给本机机器人，并接收它投递的文本。与 Minecraft 共用同一端口（端口复用）。QQ 与 AI 均在本机运行。",
+  "authors": ["zwzzxy", "Trae AI"],
+  "contact": {
+    "email": "hellozwzzxy@outlook.com"
+  },
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": ["com.xiaona.XiaonaMod"]
+  },
+  "mixins": ["xiaona.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "fabric-api": "*",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  }
+}

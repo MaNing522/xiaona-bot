@@ -1,0 +1,19 @@
+{
+  "name": "qq-bot",
+  "version": "1.0.0",
+  "description": "基于真实QQ账号(QQNT/NapCat OneBot11) 的小钠机器人：AI回复+联网搜索+语音+截图",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "duck-duck-scrape": "^2.2.7",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

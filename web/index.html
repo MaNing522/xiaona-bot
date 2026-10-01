@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420">
+<title>小钠控制面板</title>
+<style>
+:root{
+  --bg:#0f1420; --card:#171f31; --card2:#121a2a; --line:#27314a;
+  --txt:#e8eef9; --sub:#94a3bd; --accent:#4f8cff; --accent2:#7c5cff;
+  --ok:#2ecc71; --warn:#f5b942; --danger:#ef5350; --radius:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:
+  radial-gradient(1200px 600px at 15% -10%, rgba(79,140,255,.18), transparent 60%),
+  radial-gradient(900px 500px at 100% 0%, rgba(124,92,255,.14), transparent 55%),
+  var(--bg);
+  color:var(--txt);min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+body{padding:24px;padding-bottom:calc(36px + env(safe-area-inset-bottom))}
+.logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;font-size:23px;flex:0 0 auto;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 6px 18px rgba(79,140,255,.35)}
+h1{font-size:20px;margin:0}
+.sub{color:var(--sub);font-size:13px;line-height:1.5;word-break:break-all}
+.pill{display:inline-block;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:600}
+.pill.ok{background:rgba(46,204,113,.16);color:var(--ok)}
+.pill.warn{background:rgba(245,185,66,.16);color:var(--warn)}
+.pill.red{background:rgba(239,83,80,.16);color:var(--danger)}
+.live{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.card{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent),var(--card);
+  border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:16px;
+  box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.card h2{font-size:17px;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+.grid{display:block}
+.span2{grid-column:1/-1}
+
+/* ---------- 布局：左侧栏 + 右内容 ---------- */
+.app{display:flex;gap:20px;align-items:flex-start;margin:0 auto}
+.side{position:sticky;top:24px;flex:0 0 264px;width:264px;padding:18px;
+  background:linear-gradient(180deg,rgba(255,255,255,.02),transparent),var(--card);
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.nav{display:flex;flex-direction:column;gap:8px}
+.nav-item{display:flex;align-items:center;gap:12px;width:100%;min-height:52px;padding:0 14px;
+  border:1px solid transparent;border-radius:13px;background:transparent;color:var(--sub);
+  font-family:inherit;font-size:16px;font-weight:600;text-align:left;cursor:pointer;transition:.15s}
+.nav-item .ico{font-size:19px;width:24px;text-align:center;flex:0 0 auto}
+.nav-item:hover{background:var(--card2);color:var(--txt)}
+.nav-item:active{transform:scale(.97)}
+.nav-item.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-color:transparent}
+.side-foot{border-top:1px solid var(--line);margin-top:16px;padding-top:14px;display:flex;flex-direction:column;gap:10px}
+.side-foot .live{margin:0}
+.main{flex:1;min-width:0}
+.panel{display:none}
+.panel.active{display:grid;grid-template-columns:1fr;gap:16px}
+@media (min-width:1100px){.panel.active{grid-template-columns:1fr 1fr}}
+
+/* 窄屏：侧栏变成顶部横向导航，不占满一列 */
+@media (max-width:819px){
+  body{padding:14px;padding-bottom:calc(26px + env(safe-area-inset-bottom))}
+  .app{flex-direction:column;gap:14px}
+  .side{position:static;flex:none;width:100%;padding:12px}
+  .nav{flex-direction:row;overflow-x:auto;gap:8px;padding-bottom:2px}
+  .nav-item{flex:0 0 auto;width:auto;min-height:44px;white-space:nowrap}
+  .side-foot{border-top:0;margin-top:12px;padding-top:0;flex-direction:row;align-items:center;flex-wrap:wrap}
+  .side-foot .live{flex:1}
+}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:54px;
+  padding:0 22px;border:0;border-radius:14px;background:var(--accent);color:#fff;
+  font-size:16px;font-weight:600;cursor:pointer;width:100%;margin-top:6px;transition:filter .15s}
+.btn:active{transform:scale(.97)}
+.btn.green{background:var(--ok)}.btn.red{background:var(--danger)}.btn.ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+input,select{width:100%;min-height:54px;padding:0 16px;margin-top:10px;border-radius:14px;
+  border:1px solid var(--line);background:var(--card2);color:var(--txt);font-size:16px}
+label{font-size:14px;color:var(--sub)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stat{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;
+  border-bottom:1px dashed var(--line);font-size:15px}
+.stat:last-child{border-bottom:0}
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{background:var(--card2);border:1px solid var(--line);padding:8px 15px;border-radius:999px;font-size:14px}
+.qr{text-align:center}
+.qr img{width:min(280px,68vw);height:min(280px,68vw);border-radius:12px;image-rendering:pixelated;border:1px solid var(--line)}
+.hint{font-size:13.5px;color:var(--sub);margin-top:10px;line-height:1.7}
+.cmd{background:var(--card2);border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
+.cmd b{color:var(--accent);font-size:15px}
+.log{background:#0a0e16;border:1px solid var(--line);border-radius:13px;padding:12px;
+  font-family:ui-monospace,Consolas,monospace;font-size:13px;color:#9fd3a0;
+  height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+footer{color:var(--sub);font-size:13px;text-align:center;margin-top:10px}
+@media (prefers-color-scheme:light){
+  :root{--bg:#eef2f9;--card:#fff;--card2:#f4f7ff;--line:#dbe3f1;--txt:#1a2436;--sub:#5b6b86}
+  body{background:radial-gradient(1200px 600px at 15% -10%, rgba(79,140,255,.12), transparent 60%),#eef2f9}
+  .log{background:#0a0e16;color:#9fd3a0}
+}
+</style>
+</head>
+<body>
+<script>
+// 会话过期/被登出时，任何接口都会回 401 —— 直接回登录页，避免面板卡在报错
+(function () {
+  const _f = window.fetch;
+  window.fetch = async function (...a) {
+    const r = await _f(...a);
+    if (r.status === 401) location.reload();
+    return r;
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    const b = document.getElementById('logoutBtn');
+    if (b) b.onclick = async () => { try { await _f('/api/logout', { method: 'POST' }); } catch {} location.reload(); };
+  });
+})();
+</script>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">🤖</div>
+      <div>
+        <h1>小钠控制面板</h1>
+        <div class="sub" id="sub">正在连接…</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-tab="login"><span class="ico">📊</span>登录状态</button>
+      <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
+      <button class="nav-item" data-tab="group"><span class="ico">🛡️</span>群管</button>
+      <button class="nav-item" data-tab="takeover"><span class="ico">🤝</span>接管</button>
+      <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
+    </nav>
+    <div class="side-foot">
+      <div class="live">
+        <span class="pill" id="lvUp">—</span>
+        <span class="pill" id="lvBot">—</span>
+        <span class="pill" id="lvLogin">—</span>
+        <span class="pill" id="lvAuth">—</span>
+      </div>
+      <button class="btn ghost" id="logoutBtn" style="min-height:46px;font-size:15px;margin-top:0">退出登录</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="grid" id="main">
+      <!-- 登录状态 -->
+  <div class="panel active" data-panel="login">
+    <div class="card">
+      <h2>📊 登录状态</h2>
+      <div class="stat"><span>NapCat 在线</span><span id="stNpUp" class="pill warn">…</span></div>
+      <div class="stat"><span>登录进程</span><b id="stLoginProc">—</b></div>
+      <div class="stat"><span>登录方式</span><b id="stLoginMode">—</b></div>
+      <div class="stat"><span>登录状态</span><span id="stLoginState" class="pill warn">…</span></div>
+      <div class="stat"><span>机器人 ↔ NapCat</span><span id="stNpBot" class="pill warn">…</span></div>
+    </div>
+    <div class="card">
+      <h2 id="qrTitle">🔳 二维码</h2>
+      <div class="qr"><img id="qrImg" alt="二维码" style="display:none"><div class="hint" id="qrHint">启动登录后显示二维码</div></div>
+      <div class="hint" id="captchaHint"></div>
+      <button class="btn ghost" id="openVerify" style="display:none">🔗 打开验证链接（验证码/滑块）</button>
+      <button class="btn ghost" id="openWebui">打开 NapCat WebUI（验证码/滑块）</button>
+    </div>
+    <div class="card">
+      <h2>🔑 手动登录（备用）</h2>
+      <div class="hint" style="margin-top:0">一般由启动脚本自动登录；仅当自动登录失败时才需要手动操作。</div>
+      <label>登录方式</label>
+      <select id="lgMode">
+        <option value="qrcode">二维码登录（推荐）</option>
+        <option value="password">账号密码 + 验证码</option>
+      </select>
+      <div id="pwdFields" style="display:none">
+        <input id="lgQq" type="text" inputmode="numeric" placeholder="QQ 号（自动填充上次成功登录的账号）" autocomplete="off">
+        <input id="lgPwd" type="password" placeholder="密码（不回显、不保存到磁盘）" autocomplete="new-password">
+      </div>
+      <button class="btn green" id="lgStart">▶ 启动登录</button>
+      <button class="btn red" id="lgStop">■ 停止登录进程</button>
+    </div>
+    <div class="card span2">
+      <h2>📄 NapCat 登录日志</h2>
+      <div class="log" id="lgNpLog"></div>
+    </div>
+  </div>
+
+  <!-- 授权 -->
+  <div class="panel" data-panel="perms">
+    <div class="card">
+      <h2>👑 主人 / 管理员</h2>
+      <div class="stat"><span>主人(QQ)</span><b id="pmOwner">—</b></div>
+      <div class="stat"><span>管理员</span><b id="pmAdmins">—</b></div>
+    </div>
+    <div class="card">
+      <h2>🍀 申请授权（需主人同意）</h2>
+      <div class="hint" style="margin-top:0">提交后等待主人在 QQ 上以 <b>#授权</b> 同意。</div>
+      <div class="row" style="margin-top:8px">
+        <input id="pmApply" type="text" inputmode="numeric" placeholder="我的 QQ 号">
+        <button class="btn green" id="pmReq">提交申请</button>
+      </div>
+      <div id="pmApplyMsg" class="hint"></div>
+    </div>
+    <div class="card"><h2>🟢 已授权</h2><div class="chips" id="pmList"><span class="hint">加载中…</span></div></div>
+    <div class="card"><h2>⏳ 待主人审批</h2><div class="chips" id="pmPending"><span class="hint">暂无</span></div></div>
+  </div>
+
+  <!-- 群管 -->
+  <div class="panel" data-panel="group">
+    <div class="card">
+      <h2>🛡️ 群管理（主人 / 管理员）</h2>
+      <div class="hint" style="margin-top:0">发送指令给机器人 <b>@小钠 + #指令</b> 即可执行（限本群）。</div>
+      <div class="cmd"><b>#禁言 @或QQ号 [分钟]</b><div class="hint">默认 10 分钟。</div></div>
+      <div class="cmd"><b>#临时禁言 @或QQ号 [秒]</b><div class="hint">短时禁言，默认 60 秒。</div></div>
+      <div class="cmd"><b>#解禁 @或QQ号</b><div class="hint">解除禁言。</div></div>
+      <div class="cmd"><b>#踢出 @或QQ号</b><div class="hint">移出本群。</div></div>
+      <div class="cmd"><b>#拉黑 @或QQ号</b><div class="hint">移出并拒绝再次入群。</div></div>
+      <div class="cmd"><b>#全体禁言</b> · <b>#解除全体禁言</b><div class="hint">开启/关闭全体禁言。</div></div>
+      <div class="cmd"><b>#群公告 内容</b><div class="hint">发布群公告。</div></div>
+      <div class="cmd"><b>#定时提醒 <时间> <内容></b><div class="hint">到时提醒；时间可用 N分钟/N小时/HH:MM。群聊提醒发送到本群。</div></div>
+      <div class="cmd"><b>#定时禁言 @或QQ号 <开始>-<结束></b><div class="hint">时间段禁言（如 12:00-18:00），每天重复，结束自动解禁。</div></div>
+      <div class="cmd"><b>#定时解禁 @或QQ号 <时间></b><div class="hint">安排在指定时间解禁某成员。</div></div>
+      <div class="cmd"><b>#定时列表</b> · <b>#取消定时 &lt;id&gt;</b><div class="hint">查看 / 取消定时任务（主人/管理员）。</div></div>
+      <div class="cmd"><b>#换名 &lt;新昵称&gt;</b> · <b>#换头像 &lt;图片&gt;</b><div class="hint">主人专用，修改机器人昵称/头像（需 NapCat 支持）。</div></div>
+      <div class="hint">示例：<b>#禁言</b> 然后 @某人 500；或 <b>#拉黑 123456789</b>；群聊含"<b>小钠</b>"或 @小钠 触发智能回复</div>
+    </div>
+  </div>
+
+  <!-- 接管 -->
+  <div class="panel" data-panel="takeover">
+    <div class="card">
+      <h2>🤝 人工接管</h2>
+      <div class="hint" style="margin-top:0">开启接管后，该会话的消息不再自动回复，由你在面板上手动回复（实时查看 + 手动发送）。</div>
+      <div id="tkConvs"><span class="hint">暂无会话（机器人收到消息后会出现在这里）</span></div>
+      <div class="hint" id="tkAudit" style="margin-top:10px"></div>
+    </div>
+    <div class="card span2">
+      <h2>💬 会话消息</h2>
+      <div class="log" id="tkMsgs" style="height:240px"></div>
+    </div>
+    <div class="card span2">
+      <h2>📝 手动回复</h2>
+      <div class="row" style="margin-top:8px">
+        <input id="tkKey" type="text" placeholder="会话 key，如 g:群号 / p:QQ号">
+        <input id="tkReply" type="text" placeholder="回复内容">
+      </div>
+      <button class="btn green" id="tkSend">发送回复</button>
+      <div class="hint" id="tkSendMsg"></div>
+    </div>
+  </div>
+
+  <!-- 状态 -->
+  <div class="panel" data-panel="status">
+    <div class="card">
+      <h2>⚙️ 运行状态</h2>
+      <div class="stat"><span>控制面板服务</span><span id="stUp" class="pill warn">…</span></div>
+      <div class="stat"><span>机器人 ↔ NapCat</span><span id="stBot" class="pill warn">…</span></div>
+      <div class="stat"><span>NapCat 在线</span><span id="stNapcat" class="pill warn">…</span></div>
+      <div class="stat"><span>AI 模型</span><b id="stModel">—</b></div>
+      <div class="stat"><span>NapCat 地址</span><b id="stWs">—</b></div>
+      <div class="stat"><span>登录进程</span><b id="stLogin">—</b></div>
+    </div>
+    <div class="card span2">
+      <h2>📄 终端实时日志（与终端同步）</h2>
+      <div class="log" id="lgLog"></div>
+    </div>
+  </div>
+    </div>
+    <footer>小钠 QQ 机器人 · 迁移时整个文件夹复制即可（路径自动适应）</footer>
+  </main>
+</div>
+
+<script>
+const $=(id)=>document.getElementById(id);
+async function api(p,o){const r=await fetch(p,Object.assign({'Content-Type':'application/json'},o||{}));
+  const d=await r.json().catch(()=>({}));if(d.error)throw new Error(d.error);return d;}
+const set=($id,s,c)=>{const el=$($id);el.textContent=s;el.className='pill '+c;};
+
+// 侧栏导航：切换面板，并把当前页记在 URL hash 里（刷新后仍停在原页）
+function showTab(name){
+  const item=document.querySelector('.nav-item[data-tab="'+name+'"]');
+  const panel=document.querySelector('.panel[data-panel="'+name+'"]');
+  if(!item||!panel)return;
+  document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  item.classList.add('active');panel.classList.add('active');
+  if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+}
+document.querySelectorAll('.nav-item').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+showTab((location.hash||'').replace('#','')||'login');
+
+// 登录
+$('lgMode').onchange=()=>{$('pwdFields').style.display=$('lgMode').value==='password'?'block':'none';};
+$('lgStart').onclick=async()=>{try{const mode=$('lgMode').value,qq=$('lgQq').value.trim(),password=$('lgPwd').value;
+  await api('/api/login/start',{method:'POST',body:JSON.stringify({mode,qq,password})});refresh();}catch(e){alert('启动失败: '+e.message);}};
+$('lgStop').onclick=async()=>{try{await api('/api/login/stop',{method:'POST'});}catch(e){}refresh();};
+$('openWebui').onclick=()=>window.open(`http://${location.hostname}:6099/webui`,'_blank');
+let verifyUrl='';
+$('openVerify').onclick=()=>{if(verifyUrl)window.open(verifyUrl,'_blank');};
+
+// 申请授权
+$('pmReq').onclick=async()=>{const qq=$('pmApply').value.trim();if(!qq)return;
+  try{const d=await api('/api/perm/request',{method:'POST',body:JSON.stringify({qq})});
+    $('pmApplyMsg').textContent=d.msg||'';$('pmApply').value='';perms();}catch(e){$('pmApplyMsg').textContent='失败: '+e.message;}};
+
+async function load(){try{const s=await api('/api/status');
+  set('stUp','正常','ok');set('stBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
+  set('stNapcat',s.napcatUp?'在线':'离线',s.napcatUp?'ok':'warn');
+  set('stNpBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
+  $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
+  $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
+  $('sub').textContent=s.wsUrl+' · 授权由主人管理'+(s.botError?' · '+s.botError:'');
+  set('lvUp','服务在线','ok');set('lvBot',s.botConnected?'机器人已连接':'机器人未连接',s.botConnected?'ok':'warn');
+  set('lvAuth','授权由主人管理','warn');
+}catch(e){set('stUp','离线','red');set('lvUp','服务离线','red');}}
+
+async function perms(){try{const d=await api('/api/perms');
+  $('pmOwner').textContent=d.owner||'未设置';$('pmAdmins').textContent=d.admins.join('、')||'无';
+  $('pmList').innerHTML=d.authorized.length?d.authorized.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
+  $('pmPending').innerHTML=d.pending.length?d.pending.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
+}catch(e){}}
+
+async function refresh(){try{const s=await api('/api/login/status');
+  const lgOk=s.running?s.success:!!s.napcatUp;
+  const lgTxt=s.running?(s.success?'已登录':(s.captcha?'需验证码':'登录中…')):(s.napcatUp?'NapCat在线(外部)':'未运行');
+  $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
+  set('lvLogin',lgTxt,lgOk?'ok':'warn');
+  // 登录状态详情
+  set('stNpUp',s.napcatUp?(s.running?'在线(面板)':'在线(外部)'):'离线',s.napcatUp?'ok':'warn');
+  $('stLoginProc').textContent=s.running?'运行中':'未运行';
+  $('stLoginMode').textContent=s.mode==='password'?'账密登录':(s.mode==='qrcode'?'二维码/快速登录':'—');
+  // 自动填充上次成功登录的账号（不覆盖用户已输入的内容；密码永不落盘，需重新输入）
+  if(s.savedQq&&!$('lgQq').value)$('lgQq').value=s.savedQq;
+  set('stLoginState',s.running?(s.success?'已登录':(s.captcha?'需验证码':'登录中…')):'未运行',s.running?(s.success?'ok':'warn'):'ok');
+  $('lgNpLog').textContent=(s.logs||[]).join('\n')||'(无日志)';$('lgNpLog').scrollTop=$('lgNpLog').scrollHeight;
+  if(s.running&&s.qrExists){$('qrImg').src='/api/qrcode?t='+Date.now();$('qrImg').style.display='';$('qrHint').textContent='手机 QQ 扫码授权，自动刷新';}
+  else{$('qrImg').style.display='none';$('qrHint').textContent='启动登录后显示二维码';}
+  const cap=s.captcha, vu=s.verifyUrl||'';
+  verifyUrl=vu;
+  $('openVerify').style.display=(cap&&vu)?'':'none';
+  $('captchaHint').textContent=cap?(vu?('检测到需要验证码/滑块，请点击下方"打开验证链接"完成验证。'):'检测到需要验证码/滑块：请点击"打开 NapCat WebUI"完成验证。'):'';
+  $('qrTitle').textContent='🔳 二维码（'+(s.running?(s.success?'已就绪':'启动中'):(s.napcatUp?'外部运行':'未启动'))+'）';
+}catch(e){}}
+
+// 终端实时日志（与终端输出一致）
+async function logs(){try{const d=await api('/api/logs');
+  $('lgLog').textContent=(d.logs||[]).join('\n')||'(暂无日志)';$('lgLog').scrollTop=$('lgLog').scrollHeight;
+}catch(e){}}
+
+// ---------- 人工接管（三态：自动/人工/混合） ----------
+let tkSelected = '';
+async function takeoverUI(){
+  try{
+    const d = await api('/api/takeover');
+    const modes = d.modes||{};
+    const msgs = d.msgs||[];
+    const keys=[];
+    for(const m of msgs){ if(m.key && !keys.includes(m.key)) keys.push(m.key); }
+    if(keys.length && !tkSelected){ tkSelected = keys[0]; $('tkKey').value = tkSelected; }
+    const mkBtn=(k,val,label,activeCls,bg)=>'<button class="btn '+(modes[k]===val?activeCls:'ghost')+'" style="min-height:30px;width:auto;padding:0 10px;font-size:12px'+(modes[k]===val&&bg?';background:'+bg+';border-color:transparent':'')+'" data-mode="'+val+':'+k+'">'+label+'</button>';
+    $('tkConvs').innerHTML = keys.length ? keys.map(k=>{
+      const last=(msgs.filter(m=>m.key===k).slice(-1)[0]||{}).text||'';
+      return '<div class="cmd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px">'+
+        '<b style="min-width:100px">'+k+'</b>'+
+        '<span class="hint" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(last||'')+'</span>'+
+        mkBtn(k,'auto','自动','green')+
+        mkBtn(k,'manual','人工','red')+
+        mkBtn(k,'hybrid','混合','green','#7c5cff')+
+        '<button class="btn ghost" style="min-height:30px;width:auto;padding:0 10px;font-size:12px" data-sel="'+k+'">查看</button>'+
+        '</div>';
+    }).join('') : '<span class="hint">暂无会话</span>';
+    document.querySelectorAll('[data-mode]').forEach(b=>{
+      b.onclick=async()=>{
+        const i=b.dataset.mode.indexOf(':');
+        const val=b.dataset.mode.slice(0,i), k=b.dataset.mode.slice(i+1);
+        try{ await api('/api/takeover',{method:'POST',body:JSON.stringify({key:k,mode:val})}); }catch(e){}
+        takeoverUI();
+      };
+    });
+    document.querySelectorAll('[data-sel]').forEach(b=>{
+      b.onclick=()=>{ tkSelected=b.dataset.sel; $('tkKey').value=tkSelected; takeoverUI(); };
+    });
+    // 审计日志
+    const audit = d.audit||[];
+    $('tkAudit').textContent = audit.length ? '📋 最近操作：'+audit.slice(-5).map(a=>`${a.key} ${a.from}→${a.to}（${a.by} ${new Date(a.t).toLocaleTimeString('zh-CN',{hour12:false})}）`).join('；') : '';
+    // 消息记录（选中会话）
+    const sel = tkSelected || '';
+    const list = sel ? msgs.filter(m=>m.key===sel) : msgs;
+    $('tkMsgs').textContent = list.length ? list.map(m=>{
+      const tm = new Date(m.t).toLocaleTimeString('zh-CN',{hour12:false});
+      return (m.dir==='out'?'【我】':('【'+m.from+'】'))+' '+tm+' '+m.text;
+    }).join('\n') : '(无消息)';
+    $('tkMsgs').scrollTop = $('tkMsgs').scrollHeight;
+  }catch(e){}
+}
+$('tkSend').onclick = async ()=>{
+  const key=$('tkKey').value.trim(), text=$('tkReply').value.trim();
+  if(!key||!text) return;
+  try{
+    const d = await api('/api/takeover/send',{method:'POST',body:JSON.stringify({key,text})});
+    $('tkSendMsg').textContent = d.ok?('✅ 已发送：'+text):('❌ '+(d.error||'发送失败'));
+    if(d.ok){ $('tkReply').value=''; takeoverUI(); }
+  }catch(e){ $('tkSendMsg').textContent='❌ '+e.message; }
+};
+
+load();perms();refresh();logs();takeoverUI();load();perms();
+setInterval(load,5000);setInterval(perms,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(takeoverUI,2000);
+</script>
+</body>
+</html>

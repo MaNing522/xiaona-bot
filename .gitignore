@@ -1,24 +1,38 @@
-# Compiled class file
-*.class
+# ---------- 机密：绝不入库 ----------
+.env
+data/
+config/
+*.jks
+*.keystore
 
-# Log file
+# ---------- 第三方程序与二进制（体积大、非本项目源码）----------
+napcat/
+node_modules/
+vc_redist.x64.exe
+*.exe
+*.dll
+
+# ---------- 运行期产物 ----------
+voice_cache/
+logs/
 *.log
 
-# BlueJ files
-*.ctxt
+# ---------- 与本项目无关的另一个项目 ----------
+meteor-vulkan-compat/
 
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
+# ---------- 小钠 mod（其内部有自己的 .gitignore）----------
+xiaona-mod/build/
+xiaona-mod/.gradle/
+xiaona-mod/gradle-dist/
+xiaona-mod/run/
+xiaona-mod/.fabric/
+xiaona-mod/.verify-server/
 
-# Package Files #
-*.jar
-*.war
-*.nar
-*.ear
-*.zip
-*.tar.gz
-*.rar
-
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-replay_pid*
+# ---------- IDE / 系统 ----------
+.idea/
+*.iml
+.vscode/
+.settings/
+.DS_Store
+Thumbs.db
+desktop.ini

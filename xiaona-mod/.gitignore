@@ -1,0 +1,32 @@
+# ---------- 构建产物 ----------
+build/
+.gradle/
+gradle-dist/
+
+# ---------- 本地运行环境 ----------
+# run/ 里有 Minecraft 世界、日志，以及 mod 生成的真实 config.json
+run/
+.fabric/
+.verify-server/
+
+# ---------- 运行期配置与数据（可能含 QQ 账号 / 密码 / AI 密钥，绝不入库）----------
+config/
+.mcproxy/
+*.log
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+out/
+
+# ---------- 系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
