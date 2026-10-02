@@ -12,7 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 保证在 init() 之前 process.env 已从 .env 加载（本模块可能在 index.js 的 dotenv.config() 之前被 import）
 // 显式指定路径，避免受启动目录影响
 dotenv.config({ path: path.join(__dirname, '.env') });
-const DATA_DIR = path.join(__dirname, 'data');
+// 与 index.js 保持一致：SAVE_DIR 配了就用它，否则用项目下的 data/
+const DATA_DIR = process.env.SAVE_DIR || path.join(__dirname, 'data');
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
 const PENDING_FILE = path.join(DATA_DIR, 'pending.json');
 

@@ -8,9 +8,9 @@
 //
 // 数据存在 data/bindings.json：{ "qq": { "<QQ号>": { "ids": ["Steve"], "at": 时间 } } }
 // ============================================================
-import fs from 'fs';
 import path from 'path';
 import { renderCaptcha } from './captcha.js';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 const GAME_ID = /^[A-Za-z0-9_]{3,16}$/;   // MC 正版/离线 ID 规则
 const MAX_TRIES = 5;
@@ -26,27 +26,13 @@ export function initBindings(saveDir, opts = {}) {
   file = path.join(saveDir, 'bindings.json');
   maxPerQq = Number(opts.maxPerQq) > 0 ? Number(opts.maxPerQq) : 3;
   ttlSec = Number(opts.ttlSec) > 0 ? Number(opts.ttlSec) : 300;
-  try {
-    if (fs.existsSync(file)) {
-      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
-    }
-  } catch (e) {
-    console.error('[绑定] bindings.json 读取失败，已从空表开始:', e.message);
-    data = { qq: {} };
-  }
+  const j = readJsonSafe(file, null, 'bindings.json');
+  if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
   console.log(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
 }
 
 function save() {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    console.error('[绑定] 保存 bindings.json 失败:', e.message);
-  }
+  writeJsonAtomic(file, data);
 }
 
 export function maxPerQQ() { return maxPerQq; }

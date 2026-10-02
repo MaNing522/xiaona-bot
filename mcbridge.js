@@ -14,6 +14,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 // 配置在 startMcBridge() 时从 process.env 读取。
 // 不能写在模块顶层：ESM 的 import 会先于 index.js 里的 dotenv.config() 执行，那时 env 还是空的。
@@ -347,40 +348,27 @@ let presenceFile = '';
  */
 export function initPresence(saveDir) {
     presenceFile = path.join(saveDir, 'presence.json');
-    try {
-        if (!fs.existsSync(presenceFile)) return;
-        const j = JSON.parse(fs.readFileSync(presenceFile, 'utf8'));
-        const players = j && j.players && typeof j.players === 'object' ? j.players : {};
-        joinHistory.clear();
-        for (const key of Object.keys(players).slice(-JOIN_HISTORY_PLAYERS)) {
-            const e = players[key];
-            if (!e || !Array.isArray(e.events)) continue;
-            joinHistory.set(key, {
-                name: String(e.name || key),
-                ip: String(e.ip || ''),
-                events: e.events.slice(-JOIN_HISTORY_MAX),
-            });
-        }
-        console.log(`[MC桥] 已加载 ${joinHistory.size} 名玩家的上下线记录`);
-    } catch (err) {
-        console.error('[MC桥] presence.json 读取失败，已从空表开始:', err.message);
-        joinHistory.clear();
+    const j = readJsonSafe(presenceFile, null, 'presence.json');
+    const players = j && j.players && typeof j.players === 'object' ? j.players : {};
+    joinHistory.clear();
+    for (const key of Object.keys(players).slice(-JOIN_HISTORY_PLAYERS)) {
+        const e = players[key];
+        if (!e || !Array.isArray(e.events)) continue;
+        joinHistory.set(key, {
+            name: String(e.name || key),
+            ip: String(e.ip || ''),
+            events: e.events.slice(-JOIN_HISTORY_MAX),
+        });
     }
+    console.log(`[MC桥] 已加载 ${joinHistory.size} 名玩家的上下线记录`);
 }
 
-/** 整表落盘（原子写：先写 .tmp 再改名，避免半截文件） */
+/** 整表落盘（原子写，避免半截文件） */
 function savePresence() {
     if (!presenceFile) return;
-    try {
-        const players = {};
-        for (const [k, v] of joinHistory) players[k] = v;
-        fs.mkdirSync(path.dirname(presenceFile), { recursive: true });
-        const tmp = presenceFile + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify({ players }, null, 2));
-        fs.renameSync(tmp, presenceFile);
-    } catch (e) {
-        console.error('[MC桥] 保存 presence.json 失败:', e.message);
-    }
+    const players = {};
+    for (const [k, v] of joinHistory) players[k] = v;
+    writeJsonAtomic(presenceFile, { players });
 }
 
 function recordPresence(type, name, ip) {
