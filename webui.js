@@ -15,6 +15,8 @@ import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
+import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
+import { isMcConnected } from './mcbridge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
@@ -334,9 +336,57 @@ $('f').onsubmit = async function (ev) {
 </script></body></html>`;
 }
 
+// ---------- 健康检查（免鉴权） ----------
+// 只暴露「能不能用」的布尔量与版本无关的计数，**不含**密钥 / URL / QQ 号 / 群号。
+const HEALTH_AI_TTL = 60 * 1000; // AI 可达性探测结果缓存 60 秒，避免每次探活都打真实请求
+let healthAiCache = { at: 0, reachable: false };
+
+/** 轻量探测 AI 服务商是否可达：只要求「对方有 HTTP 响应」就算通（401 也算，说明网络与接口在） */
+async function probeAiReachable() {
+  if (Date.now() - healthAiCache.at < HEALTH_AI_TTL) return healthAiCache.reachable;
+  let reachable = false;
+  try {
+    const endpoint = balanceEndpoint() || getProviderInfo().url;
+    if (endpoint) {
+      const res = await fetch(endpoint, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(4000),
+      });
+      reachable = !!res && res.status > 0;
+    }
+  } catch {
+    reachable = false;
+  }
+  healthAiCache = { at: Date.now(), reachable };
+  return reachable;
+}
+
+async function handleHealth(res) {
+  const botConnected = !!bot.connected;
+  const mcConfigured = !!String(process.env.MC_BRIDGE_URL || '').trim()
+    && !!String(process.env.MC_BRIDGE_SECRET || '').trim();
+  const mcConnected = mcConfigured ? isMcConnected() : false;
+  const aiEnabled = isAiEnabled();
+  const aiReachable = aiEnabled ? await probeAiReachable() : false;
+
+  const body = {
+    status: botConnected && (!mcConfigured || mcConnected) ? 'ok' : 'degraded',
+    uptime: Math.round(process.uptime()),
+    bot: { connected: botConnected },
+    mcBridge: { configured: mcConfigured, connected: mcConnected },
+    ai: { enabled: aiEnabled, reachable: aiReachable },
+    timestamp: new Date().toISOString(),
+  };
+  sendJSON(res, body.status === 'ok' ? 200 : 503, body);
+}
+
 // ---------- 路由 ----------
 async function route(req, res, url) {
   sweepAuth();
+
+  // 健康检查：放在一切鉴权之前（探活工具不该需要登录），且不返回任何敏感信息
+  if (url.pathname === '/health') return handleHealth(res);
 
   if (url.pathname === '/' || url.pathname === '/index.html') {
     // 未登录只给登录页，真实面板不落给未认证的人

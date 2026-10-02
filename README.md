@@ -44,6 +44,8 @@
 - **文字转语音**、**屏幕/网址截图**、**MC 服务器状态查询**、**定时提醒/定时禁言**。
 - **进群/好友申请审批**：转发给主人，引用通知回复「同意 / 拒绝」即可（绝不自动同意）。
 - **端口复用**：HTTP 面板与 MC 同端口共存；并让服务端也能拿到玩家**真实 IP**。
+- **健康检查**：`GET /health`（免登录）返回机器人 / MC 桥 / AI 的通断状态，便于外部探活。
+- **日志落盘**：终端、面板实时日志、`logs/YYYY-MM-DD.log` 三处同步，级别可配。
 
 ---
 
@@ -53,18 +55,22 @@
 QQBot/
 ├─ index.js             机器人主程序（消息处理、AI、命令）
 ├─ start.js             启动器（拉起 NapCat + 机器人 + WebUI）
-├─ webui.js             网页控制面板（登录 / 权限 / 开关 / 接管）
+├─ aiService.js         AI 服务商可插拔层（选服务商 / 定模型 / 发请求）
+├─ webui.js             网页控制面板（登录 / 权限 / 开关 / 接管 / 健康检查）
+├─ logger.js            统一日志出口（终端 + 面板 + 按天文件）
 ├─ mcbridge.js          与服务器 mod 的加签通信（HTTP + SSE）
 ├─ binding.js           QQ ↔ 游戏ID 绑定（验证码）
-├─ memory.js            会话记忆            permission.js  主人/管理员/授权
+├─ memory.js            会话记忆（SQLite）   db.js          建表 / FTS5 / 旧数据迁移
 ├─ help.js              #帮助 菜单           scheduler.js   定时任务
 ├─ search.js            联网搜索（百度智能搜索）
 ├─ tts.js               文字转语音（玉峰）   screenshot.js  屏幕 / 网址截图
-├─ mc.js                MC 服务器状态        captcha.js / shake.js / state.js
+├─ mc.js                MC 服务器状态        captcha.js / shake.js / state.js / datafile.js
+├─ test/                Vitest 单元测试
 ├─ web/index.html       控制面板页面
 ├─ prompt.txt           机器人人设提示词（改完保存即热更新）
 ├─ push.bat             用 .env 里的 token 推送到 GitHub
 ├─ .env.example         配置模板（复制为 .env 填写；.env 不入库）
+├─ logs/                按天滚动的运行日志（YYYY-MM-DD.log，不入库）
 └─ xiaona-mod/          Minecraft Fabric 服务端模组（Java）
    └─ src/main/java/com/xiaona/  ·  src/main/resources/
 ```
@@ -76,7 +82,7 @@ QQBot/
 | 组件 | 要求 |
 |---|---|
 | 系统 | Windows 10 / 11 |
-| 运行时 | Node.js ≥ 18 |
+| 运行时 | **Node.js ≥ 22**（记忆存储用内置 `node:sqlite`，无需编译原生依赖） |
 | QQ | 一个真实 QQ 账号（作机器人）；NapCat 自备 |
 | 服务端桥 | Java 21 · Fabric Loader ≥ 0.18.1 · Fabric API · Minecraft 1.21.11 |
 
@@ -126,7 +132,7 @@ gradlew.bat build
 | NapCat | `NAPCAT_WS` / `NAPCAT_TOKEN` | OneBot11 连接地址与 token |
 | NapCat 面板 | `NAPCAT_WEBUI_TOKEN` / `NAPCAT_WEBUI_JWT_SECRET` | 固定面板密码与会话密钥，避免重启掉登录 |
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
-| AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 默认 DeepSeek |
+| AI | `AI_PROVIDER` / `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 服务商（`deepseek`/`openai`/`custom`，默认 deepseek）；URL 与模型留空则用所选服务商的默认值 |
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
 | 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
 | 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
@@ -139,6 +145,7 @@ gradlew.bat build
 | MC 桥限流 | `MC_BRIDGE_CHAT_RATE_MAX` / `MC_BRIDGE_CHAT_RATE_WINDOW_SEC` / `MC_BRIDGE_DUP_MAX` / `MC_BRIDGE_DUP_TTL_SEC` | 公聊限速与重复屏蔽 |
 | 行为 | `BOT_REPLY` / `QQ_GROUP_NOTICE` / `POKE_REPLY` / `QQ_REQUEST_APPROVE` | 机器人消息、进出群提示、戳一戳、申请审批 |
 | 绑定 | `BIND_MAX_PER_QQ` / `BIND_CAPTCHA_TTL` | 每人可绑数量、验证码有效期 |
+| 日志 | `LOG_LEVEL` | `trace`/`debug`/`info`/`warn`/`error`/`fatal`（默认 `info`），三处输出见下 |
 
 ### `config/xiaona/config.json`（服务端）
 
@@ -181,6 +188,54 @@ gradlew.bat build
 - 服务端把 MC 的实际绑定挪到内部端口（`internalPort`），对外只保留 `sharePort`；`PortMux` 按首字节区分 **HTTP**（面板）与 **Minecraft 握手**后分流。
 - 这样即使服务商只放行一个端口，也能同时开 MC 与面板。
 - 复用后 MC 侧看到的所有对端都是 `127.0.0.1`；本机通过「上游本地端口 → 真实 IP」映射还原真实地址，服务端侧则由 `ClientConnectionMixin` 在 `getAddress()` 出口处替换，使控制台、日志、封禁等也能看到**真实 IP**。
+
+---
+
+## 运维与开发
+
+### 健康检查
+
+`GET /health` **不需要登录**（面板未配置 `WEBUI_PASSWORD` 时不启动，该端点也不可用）：
+
+```json
+{ "status": "ok", "uptime": 123,
+  "bot":      { "connected": true },
+  "mcBridge": { "configured": true, "connected": true },
+  "ai":       { "enabled": true, "reachable": true },
+  "timestamp": "2026-10-02T15:01:35.463Z" }
+```
+
+一切正常返回 `200`；机器人掉线、或 MC 桥已配置却未连上时返回 **503**。
+`ai.reachable` 是轻量探测（结果缓存 60 秒），**不返回**任何密钥、URL、QQ 号、群号。
+
+### 日志
+
+三处同步输出，级别由 `LOG_LEVEL` 控制：
+
+| 去处 | 说明 |
+|---|---|
+| 终端 | 等宽字体没有 emoji 字形，表情会被替换成 `[表情]`，保证一定看得见 |
+| 网页面板 | 实时日志流（保留 emoji，浏览器可正常渲染） |
+| 文件 | `logs/YYYY-MM-DD.log`，按天滚动，不入库 |
+
+### 记忆存储
+
+会话记忆存在 `data/memory.db`（SQLite，由 Node 内置的 `node:sqlite` 驱动，**不需要编译原生模块**）：
+
+- 全文搜索用 **FTS5 + trigram 分词**；中文查询需 **≥ 3 个字符**，更短的自动回退 `LIKE`。
+- 首次启动若发现旧的 `data/memory.json`，会**一次性导入并保留原文件**作为回滚点。
+- `data/` 已在 `.gitignore` 中排除。
+
+### 常用命令
+
+```bat
+npm start          启动机器人
+npm run dev        开发模式（改 prompt.txt / .env 或源码自动重启）
+npm run lint       代码检查（ESLint 9）
+npm run lint:fix   自动修复可修复的问题
+npm run format     格式化（Prettier 只作用于新增文件，存量代码保持原样）
+npm test           跑单元测试（Vitest）
+```
 
 ---
 
