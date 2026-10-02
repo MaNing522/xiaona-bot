@@ -10,10 +10,12 @@ import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
 import { getSearchContext } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { logger, setLogLevel } from './logger.js';
+import { chatCompletion, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo } from './aiService.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
 import { startWebUI, setOwnerNotifier } from './webui.js';
-import { bot, setBotConnected, setBotError, pushLog, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
+import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
 import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory } from './memory.js';
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
@@ -29,25 +31,8 @@ const __dirname = path.dirname(__filename);
 // 显式指定 .env 路径，避免受启动目录影响
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-// 挂钩 console：终端输出同步进共享日志，供 WebUI 实时展示（与终端一致）
-const _log = console.log;
-const _err = console.error;
-
-/**
- * 终端字体（Consolas/宋体这类等宽字体）基本没有 emoji 和部分符号的字形，
- * 直接输出会被画成空白或豆腐块 —— 看起来就是"没显示出来"。
- * 这里把连续的一串换成 [表情]，保证终端里一定看得到东西；
- * WebUI 日志仍保留原文（浏览器自己有 emoji 字体回退，能正常渲染）。
- * 注意别把箭头/几何图形/带圈数字也吞掉：那些在中文字体里是能正常显示的。
- */
-// eslint-disable-next-line no-misleading-character-class -- ZWJ/变体选择符本就在字符类里做「表情组成符」匹配，是刻意为之
-const TERM_UNSAFE = /[\u{1F000}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{200D}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]+/gu;
-function termSafe(v) {
-    return typeof v === 'string' ? v.replace(TERM_UNSAFE, '[表情]') : v;
-}
-
-console.log = (...a) => { _log(...a.map(termSafe)); try { pushLog(a.map(String).join(' ')); } catch {} };
-console.error = (...a) => { _err(...a.map(termSafe)); try { pushLog('❌ ' + a.map(String).join(' ')); } catch {} };
+// 日志统一走 logger.js（终端 termSafe + WebUI pushLog + 按天文件），不再挂钩 console
+setLogLevel(process.env.LOG_LEVEL);
 
 /**
  * 写入带过期的缓存，并在写之前封顶：先清已过期的，仍满就丢最早写入的（Map 保持插入顺序）。
@@ -81,7 +66,7 @@ const BOT_REPLY = (process.env.BOT_REPLY || 'false') === 'true';
 const QQ_REQUEST_APPROVE = (process.env.QQ_REQUEST_APPROVE || 'true') !== 'false';
 
 // ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
-const AI_ENABLED = !!String(process.env.AI_API_KEY || '').trim();
+const AI_ENABLED = isAiEnabled();
 const SEARCH_ENABLED = !!String(process.env.BAIDU_SEARCH_KEY || '').trim();
 const WEBUI_ENABLED = !!String(process.env.WEBUI_PASSWORD || '').trim();
 const MC_ENABLED = !!String(process.env.MC_BRIDGE_URL || '').trim()
@@ -91,13 +76,13 @@ const OWNER_ENABLED = !!String(process.env.BOT_OWNER || '').trim();
 function logFeatureStates() {
     // 不用 emoji：终端会把它们替换成 [表情]，反而看不出开关状态
     const on = (b) => (b ? '[已启用]' : '[已停用]');
-    console.log('=== 功能状态（.env 里缺配置的会自动停用）===');
-    console.log(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
-    console.log(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
-    console.log(`   语音合成       [已启用]  kktts 免密钥`);
-    console.log(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
-    console.log(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
-    console.log(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
+    logger.info('=== 功能状态（.env 里缺配置的会自动停用）===');
+    logger.info(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
+    logger.info(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
+    logger.info(`   语音合成       [已启用]  kktts 免密钥`);
+    logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
+    logger.info(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
+    logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
 }
 
 // ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
@@ -171,14 +156,14 @@ function getSystemPrompt() {
         if (st.mtimeMs !== promptCache.mtimeMs) {
             const text = fs.readFileSync(PROMPT_PATH, 'utf-8');
             if (text.trim()) {
-                console.log(promptCache.text
+                logger.info(promptCache.text
                     ? `🔄 提示词已热更新（${text.length} 字符），下一条消息就生效`
                     : `📝 已加载提示词（${text.length} 字符）`);
                 promptCache = { mtimeMs: st.mtimeMs, text };
             }
         }
     } catch (e) {
-        if (!promptCache.text) console.error('❌ 读取提示词失败（prompt.txt 在不在？）:', e.message);
+        if (!promptCache.text) logger.error('❌ 读取提示词失败（prompt.txt 在不在？）:', e.message);
     }
     return promptCache.text;
 }
@@ -226,10 +211,6 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
  *                    @了机器人、引用了机器人、私聊，都是明确在跟它说话，不允许跳过。
  */
 async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false) {
-    const url = process.env.AI_API_URL;
-    const apiKey = process.env.AI_API_KEY;
-    const model = process.env.AI_MODEL || 'deepseek-chat';
-
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
@@ -276,26 +257,12 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
 现在请回复用户：${userInput}`;
 
     const sys = getSystemPrompt();
-    const payload = {
-        model,
-        messages: [
-            ...(sys ? [{ role: 'system', content: sys }] : []),
-            { role: 'user', content: decisionPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 2048,
-    };
+    const messages = [
+        ...(sys ? [{ role: 'system', content: sys }] : []),
+        { role: 'user', content: decisionPrompt },
+    ];
 
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`AI 请求失败 (${res.status})`);
-    const data = await res.json();
-    if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');
-
-    let reply = data.choices[0].message.content || '';
+    let reply = await chatCompletion({ messages, temperature: 0.7, maxTokens: 2048 });
 
     // 解析标记：容忍全角冒号、空格、缺失关键词等写法
     let skip = false;
@@ -377,7 +344,7 @@ function sanitizeOutgoing(text) {
             out = out.replace(re, to);
         }
     }
-    if (hit) console.log('🛡️ 发送前把真实脏字换成了谐音');
+    if (hit) logger.info('🛡️ 发送前把真实脏字换成了谐音');
     return out;
 }
 
@@ -390,7 +357,7 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
 
     // 已判定被禁言的群：直接静默跳过，不再尝试发送（避免连环报错）
     if (gidKey && mutedGroups.has(gidKey)) {
-        console.log(`🔇 群 ${gidKey} 处于禁言中，已跳过发送。`);
+        logger.info(`🔇 群 ${gidKey} 处于禁言中，已跳过发送。`);
         return;
     }
 
@@ -408,7 +375,7 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
             // 被禁言/无权限等：标记该群，避免后续消息反复报错
             if (gidKey && /禁言|muted|ban|不可发送|没权限|群已冻结/i.test(e.message)) {
                 mutedGroups.add(gidKey);
-                console.log(`🔇 群 ${gidKey} 被禁言或不可发言，已停止发送:`, e.message.slice(0, 100));
+                logger.info(`🔇 群 ${gidKey} 被禁言或不可发言，已停止发送:`, e.message.slice(0, 100));
                 return;
             }
             throw e;
@@ -421,10 +388,10 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
             const voicePath = await textToSpeech(message);
             await doSend([segRecord(voicePath)]);
             cleanVoiceCache(50);
-            console.log('🎵 语音已发送');
+            logger.info('🎵 语音已发送');
             return;
         } catch (err) {
-            console.error('语音发送失败，降级为文本:', err.message);
+            logger.error('语音发送失败，降级为文本:', err.message);
             message = '⚠️ 语音生成失败，转为文字：\n' + message;
         }
     }
@@ -562,7 +529,7 @@ async function ipLocationOf(ip) {
         cacheSet(ipLocCache, key, IP_LOC_CACHE_MAX, { text, exp: Date.now() + IP_LOC_TTL });
         return text;
     } catch (e) {
-        console.log('[IP归属地] 查询失败:', key, e.message);
+        logger.info('[IP归属地] 查询失败:', key, e.message);
         return '';
     }
 }
@@ -860,8 +827,7 @@ setInterval(() => {
     const last = [...takeover.audit].reverse().find((a) => a.key === k && a.to === 'manual');
     if (last && now - last.t > to) {
       setTakeoverMode(k, 'auto', 'timeout');
-      pushLog(`⏰ 会话 ${k} 接管超时，已自动恢复自动回复`);
-      console.log(`⏰ 会话 ${k} 接管超时，已自动恢复自动回复`);
+      logger.info(`⏰ 会话 ${k} 接管超时，已自动恢复自动回复`);
     }
   }
 }, 10000);
@@ -878,7 +844,7 @@ async function doApplyAuth(event, uid) {
 const notifyOwner = async (msg) => {
     const owner = perm.getOwner();
     if (!owner) return;
-    await callApi('send_private_msg', { user_id: owner, message: [segText(msg)] }).catch((e) => console.error('通知主人失败:', e.message));
+    await callApi('send_private_msg', { user_id: owner, message: [segText(msg)] }).catch((e) => logger.error('通知主人失败:', e.message));
 };
 
 // 被审批后被授权者结果私聊（尽力而为）
@@ -953,8 +919,7 @@ function trackBalance(info) {
 
 /**
  * 查 AI 服务商账户余额（DeepSeek：GET /user/balance）。
- * 接口地址由 AI_API_URL 推导（去掉 /chat/completions 那段）——
- * 换成其它服务商时若没有这个接口，会返回一句友好提示而不是报错崩掉。
+ * 接口地址由 aiService 按服务商推导；该服务商没有余额接口时给友好提示而不是报错崩掉。
  */
 async function doBalance(event, role) {
     if (role !== 'owner' && role !== 'admin') {
@@ -962,11 +927,12 @@ async function doBalance(event, role) {
     }
     const apiKey = process.env.AI_API_KEY;
     if (!apiKey) return sendReply(event, '❌ 没有配置 AI_API_KEY');
-    const base = String(process.env.AI_API_URL || '')
-        .replace(/\/chat\/completions.*$/i, '').replace(/\/+$/, '');
-    if (!base) return sendReply(event, '❌ AI_API_URL 没配置，推不出余额接口地址');
+    const endpoint = balanceEndpoint();
+    if (!endpoint) {
+        return sendReply(event, `❌ 当前服务商（${getProviderInfo().name}）没有余额接口，无法查询`);
+    }
     try {
-        const res = await fetch(`${base}/user/balance`, {
+        const res = await fetch(endpoint, {
             headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
             signal: AbortSignal.timeout(15000),
         });
@@ -1007,13 +973,13 @@ async function doScreen(event) {
         p = await captureScreen(cacheDir);
         const st = fs.statSync(p);
         if (st.size < 1024) throw new Error('截图内容为空（可能屏幕被锁定）');
-        console.log(`📸 截屏成功: ${p} (${st.size}B)`);
+        logger.info(`📸 截屏成功: ${p} (${st.size}B)`);
         await sendReply(event, [segImage(p)]);
         sent = true;
         // 延迟 60s 清理：NapCat 可能异步读取本地文件，立即删除会竞态
         setTimeout(() => fs.unlink(p, () => {}), 60000);
     } catch (e) {
-        console.error('📸 截图流程出错:', e); // 完整错误写入终端/日志，便于定位
+        logger.error('📸 截图流程出错:', e); // 完整错误写入终端/日志，便于定位
         await sendReply(event, `${sent ? '❌ 图片发送失败' : '❌ 屏幕截图失败'}：${String(e.message).slice(0, 150)}`);
         if (p) setTimeout(() => fs.unlink(p, () => {}), 3000);
     }
@@ -1032,7 +998,7 @@ async function doShot(event, url) {
         sent = true;
         setTimeout(() => fs.unlink(p, () => {}), 60000);
     } catch (e) {
-        console.error('🌐 网址截图流程出错:', e.message);
+        logger.error('🌐 网址截图流程出错:', e.message);
         await sendReply(event, `${sent ? '❌ 图片发送失败' : '❌ 网址截图失败'}：${String(e.message).slice(0, 150)}`);
         if (p) setTimeout(() => fs.unlink(p, () => {}), 3000);
     }
@@ -1142,7 +1108,7 @@ async function memberMapOf(gid) {
         }
     } catch (e) {
         // 取失败**不写缓存**：否则一次失败会让这个群 10 分钟都不做转换
-        console.warn('[主动@] 取群成员失败，本次不做转换:', e.message);
+        logger.warn('[主动@] 取群成员失败，本次不做转换:', e.message);
         return { map, qqs, exp: 0 };
     }
     const val = { map, qqs, exp: Date.now() + MEMBER_LIST_TTL };
@@ -1256,9 +1222,9 @@ async function onPoke(event) {
         } else {
             await callApi('send_private_msg', { user_id: Number(uid), message: [segText(line)] });
         }
-        console.log(`👉 [${gid ? `群 ${gid}` : `私聊 ${uid}`}] 戳一戳回应：${line}`);
+        logger.info(`👉 [${gid ? `群 ${gid}` : `私聊 ${uid}`}] 戳一戳回应：${line}`);
     } catch (e) {
-        console.error('[戳一戳] 回应失败:', e.message);
+        logger.error('[戳一戳] 回应失败:', e.message);
     }
 }
 
@@ -1297,14 +1263,14 @@ async function onNotice(event) {
             const ub = forceUnbind(uid);
             if (ub.ok) {
                 note = `（已自动解绑游戏ID：${ub.ids.join('、')}）`;
-                console.log(`🚪 [群 ${gid}] 退群自动解绑 QQ ${uid}：${ub.ids.join('、')}`);
+                logger.info(`🚪 [群 ${gid}] 退群自动解绑 QQ ${uid}：${ub.ids.join('、')}`);
             }
         }
         const msg = joined
             ? [segAt(uid), segText(' 欢迎加入群聊！🎉')]
             : [segText(`👋 ${name} ${kind}${note}`)];
         await callApi('send_group_msg', { group_id: gid, message: msg });
-        console.log(`🚪 [群 ${gid}] ${joined ? '进群' : '退群'}: ${name}(${uid})`);
+        logger.info(`🚪 [群 ${gid}] ${joined ? '进群' : '退群'}: ${name}(${uid})`);
 
         // 桥接群的进出也同步进游戏；同样只投给「已绑定游戏ID」的账号。
         // 没人绑定时不提示（进群退群是自然发生的，不是有人要用功能）
@@ -1312,7 +1278,7 @@ async function onNotice(event) {
             sendToBoundPlayers(`${name} ${kind}`);
         }
     } catch (e) {
-        console.error('[进群退群提示] 发送失败:', e.message);
+        logger.error('[进群退群提示] 发送失败:', e.message);
     }
 }
 
@@ -1388,14 +1354,14 @@ async function chatSourceForAi(event) {
 async function notifyOwnerWithId(msg) {
     const owner = perm.getOwner();
     if (!owner) {
-        console.warn('[申请] 没设置主人，没法转发申请。用 #授权 设置主人后再试。');
+        logger.warn('[申请] 没设置主人，没法转发申请。用 #授权 设置主人后再试。');
         return '';
     }
     try {
         const r = await callApi('send_private_msg', { user_id: owner, message: [segText(msg)] });
         return String((r && (r.message_id || r.msg_id)) || '');
     } catch (e) {
-        console.error('[申请] 通知主人失败:', e.message);
+        logger.error('[申请] 通知主人失败:', e.message);
         return '';
     }
 }
@@ -1452,9 +1418,9 @@ async function onRequest(event) {
             label: `${kind === 'friend' ? '好友' : '群'}申请 ${who}`,
             at: Date.now(),
         });
-        console.log(`📨 已把${kind === 'friend' ? '好友' : '进群'}申请转给主人：${who}`);
+        logger.info(`📨 已把${kind === 'friend' ? '好友' : '进群'}申请转给主人：${who}`);
     } catch (e) {
-        console.error('[申请] 处理失败:', e.message);
+        logger.error('[申请] 处理失败:', e.message);
     }
 }
 
@@ -1508,10 +1474,10 @@ async function handleOwnerApproval(event, segments, text) {
     try {
         const receipt = await applyVerdict(req, verdict.approve, verdict.extra);
         pendingReqs.delete(quotedId);
-        console.log(receipt.replace(/\n/g, ' '));
+        logger.info(receipt.replace(/\n/g, ' '));
         await sendReply(event, receipt);
     } catch (e) {
-        console.error('[申请] 执行失败:', e.message);
+        logger.error('[申请] 执行失败:', e.message);
         await sendReply(event, `❌ 操作失败：${e.message}\n（申请可能已过期或被处理过，让对方重新申请）`);
     }
     return true;
@@ -1553,9 +1519,9 @@ async function handleManualApproval(event, cmd, arg) {
         try {
             receipts.push(await applyVerdict(req, approve, extra));
             pendingReqs.delete(id);
-            console.log(`[申请] 手动审批 ${qq}：${approve ? '同意' : '拒绝'}`);
+            logger.info(`[申请] 手动审批 ${qq}：${approve ? '同意' : '拒绝'}`);
         } catch (e) {
-            console.error('[申请] 手动审批失败:', e.message);
+            logger.error('[申请] 手动审批失败:', e.message);
             receipts.push(`❌ ${req.label} 操作失败：${e.message}`);
         }
     }
@@ -1568,7 +1534,7 @@ async function onMessage(event) {
 
     // 忽略机器人消息（Q群管家等），不响应、不触发 AI
     if (isBotUser(event)) {
-        console.log(`🤖 忽略机器人消息: ${event.user_id}`);
+        logger.info(`🤖 忽略机器人消息: ${event.user_id}`);
         return;
     }
 
@@ -1579,7 +1545,7 @@ async function onMessage(event) {
 
     const fromName = (event.sender && (event.sender.card || event.sender.nickname)) || '';
     const uid = String(event.user_id || '');
-    console.log(`📩 [${chatSource(event)}]${fromName ? ' ' + fromName + ':' : ''} ${raw}`);
+    logger.info(`📩 [${chatSource(event)}]${fromName ? ' ' + fromName + ':' : ''} ${raw}`);
 
     // 桥接群消息（机器人自己的消息不转发；只转发群聊，私聊不转发）
     // 自己发的判定用 self_id 兜底：botId 在收到第一条事件前还是 0，那时会把机器人自己的消息也转发进游戏
@@ -1658,7 +1624,7 @@ async function onMessage(event) {
             });
             // 只有"仅凭关键词撞上"的首次触发才需要判断；@/引用是明确在叫它，直接回
             allowSkip = kw && !atBot && !quoted;
-            if (ENGAGE_DEBUG) console.log(`[唤起] ${k} 由 ${event.user_id} 唤起（续期）`);
+            if (ENGAGE_DEBUG) logger.info(`[唤起] ${k} 由 ${event.user_id} 唤起（续期）`);
         } else {
             // 没被叫到：看是不是处在「唤起会话」里
             const e = engageSessions.get(convKey(event));
@@ -1669,13 +1635,13 @@ async function onMessage(event) {
             const isInitiator = String(event.user_id) === e.initiator;
             const left = isInitiator ? e.initLeft : e.otherLeft;
             if (left <= 0) {
-                if (ENGAGE_DEBUG) console.log(`[唤起] ${convKey(event)} 额度用尽，本条不再参与（${isInitiator ? '唤起人' : '其他人'}）`);
+                if (ENGAGE_DEBUG) logger.info(`[唤起] ${convKey(event)} 额度用尽，本条不再参与（${isInitiator ? '唤起人' : '其他人'}）`);
                 return;
             }
             if (isInitiator) e.initLeft -= 1; else e.otherLeft -= 1;
             e.exp = Date.now() + ENGAGE_TTL;   // 有来有往就续期
             allowSkip = true;                  // 交给 AI 判断"是不是在跟小钠说话"
-            if (ENGAGE_DEBUG) console.log(`[唤起] ${convKey(event)} 跟进检查（${isInitiator ? '唤起人剩 ' + e.initLeft : '其他人剩 ' + e.otherLeft}）`);
+            if (ENGAGE_DEBUG) logger.info(`[唤起] ${convKey(event)} 跟进检查（${isInitiator ? '唤起人剩 ' + e.initLeft : '其他人剩 ' + e.otherLeft}）`);
         }
     }
 
@@ -1708,10 +1674,10 @@ async function runAI(event, userInput, allowSkip = false) {
         const meta = await getMemberMeta(event);
         // 对方是机器人：默认不接话（两个机器人互相刷屏没意义，也容易被判刷屏）。BOT_REPLY=true 可放开
         if (meta.isRobot && !BOT_REPLY) {
-            console.log(`🤖 对方是机器人（${meta.name}），跳过回复`);
+            logger.info(`🤖 对方是机器人（${meta.name}），跳过回复`);
             return;
         }
-        console.log('🤖 AI 决策中...');
+        logger.info('🤖 AI 决策中...');
         // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
@@ -1721,7 +1687,7 @@ async function runAI(event, userInput, allowSkip = false) {
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
         if (result.skip) {
-            console.log('🤐 AI 判断这条不是在叫小钠，跳过回复');
+            logger.info('🤐 AI 判断这条不是在叫小钠，跳过回复');
             return;
         }
 
@@ -1729,7 +1695,7 @@ async function runAI(event, userInput, allowSkip = false) {
             // AI 判定了要搜；万一它没给出关键词，就退回用用户原话当搜索词（清掉 @ 等噪音）
             const q = (searchKeyword || userInput || '').replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
             if (q) {
-                console.log(`🔍 AI 决定搜索: "${q}"`);
+                logger.info(`🔍 AI 决定搜索: "${q}"`);
                 const searchResults = await getSearchContext(q, 5);
                 // 第二轮不再让它判断要不要搜（已经搜完了），只让它据此作答
                 const finalResult = await callAIWithDecision(metaLine, searchResults, mem, false);
@@ -1757,9 +1723,9 @@ async function runAI(event, userInput, allowSkip = false) {
         // 写入记忆（滑动窗口，角色 ai）
         const finalReply = parts.join('\n');
         recordMessage(convKey(event), 'ai', finalReply);
-        console.log(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
+        logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
     } catch (err) {
-        console.error('❌ 处理异常:', err);
+        logger.error('❌ 处理异常:', err);
         await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
     }
 }
@@ -1777,7 +1743,7 @@ async function askAiFromMc({ player, text, isPrivate }) {
     const key = 'mc:' + player;
     // 游戏内 AI 并发锁：和 QQ 侧一样，同一玩家同时只允许一个请求
     if (mcAiBusy.has(key)) {
-        console.log(`⏳ 游戏内 ${player} 上一条还在处理，本次跳过 AI`);
+        logger.info(`⏳ 游戏内 ${player} 上一条还在处理，本次跳过 AI`);
         return '';
     }
     mcAiBusy.add(key);
@@ -1805,7 +1771,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         // 没给关键词就退回用玩家原话
         const q = (result.searchKeyword || text || '').replace(/\s+/g, ' ').trim();
         if (q) {
-            console.log(`🔍 游戏内 AI 决定搜索: "${q}"`);
+            logger.info(`🔍 游戏内 AI 决定搜索: "${q}"`);
             const searchResults = await getSearchContext(q, 5);
             result = await callAIWithDecision(metaLine, searchResults, mem, false);
         }
@@ -1909,7 +1875,7 @@ async function replyPreview(data, groupId, depth = 0) {
             : extractText(m && m.message);
         text = `[引用 ${who ? who + ': ' : ''}${clip(body)}] `;
     } catch (e) {
-        console.debug('[MC桥] 引用原文查询失败:', e.message);
+        logger.debug('[MC桥] 引用原文查询失败:', e.message);
     }
     cacheSet(replyCache, id, REPLY_CACHE_MAX, { text, exp: Date.now() + 5 * 60 * 1000 });
     return text;
@@ -1950,22 +1916,22 @@ async function buildForwardText(segments, groupId, depth = 0) {
 function sendToBoundPlayers(text) {
     const receivers = getReceivers();
     if (!receivers.length) {
-        console.log('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
+        logger.info('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
         return false;
     }
     sendToMc(text, { players: receivers, prefix: '[QQ] ' })
         .then((r) => {
             if (!r) return;
             if (!r.ok) {
-                console.error('[MC桥] 投递失败:', r.error || '未知原因');
+                logger.error('[MC桥] 投递失败:', r.error || '未知原因');
                 return;
             }
             // 投递成功但一个都没送到：绑定的游戏ID 不在线，或名字对不上（大写/改名）
             if (r.delivered === 0) {
-                console.log(`[MC桥] 投递 0 人（绑定：${receivers.join('、')}）—— 不在线或名字对不上`);
+                logger.info(`[MC桥] 投递 0 人（绑定：${receivers.join('、')}）—— 不在线或名字对不上`);
             }
         })
-        .catch((e) => console.error('[MC桥] 投递异常:', e.message));
+        .catch((e) => logger.error('[MC桥] 投递异常:', e.message));
     return true;
 }
 
@@ -1984,7 +1950,7 @@ function forwardGroupToMc(event, who) {
             if (!text) return;
             if (!sendToBoundPlayers(`${who}: ${text}`)) hintNobodyBound();
         })
-        .catch((e) => console.error('[MC桥] 转发内容渲染失败:', e.message));
+        .catch((e) => logger.error('[MC桥] 转发内容渲染失败:', e.message));
 }
 
 // ---------- 彩蛋：摇一摇对答 ----------
@@ -2016,8 +1982,8 @@ function maybeShakeLine(event, text) {
     if (prev !== undefined && now - prev < SHAKE_COOLDOWN) return true;   // 冷却中：认出来了但先不接
     shakeAt.set(key, now);
     shakeCtx.set(key, { index: hit.index, at: now });
-    console.log(`🎋 彩蛋接话 [群 ${event.group_id}] → ${hit.line}`);
-    sendReply(event, hit.line).catch((e) => console.error('[彩蛋] 接话失败:', e.message));
+    logger.info(`🎋 彩蛋接话 [群 ${event.group_id}] → ${hit.line}`);
+    sendReply(event, hit.line).catch((e) => logger.error('[彩蛋] 接话失败:', e.message));
     return true;
 }
 
@@ -2101,7 +2067,7 @@ async function doStatus(role) {
         bot: {
             connected: !!bot.connected,
             error: bot.lastError,
-            model: process.env.AI_MODEL || 'deepseek-chat',
+            model: getProviderInfo().model,
             boundGameIds,
             uptimeSec: process.uptime(),
             wsUrl: process.env.NAPCAT_WS || 'ws://127.0.0.1:3001',
@@ -2187,7 +2153,7 @@ function formatPlanPlayer(name, p) {
 
     if (!rows.length) {
         // 换了 Plan 版本/字段名对不上时，别在群里刷一大坨 JSON，写日志方便补字段
-        console.warn('[Plan] 字段没认出来，原始返回（前 1000 字）：', JSON.stringify(root).slice(0, 1000));
+        logger.warn('[Plan] 字段没认出来，原始返回（前 1000 字）：', JSON.stringify(root).slice(0, 1000));
         return `📊 ${playerName}：取到了 Plan 数据，但字段没认出来，已记到机器人日志。`;
     }
     const state = data.online === true ? '在线' : '离线';
@@ -2298,7 +2264,7 @@ function connect() {
     const headers = WS_TOKEN ? { Authorization: `Bearer ${WS_TOKEN}` } : {};
     ws = new WebSocket(WS_URL, { headers });
 
-    ws.on('open', () => { setBotConnected(true); setBotError(''); console.log(`[连接] 已连接 NapCat: ${WS_URL}`); });
+    ws.on('open', () => { setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 NapCat: ${WS_URL}`); });
 
     ws.on('message', (raw) => {
         let data;
@@ -2314,22 +2280,22 @@ function connect() {
             const handler = data.post_type === 'notice' ? onNotice
                 : data.post_type === 'request' ? onRequest
                 : onMessage;
-            handler(data).catch((e) => console.error('[处理]', e));
+            handler(data).catch((e) => logger.error('[处理]', e));
         }
     });
 
-    ws.on('error', (err) => { setBotError(err.message); console.error('[连接] 错误:', err.message); });
+    ws.on('error', (err) => { setBotError(err.message); logger.error('[连接] 错误:', err.message); });
     ws.on('close', () => {
         setBotConnected(false);
-        console.log('[连接] 已断开，3秒后重连…');
+        logger.info('[连接] 已断开，3秒后重连…');
         setTimeout(connect, 3000);
     });
 }
 
 if (WS_TOKEN === 'your_napcat_token') {
-    console.warn('⚠️  请确认 .env 中 NAPCAT_TOKEN 与 NapCat WS 设置一致（当前未启用 token）。');
+    logger.warn('⚠️  请确认 .env 中 NAPCAT_TOKEN 与 NapCat WS 设置一致（当前未启用 token）。');
 }
-console.log(AI_ENABLED ? `模型: ${process.env.AI_MODEL || 'deepseek-chat'}` : '模型: （未配置，AI 对话不可用）');
+logProviderInfo();
 logFeatureStates();
 connect();
 
@@ -2338,9 +2304,9 @@ setOwnerNotifier(notifyOwner);
 // 供 WebUI 人工接管发送消息
 setSendMsg((action, params) => callApi(action, params));
 if (WEBUI_ENABLED) {
-    startWebUI().catch((e) => console.error('❌ WebUI 启动失败:', e.message));
+    startWebUI().catch((e) => logger.error('❌ WebUI 启动失败:', e.message));
 } else {
-    console.log('未配置 WEBUI_PASSWORD，网页控制面板已停用（.env 里补上即自动启用）。');
+    logger.info('未配置 WEBUI_PASSWORD，网页控制面板已停用（.env 里补上即自动启用）。');
 }
 
 // 启动与 Minecraft 服务器侧 mod 的桥：接收游戏聊天/进出服事件，并把回复注入游戏
@@ -2348,7 +2314,7 @@ if (WEBUI_ENABLED) {
 if (MC_ENABLED) {
     startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers });
 } else {
-    console.log('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
+    logger.info('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
 }
 
-process.on('SIGINT', () => { console.log('\n退出。'); process.exit(0); });
+process.on('SIGINT', () => { logger.info('\n退出。'); process.exit(0); });

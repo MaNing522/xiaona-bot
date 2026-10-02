@@ -10,6 +10,8 @@
 // 密钥放 .env 的 BAIDU_SEARCH_KEY（不填则搜索功能静默关闭）。
 // ============================================================
 
+import { logger } from './logger.js';
+
 const TIMEOUT_MS = 20000;
 const SNIPPET_MAX = 300;   // 每条摘要截断长度：太长会把 prompt 撑爆又费 token
 
@@ -20,7 +22,7 @@ function apiKey() {
 export async function webSearch(query, limit = 5) {
   const key = apiKey();
   if (!key) {
-    console.log('[搜索] 未配置 BAIDU_SEARCH_KEY，跳过联网搜索');
+    logger.info('[搜索] 未配置 BAIDU_SEARCH_KEY，跳过联网搜索');
     return [];
   }
   try {
@@ -46,7 +48,7 @@ export async function webSearch(query, limit = 5) {
       snippet: String(r.content || r.snippet || '').replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX),
     }));
   } catch (e) {
-    console.log('[搜索] 百度智能搜索失败:', e.message);
+    logger.warn('[搜索] 百度智能搜索失败:', e.message);
     return [];
   }
 }

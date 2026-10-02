@@ -5,6 +5,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -194,13 +195,13 @@ async function schTick() {
         await callApi('set_group_ban', { group_id: t.group_id, user_id: t.user_id, duration: 0 });
       }
     } catch (e) {
-      console.error('[定时] 执行失败:', t.id, e.message);
+      logger.error('[定时] 执行失败:', t.id, e.message);
     }
     if (t.repeatDaily) schTasks.push({ ...t, runAt: nextClock(new Date(t.runAt).getHours(), new Date(t.runAt).getMinutes(), now) });
   }
   // 时间段禁言（每天重复，单独处理）
   for (const t of schTasks.filter((x) => x.type === 'muteWindow')) {
-    try { await checkMuteWindow(t, now); } catch (e) { console.error('[定时] 时间段禁言失败:', t.id, e.message); }
+    try { await checkMuteWindow(t, now); } catch (e) { logger.error('[定时] 时间段禁言失败:', t.id, e.message); }
   }
   schSave();
 }

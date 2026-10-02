@@ -14,6 +14,7 @@ import * as perm from './permission.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
+import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
@@ -381,7 +382,7 @@ async function route(req, res, url) {
     if (bad) {
       const n = ((f && f.n) || 0) + 1;
       failLog.set(ip, { n, until: n >= LOGIN_MAX_FAIL ? Date.now() + LOGIN_BLOCK_MS : 0 });
-      console.log(`🔒 面板登录失败（${ip}）: ${bad}（连续第 ${n} 次）`);
+      logger.info(`🔒 面板登录失败（${ip}）: ${bad}（连续第 ${n} 次）`);
       return sendJSON(res, 401, {
         ok: false,
         error: bad + (n >= LOGIN_MAX_FAIL ? `，已锁定 ${LOGIN_BLOCK_MS / 60000} 分钟` : ''),
@@ -391,7 +392,7 @@ async function route(req, res, url) {
     failLog.delete(ip);
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, Date.now() + SESSION_TTL);
-    console.log(`🔓 面板登录成功（${ip}）`);
+    logger.info(`🔓 面板登录成功（${ip}）`);
     res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`);
     return sendJSON(res, 200, { ok: true });
   }
@@ -522,8 +523,8 @@ export async function startWebUI() {
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
     .map((n) => `http://${n.address}:${port}`);
   const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `http://${host}:${port}`;
-  console.log(`🌐 WebUI: ${shown}  [需登录，账号 ${PANEL_USER}]`);
-  if (host === '0.0.0.0') console.log('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
-  if (PANEL_PASS === 'mn123456') console.log('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
+  logger.info(`🌐 WebUI: ${shown}  [需登录，账号 ${PANEL_USER}]`);
+  if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
+  if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
   return server;
 }

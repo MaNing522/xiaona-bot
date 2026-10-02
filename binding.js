@@ -11,6 +11,7 @@
 import path from 'path';
 import { renderCaptcha } from './captcha.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { logger } from './logger.js';
 
 const GAME_ID = /^[A-Za-z0-9_]{3,16}$/;   // MC 正版/离线 ID 规则
 const MAX_TRIES = 5;
@@ -31,7 +32,7 @@ export function initBindings(saveDir, opts = {}) {
   pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
   if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
-  console.log(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
+  logger.info(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
 }
 
 function save() {
@@ -125,7 +126,7 @@ export function answerCaptcha(qq, text) {
   entry.ids.push(p.gameId);
   entry.at = Date.now();
   save();
-  console.log(`[绑定] QQ ${key} ↔ 游戏ID ${p.gameId}（该QQ共 ${entry.ids.length} 个）`);
+  logger.info(`[绑定] QQ ${key} ↔ 游戏ID ${p.gameId}（该QQ共 ${entry.ids.length} 个）`);
   return {
     handled: true,
     ok: true,

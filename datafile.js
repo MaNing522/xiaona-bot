@@ -6,6 +6,7 @@
 // ============================================================
 import fs from 'fs';
 import path from 'path';
+import { logger } from './logger.js';
 
 /** 原子写入 JSON */
 export function writeJsonAtomic(file, value) {
@@ -18,7 +19,7 @@ export function writeJsonAtomic(file, value) {
     return true;
   } catch (e) {
     // 写盘失败不能让机器人崩掉，但必须留下痕迹
-    console.error(`⚠️ 数据落盘失败：${path.basename(file)} — ${e.message}`);
+    logger.error(`⚠️ 数据落盘失败：${path.basename(file)} — ${e.message}`);
     return false;
   }
 }
@@ -29,7 +30,7 @@ export function readJsonSafe(file, fallback, label = '') {
     if (!fs.existsSync(file)) return fallback;
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (e) {
-    console.error(`⚠️ 数据文件读取失败，已按默认值处理：${label || path.basename(file)} — ${e.message}`);
+    logger.error(`⚠️ 数据文件读取失败，已按默认值处理：${label || path.basename(file)} — ${e.message}`);
     return fallback;
   }
 }

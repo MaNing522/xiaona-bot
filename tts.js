@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { logger } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +28,7 @@ export async function textToSpeech(text, voiceId = null) {
 
     const url = 'https://api-v2.yuafeng.cn/API/kktts.php'
         + `?action=voice&content=${encodeURIComponent(text)}&voice_id=${encodeURIComponent(id)}`;
-    console.log(`🔊 请求 TTS（音色 ${id}）`);
+    logger.info(`🔊 请求 TTS（音色 ${id}）`);
 
     const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
     if (!resp.ok) throw new Error(`TTS API 请求失败: ${resp.status}`);
@@ -45,7 +46,7 @@ export async function textToSpeech(text, voiceId = null) {
     const filepath = path.join(VOICE_DIR, `tts_${Date.now()}.mp3`);
     fs.writeFileSync(filepath, buffer);
 
-    console.log(`✅ TTS 生成成功: ${filepath}`);
+    logger.info(`✅ TTS 生成成功: ${filepath}`);
     return filepath;
 }
 
@@ -58,7 +59,7 @@ export function cleanVoiceCache(maxFiles = 50) {
         if (files.length > maxFiles) {
             files.slice(maxFiles).forEach((f) => {
                 fs.unlinkSync(path.join(VOICE_DIR, f.name));
-                console.log(`🗑️ 删除过期语音: ${f.name}`);
+                logger.info(`🗑️ 删除过期语音: ${f.name}`);
             });
         }
     } catch (e) { /* ignore */ }

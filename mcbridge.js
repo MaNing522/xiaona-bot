@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { logger } from './logger.js';
 
 // 配置在 startMcBridge() 时从 process.env 读取。
 // 不能写在模块顶层：ESM 的 import 会先于 index.js 里的 dotenv.config() 执行，那时 env 还是空的。
@@ -141,11 +142,11 @@ export async function sendToMc(text, target) {
         // 旧版 mod（<2.2.0）不认识 players，会退化成全服广播 —— 必须提醒，否则等于把消息发给所有人
         if (body.target === 'players' && r && r.delivered === undefined && !warnedOldMod) {
             warnedOldMod = true;
-            console.error('[MC桥] 服务器 mod 未返回 delivered（疑似旧版本 <2.2.0）：群消息可能被当广播发给全服，请升级 mod。');
+            logger.error('[MC桥] 服务器 mod 未返回 delivered（疑似旧版本 <2.2.0）：群消息可能被当广播发给全服，请升级 mod。');
         }
         return r;
     } catch (e) {
-        console.error('[MC桥] 注入失败:', e.message);
+        logger.error('[MC桥] 注入失败:', e.message);
         return { ok: false, error: e.message };
     }
 }
@@ -172,7 +173,7 @@ export async function getPlanPlayer(name) {
     }
     // 老玩家（会话多）的原始数据能到几百 KB，服务端会先把用不上的分布数组裁掉再带回来
     if (r.trimmed) {
-        console.log(`[MC桥] ${name} 的 Plan 数据已裁剪：${r.rawSize} → ${JSON.stringify(r.player || {}).length} 字符`);
+        logger.info(`[MC桥] ${name} 的 Plan 数据已裁剪：${r.rawSize} → ${JSON.stringify(r.player || {}).length} 字符`);
     }
     return r.player;
 }
@@ -195,7 +196,7 @@ async function bindCheck(name) {
     } catch (e) {
         if (!warnedNoBindCheck && /HTTP 404/.test(e.message)) {
             warnedNoBindCheck = true;
-            console.error('[MC桥] 服务端 mod 不认识 /bridge/bindcheck（版本过旧）：未绑定玩家的计分板不会随绑定状态刷新，请升级 mod。');
+            logger.error('[MC桥] 服务端 mod 不认识 /bridge/bindcheck（版本过旧）：未绑定玩家的计分板不会随绑定状态刷新，请升级 mod。');
         }
     }
 }
@@ -238,13 +239,13 @@ function handleSseBlock(block) {
     }
 
     if (event === 'hello') {
-        console.log('[MC桥] 握手完成:', data || '');
+        logger.info('[MC桥] 握手完成:', data || '');
         // 服务端的序号是"本次运行"的，服务器一重启就从 1 重来；而我们的光标还停在上一轮。
         // 若继续带着它，服务端会以为"你已经看到最新了"，于是连着却一条事件都不推。
         let hs = null;
         try { hs = JSON.parse(data); } catch { /* 老版本 mod 没有 lastSeq */ }
         if (hs && Number.isFinite(hs.lastSeq) && lastEventId > hs.lastSeq) {
-            console.warn(`[MC桥] 服务端序号已重置（本地光标 ${lastEventId} > 服务端 ${hs.lastSeq}），丢弃旧光标重新对齐。`);
+            logger.warn(`[MC桥] 服务端序号已重置（本地光标 ${lastEventId} > 服务端 ${hs.lastSeq}），丢弃旧光标重新对齐。`);
             lastEventId = 0;
             needResync = true;   // 由 streamLoop 断开本条连接后重连（不带光标）
         }
@@ -252,14 +253,14 @@ function handleSseBlock(block) {
         return;
     }
     if (event === 'gap') {
-        console.warn('[MC桥] 中间有事件被丢弃（断线太久），已按最新事件继续');
+        logger.warn('[MC桥] 中间有事件被丢弃（断线太久），已按最新事件继续');
         return;
     }
     if (!data) return;
     let ev;
     try { ev = JSON.parse(data); } catch { return; }
     if (ev.seq) lastEventId = ev.seq;
-    onEvent(ev).catch((e) => console.error('[MC桥] 事件处理失败:', e.message));
+    onEvent(ev).catch((e) => logger.error('[MC桥] 事件处理失败:', e.message));
 }
 
 /**
@@ -270,11 +271,11 @@ function handleSseBlock(block) {
 function allowChatToQq(name, text) {
     // 丢弃要留痕：不然群里少一句话，没人知道是限速丢了还是桥断了
     if (dupBlocked(name, text)) {
-        console.log(`[MC桥] 丢弃（重复刷屏）：${name} 的「${clip(text)}」`);
+        logger.info(`[MC桥] 丢弃（重复刷屏）：${name} 的「${clip(text)}」`);
         return false;
     }
     if (rateBlocked(name)) {
-        console.log(`[MC桥] 丢弃（发言过快）：${name} 的「${clip(text)}」`);
+        logger.info(`[MC桥] 丢弃（发言过快）：${name} 的「${clip(text)}」`);
         return false;
     }
     return true;
@@ -311,7 +312,7 @@ function dupBlocked(name, text) {
 
     if (!e.warned) {
         e.warned = true;
-        console.warn(`[MC桥] ${name} 反复刷同一句话（第 ${e.count} 次），已屏蔽重复内容。`);
+        logger.warn(`[MC桥] ${name} 反复刷同一句话（第 ${e.count} 次），已屏蔽重复内容。`);
         toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 重复刷同一句话，已暂时屏蔽`).catch(() => {});
     }
     return true;
@@ -338,7 +339,7 @@ function rateBlocked(name) {
     if (!e.warned) {
         e.warned = true;
         const sec = Math.round(cfg.chatRateWindowMs / 1000);
-        console.warn(`[MC桥] ${name} 公聊触发限速（每 ${sec} 秒最多 ${cfg.chatRateMax} 条），本窗口内不再转发到 QQ。`);
+        logger.warn(`[MC桥] ${name} 公聊触发限速（每 ${sec} 秒最多 ${cfg.chatRateMax} 条），本窗口内不再转发到 QQ。`);
         toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 发言过快，其游戏消息已暂时屏蔽`).catch(() => {});
     }
     return true;
@@ -369,7 +370,7 @@ export function initPresence(saveDir) {
             events: e.events.slice(-JOIN_HISTORY_MAX),
         });
     }
-    console.log(`[MC桥] 已加载 ${joinHistory.size} 名玩家的上下线记录`);
+    logger.info(`[MC桥] 已加载 ${joinHistory.size} 名玩家的上下线记录`);
 }
 
 /** 整表落盘（原子写，避免半截文件） */
@@ -408,7 +409,7 @@ async function onEvent(ev) {
     if (ev.type === 'join' || ev.type === 'leave') {
         if (ev.player) recordPresence(ev.type, ev.player, ev.ip);
         // 端口复用下 MC 只看到 127.0.0.1，mod 已用端口映射还原出真实客户端 IP，这里只记到控制台
-        if (ev.type === 'join' && ev.ip) console.log(`[MC桥] ${who} 真实客户端 IP: ${ev.ip}`);
+        if (ev.type === 'join' && ev.ip) logger.info(`[MC桥] ${who} 真实客户端 IP: ${ev.ip}`);
         // 上线才查一次绑定，把答案单独回给 mod（mod 只为这名玩家渲染计分板）
         if (ev.type === 'join' && ev.player) await bindCheck(ev.player);
         await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`);
@@ -431,7 +432,7 @@ async function onEvent(ev) {
             || '小钠暂时答不上来，稍后再试。';
         await relayToOps(`小钠 → ${who}: ${reply}`, who);
         const r = await sendToMc(reply, { player: who, prefix: '[小钠] ' });
-        if (!r.ok) console.error(`[MC桥] 回复给 ${who} 失败:`, r.error);
+        if (!r.ok) logger.error(`[MC桥] 回复给 ${who} 失败:`, r.error);
         return;
     }
 
@@ -511,15 +512,15 @@ function imageSourceOf(url) {
         if (fs.existsSync(p) && fs.statSync(p).isFile()) {
             const buf = fs.readFileSync(p);
             if (buf.length > 8 * 1024 * 1024) {
-                console.error('[MC桥] 图片过大，已跳过:', p);
+                logger.error('[MC桥] 图片过大，已跳过:', p);
                 return '';
             }
             return 'base64://' + buf.toString('base64');
         }
     } catch (e) {
-        console.error('[MC桥] 读取本地图片失败:', e.message);
+        logger.error('[MC桥] 读取本地图片失败:', e.message);
     }
-    console.error('[MC桥] 图片地址取不到（非本机文件？）已跳过:', u);
+    logger.error('[MC桥] 图片地址取不到（非本机文件？）已跳过:', u);
     return '';
 }
 
@@ -528,7 +529,7 @@ async function toBridgeGroupImage(src) {
     try {
         await deps.callApi('send_group_msg', { group_id: cfg.groupId, message: [{ type: 'image', data: { file: src } }] });
     } catch (e) {
-        console.error('[MC桥] 图片发送到桥接群失败:', e.message);
+        logger.error('[MC桥] 图片发送到桥接群失败:', e.message);
     }
 }
 
@@ -537,7 +538,7 @@ async function toBridgeGroup(text) {
     try {
         await deps.callApi('send_group_msg', { group_id: cfg.groupId, message: [deps.segText(text)] });
     } catch (e) {
-        console.error('[MC桥] 发送到桥接群失败:', e.message);
+        logger.error('[MC桥] 发送到桥接群失败:', e.message);
     }
 }
 
@@ -555,7 +556,7 @@ async function relayToOps(line, exclude) {
             await sendToMc(line, { player: name, prefix: '[记录] ' });
         }
     } catch (e) {
-        console.error('[MC桥] OP 转发失败:', e.message);
+        logger.error('[MC桥] OP 转发失败:', e.message);
     }
 }
 
@@ -564,7 +565,7 @@ async function askAi(payload) {
     try {
         return await deps.askAi(payload);
     } catch (e) {
-        console.error('[MC桥] AI 调用失败:', e.message);
+        logger.error('[MC桥] AI 调用失败:', e.message);
         return null;
     }
 }
@@ -581,7 +582,7 @@ async function streamLoop() {
                 throw new Error(`HTTP ${res.status} ${t.slice(0, 140)}`);
             }
             connected = true;
-            console.log('[MC桥] 已连接服务器事件流:', cfg.base);
+            logger.info('[MC桥] 已连接服务器事件流:', cfg.base);
             const reader = res.body.getReader();
             const dec = new TextDecoder();
             let buf = '';
@@ -606,7 +607,7 @@ async function streamLoop() {
         } catch (e) {
             connected = false;
             if (stopped) return;
-            console.error('[MC桥] 连接中断:', e.message, '→ 3 秒后重连');
+            logger.error('[MC桥] 连接中断:', e.message, '→ 3 秒后重连');
             await sleep(3000);
         }
     }
@@ -625,16 +626,16 @@ export function startMcBridge(d) {
     cfg = readConfig();
 
     if (!cfg.base || !cfg.secret) {
-        console.log('[MC桥] 未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，跳过（游戏内小钠不可用）。');
+        logger.info('[MC桥] 未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，跳过（游戏内小钠不可用）。');
         return false;
     }
     if (cfg.secret.length < 32) {
-        console.error('[MC桥] MC_BRIDGE_SECRET 短于 32 个字符，服务端会拒绝；请与 config.json 的 bridge.secret 保持一致。');
+        logger.error('[MC桥] MC_BRIDGE_SECRET 短于 32 个字符，服务端会拒绝；请与 config.json 的 bridge.secret 保持一致。');
         return false;
     }
 
     stopped = false;
-    console.log(`[MC桥] 启动：${cfg.base}${cfg.groupId ? ` 桥接群 ${cfg.groupId}` : '（未配置桥接群，游戏消息不会发到 QQ）'}`);
+    logger.info(`[MC桥] 启动：${cfg.base}${cfg.groupId ? ` 桥接群 ${cfg.groupId}` : '（未配置桥接群，游戏消息不会发到 QQ）'}`);
     streamLoop();
     return true;
 }
