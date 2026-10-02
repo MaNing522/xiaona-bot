@@ -382,7 +382,6 @@ function sanitizeOutgoing(text) {
 
 // ---------- 发送 ----------
 async function sendReply(event, message, wantVoice = false, withAt = false) {
-    const MAX_LENGTH = 500;
     const target = event.message_type === 'private'
         ? { action: 'send_private_msg', id: event.user_id }
         : { action: 'send_group_msg', id: event.group_id };
@@ -446,20 +445,13 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
         return;
     }
 
-    // 文本
+    // 文本：整条发出去。
+    // 「多条消息」只属于 AI 的文字/语音回复（由 runAI 按 AI 输出的分隔符决定），
+    // 帮助菜单、查询结果这类内容必须保持**一条完整消息**，不能按句拆开发。
     const texts = typeof message === 'string' ? [message] : message;
     for (const t of texts) {
-        if (t.length > MAX_LENGTH) {
-            const sentences = t.match(/[^。！？\n]+[。！？\n]/g) || [t];
-            for (const seg of sentences) {
-                if (seg.trim()) {
-                    await doSend(withAt ? [segAt(event.user_id), segText(seg.trim())] : [segText(seg.trim())]);
-                    await new Promise((r) => setTimeout(r, 200));
-                }
-            }
-        } else {
-            await doSend(withAt ? [segAt(event.user_id), segText(t)] : [segText(t)]);
-        }
+        if (!String(t ?? '').trim()) continue;
+        await doSend(withAt ? [segAt(event.user_id), segText(t)] : [segText(t)]);
     }
 }
 
