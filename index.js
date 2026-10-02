@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
-import { getSearchContext, searchProviderName } from './search.js';
+import { getSearchContext } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
@@ -201,9 +201,10 @@ ${tagRule}
     let step = 1;
     if (allowSearch) {
         decisionPrompt += `
-${step++}. **联网搜索判断**：只在"这条消息必须靠实时/外部信息才能答好"时才搜（天气、新闻、股价、赛事、价格、某人的近况、你不确定的当下事实等）。
-   - 需要搜索 → 输出【SEARCH:需要|关键词:搜索词】
-   - 不需要（闲聊、常识、你本来就会的、能靠上下文答的）→ 输出【SEARCH:不需要】
+${step++}. **联网搜索判断**（默认不搜，拿不准就别搜）：
+   - 只有"答案必须依赖此刻的外部信息、你凭自己不可能知道"时才搜：天气、新闻、赛事比分、股价汇率、票价、软件最新版本/价格、某人的近况等。
+   - 以下一律不搜：闲聊寒暄、情绪吐槽、玩笑调侃、常识、算数、翻译、写代码/写文案、能靠上下文答的、以及问小钠自己的事。
+   - 需要搜索 → 输出【SEARCH:需要|关键词:搜索词】；不需要 → 输出【SEARCH:不需要】
    - 关键词要短、能直接喂给搜索引擎（如“武汉今天天气”），别带“请问”“帮我查”这类口语。
 `;
     }
@@ -550,10 +551,6 @@ async function handleCommand(event, text) {
             if (!arg) return sendReply(event, '❌ 用法：#mc 服务器地址[:端口]，如 #mc play.example.com 或 #mc 1.2.3.4:25565');
             return doMc(event, arg);
 
-        case '/搜索':
-            if (!arg) return sendReply(event, '❌ 用法：#搜索 <关键词>，如 #搜索 今天天气');
-            return doSearch(event, arg);
-
         // ===== 群管理（仅群里可用，需主人/管理员） =====
         case '/禁言':
         case '/解禁':
@@ -832,25 +829,6 @@ async function doMc(event, server) {
         await sendReply(event, formatServer(info));
     } catch (e) {
         await sendReply(event, '❌ MC 查询失败：' + e.message);
-    }
-}
-
-// 直接联网搜索（#搜索）
-async function doSearch(event, query) {
-    try {
-        await sendReply(event, `🔍 正在搜索：${query} ...`);
-        const results = await webSearch(query, 5);
-        if (!results.length) {
-            const p = searchProviderName();
-            const hint = p === '未配置'
-                ? '\n（没配搜索源：请在 .env 里填 BAIDU_SEARCH_KEY）'
-                : `\n（搜索源：${p}）`;
-            return sendReply(event, '❌ 没搜到结果，请稍后再试。' + hint);
-        }
-        const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet.slice(0, 80)}`);
-        return sendReply(event, `🔍 "${query}" 搜索结果：\n` + lines.join('\n'));
-    } catch (e) {
-        return sendReply(event, '❌ 搜索失败：' + e.message);
     }
 }
 

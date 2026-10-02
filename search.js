@@ -17,11 +17,6 @@ function apiKey() {
   return String(process.env.BAIDU_SEARCH_KEY || '').trim();
 }
 
-/** 当前搜索源名称（用于给人提示） */
-export function searchProviderName() {
-  return apiKey() ? '百度智能搜索' : '未配置';
-}
-
 export async function webSearch(query, limit = 5) {
   const key = apiKey();
   if (!key) {
