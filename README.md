@@ -124,7 +124,7 @@ gradlew.bat build
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
 | AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 默认 DeepSeek |
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
-| 语音 | `TTS_API_KEY` / `TTS_VOICE_ID` | 玉峰语音合成；音色默认 `2969`（可爱少女） |
+| 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
 | 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
