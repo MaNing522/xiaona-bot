@@ -32,6 +32,7 @@ export const HELP_CMDS = [
   { c: '#定时列表', d: '查看定时任务', cat: '定时', role: 'admin' },
   { c: '#取消定时 <id>', d: '取消定时任务', cat: '定时', role: 'admin' },
   { c: '#授权 [@或QQ]', d: '查看授权列表 / 同意授权', cat: '主人', role: 'owner' },
+  { c: '#余额', d: '查看 AI 账户余额（还剩多少钱）', cat: '主人', role: 'admin' },
   { c: '#拒绝授权 <@或QQ>', d: '拒绝授权申请', cat: '主人', role: 'owner' },
   { c: '#取消授权 <@或QQ>', d: '撤销授权', cat: '主人', role: 'owner' },
   { c: '#换名 <新昵称>', d: '修改机器人昵称', cat: '主人', role: 'owner' },
