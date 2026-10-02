@@ -81,7 +81,8 @@ function readConfig() {
 }
 
 // ---------- 签名 ----------
-function signedHeaders(bodyStr) {
+// 导出仅为单测签名串格式（生产路径由 api()/事件流调用）
+export function signedHeaders(bodyStr) {
     const ts = String(Math.floor(Date.now() / 1000));
     const nonce = crypto.randomBytes(16).toString('hex');
     const sig = crypto.createHmac('sha256', cfg.secret)

@@ -13,7 +13,7 @@ const EDGE_CANDIDATES = [
 
 function run(cmd, args, timeoutMs) {
     return new Promise((resolve, reject) => {
-        execFile(cmd, args, { timeout: timeoutMs || 60000, windowsHide: true }, (err, stdout, stderr) => {
+        execFile(cmd, args, { timeout: timeoutMs || 60000, windowsHide: true }, (err, stdout, _stderr) => {
             if (err) reject(err); else resolve(stdout);
         });
     });

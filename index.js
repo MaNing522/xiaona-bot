@@ -40,6 +40,7 @@ const _err = console.error;
  * WebUI 日志仍保留原文（浏览器自己有 emoji 字体回退，能正常渲染）。
  * 注意别把箭头/几何图形/带圈数字也吞掉：那些在中文字体里是能正常显示的。
  */
+// eslint-disable-next-line no-misleading-character-class -- ZWJ/变体选择符本就在字符类里做「表情组成符」匹配，是刻意为之
 const TERM_UNSAFE = /[\u{1F000}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{200D}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]+/gu;
 function termSafe(v) {
     return typeof v === 'string' ? v.replace(TERM_UNSAFE, '[表情]') : v;

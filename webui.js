@@ -17,7 +17,6 @@ import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } fro
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
-const NAPCAT_INDEX = path.join(NAPCAT_DIR, 'index.js');
 const NODE_BIN = path.join(NAPCAT_DIR, 'node.exe');
 const QR_FILE = path.join(NAPCAT_DIR, 'napcat', 'cache', 'qrcode.png');
 const LOGIN_FILE = path.join(__dirname, 'data', 'login.json');

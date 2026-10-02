@@ -28,6 +28,9 @@ xiaona-mod/run/
 xiaona-mod/.fabric/
 xiaona-mod/.verify-server/
 
+# ---------- 本地工具 / 文档（不入库）----------
+.trae/
+
 # ---------- IDE / 系统 ----------
 .idea/
 *.iml

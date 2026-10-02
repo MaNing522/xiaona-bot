@@ -5,14 +5,29 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon --watch .env --watch prompt.txt index.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
     "ws": "^8.18.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "nodemon": "^3.1.14",
+    "prettier": "^3.9.9",
+    "vitest": "^5.0.3"
+  }
 }

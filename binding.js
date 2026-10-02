@@ -26,6 +26,9 @@ export function initBindings(saveDir, opts = {}) {
   file = path.join(saveDir, 'bindings.json');
   maxPerQq = Number(opts.maxPerQq) > 0 ? Number(opts.maxPerQq) : 3;
   ttlSec = Number(opts.ttlSec) > 0 ? Number(opts.ttlSec) : 300;
+  // 先清空再加载：重新初始化（如测试/重启）不能沿用上一轮的内存状态
+  data = { qq: {} };
+  pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
   if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
   console.log(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
