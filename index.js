@@ -79,6 +79,26 @@ const BOT_REPLY = (process.env.BOT_REPLY || 'false') === 'true';
 // 进群申请 / 好友申请：转给主人，由主人引用通知回复"同意 / 拒绝"
 const QQ_REQUEST_APPROVE = (process.env.QQ_REQUEST_APPROVE || 'true') !== 'false';
 
+// ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
+const AI_ENABLED = !!String(process.env.AI_API_KEY || '').trim();
+const SEARCH_ENABLED = !!String(process.env.BAIDU_SEARCH_KEY || '').trim();
+const WEBUI_ENABLED = !!String(process.env.WEBUI_PASSWORD || '').trim();
+const MC_ENABLED = !!String(process.env.MC_BRIDGE_URL || '').trim()
+    && !!String(process.env.MC_BRIDGE_SECRET || '').trim();
+const OWNER_ENABLED = !!String(process.env.BOT_OWNER || '').trim();
+
+function logFeatureStates() {
+    // 不用 emoji：终端会把它们替换成 [表情]，反而看不出开关状态
+    const on = (b) => (b ? '[已启用]' : '[已停用]');
+    console.log('=== 功能状态（.env 里缺配置的会自动停用）===');
+    console.log(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
+    console.log(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
+    console.log(`   语音合成       [已启用]  kktts 免密钥`);
+    console.log(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
+    console.log(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
+    console.log(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
+}
+
 if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
 
 // 记忆模块初始化（配置化：条数/超时来自 .env）
@@ -1376,6 +1396,8 @@ async function notifyOwnerWithId(msg) {
  */
 async function onRequest(event) {
     if (!QQ_REQUEST_APPROVE) return;
+    // 没配 BOT_OWNER：申请通知没人可发，功能等于停用，直接跳过（启动时已提示）
+    if (!OWNER_ENABLED) return;
     const kind = String(event.request_type || '');
     const sub = String(event.sub_type || '');
     const uid = String(event.user_id || '');
@@ -1640,6 +1662,8 @@ async function onMessage(event) {
 // AI 回复主流程（含搜索/语音/多条回复）
 // allowSkip：只在"群里仅命中关键词"这种模糊触发下为 true，交给 AI 判断是否真的在叫它
 async function runAI(event, userInput, allowSkip = false) {
+    // 没配 AI_API_KEY：AI 对话整体停用（启动时已提示，这里静默跳过，不在群里刷屏）
+    if (!AI_ENABLED) return;
     try {
         // 注入会话元数据（对话类型/昵称/身份/好感度/群头衔/时间等），格式与参考项目一致
         const meta = await getMemberMeta(event);
@@ -1653,7 +1677,7 @@ async function runAI(event, userInput, allowSkip = false) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        const result = await callAIWithDecision(metaLine, null, mem, true, allowSkip);
+        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip);
         let { reply, needSearch, searchKeyword, wantVoice } = result;
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
@@ -1726,6 +1750,9 @@ async function askAiFromMc({ player, text, isPrivate }) {
 }
 
 async function askAiFromMcInner(key, player, text, isPrivate) {
+    // 没配 AI_API_KEY：游戏内也停用 AI，私聊回一句说明，公聊直接不吭声
+    if (!AI_ENABLED) return isPrivate ? '小钠没开 AI，答不了话。' : '';
+
     // MC 玩家没有 QQ 号，直接按参考项目的元数据格式拼一行，不做 NapCat 成员查询
     const metaLine = `[当前对话:${isPrivate ? '游戏私聊' : '游戏公聊'}|对话ID:${key}]`
         + `[名称:${player}| QQ:-|身份:成员|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
@@ -1734,7 +1761,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     recordMessage(key, 'user', text, { name: player, qq: '' });
     const mem = memoryContext(key);
 
-    let result = await callAIWithDecision(metaLine, null, mem);
+    let result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED);
     if (result.needSearch) {
         // 没给关键词就退回用玩家原话
         const q = (result.searchKeyword || text || '').replace(/\s+/g, ' ').trim();
@@ -2263,17 +2290,26 @@ function connect() {
 if (WS_TOKEN === 'your_napcat_token') {
     console.warn('⚠️  请确认 .env 中 NAPCAT_TOKEN 与 NapCat WS 设置一致（当前未启用 token）。');
 }
-console.log(`🤖 模型: ${process.env.AI_MODEL || 'deepseek-chat'}`);
+console.log(AI_ENABLED ? `模型: ${process.env.AI_MODEL || 'deepseek-chat'}` : '模型: （未配置，AI 对话不可用）');
+logFeatureStates();
 connect();
 
 // 启动网页控制面板（非阻塞）；授权由主人管理，面板通知走主人回调
 setOwnerNotifier(notifyOwner);
 // 供 WebUI 人工接管发送消息
 setSendMsg((action, params) => callApi(action, params));
-startWebUI().catch((e) => console.error('❌ WebUI 启动失败:', e.message));
+if (WEBUI_ENABLED) {
+    startWebUI().catch((e) => console.error('❌ WebUI 启动失败:', e.message));
+} else {
+    console.log('未配置 WEBUI_PASSWORD，网页控制面板已停用（.env 里补上即自动启用）。');
+}
 
 // 启动与 Minecraft 服务器侧 mod 的桥：接收游戏聊天/进出服事件，并把回复注入游戏
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
-startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers });
+if (MC_ENABLED) {
+    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers });
+} else {
+    console.log('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
+}
 
 process.on('SIGINT', () => { console.log('\n退出。'); process.exit(0); });

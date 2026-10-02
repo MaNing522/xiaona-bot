@@ -117,6 +117,9 @@ gradlew.bat build
 
 ### `.env`（本机）
 
+> **缺配置即停用**：没填的项对应的功能会自动关闭，机器人不会报错崩溃；启动时会打印一份「功能状态」清单。
+> `AI_API_KEY` → AI 对话；`BAIDU_SEARCH_KEY` → 联网搜索；`WEBUI_PASSWORD` → 网页面板；`MC_BRIDGE_URL`+`MC_BRIDGE_SECRET` → MC 服务器桥；`BOT_OWNER` → 授权/审批等主人功能。
+
 | 分组 | 关键项 | 说明 |
 |---|---|---|
 | NapCat | `NAPCAT_WS` / `NAPCAT_TOKEN` | OneBot11 连接地址与 token |
