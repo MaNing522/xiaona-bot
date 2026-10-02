@@ -96,6 +96,9 @@ initBindings(SAVE_DIR, {
 // 上下线记录（主人私聊 #查询 用）落盘，重启不丢
 initPresence(SAVE_DIR);
 
+// 余额统计（#余额 的累计充值/已使用）落盘，重启不丢
+initBalance();
+
 // AI 并发锁：每个会话（群/私聊）同时只允许一个 AI 请求，防止过多请求堆积
 const aiBusy = new Map();
 const convKey = (event) =>
@@ -801,6 +804,55 @@ async function doSearch(event, query) {
 
 // ---------- AI 账户余额（#余额） ----------
 /**
+ * 余额统计：服务商只给"当前余额"，没有账单/用量接口，所以"累计充值""已使用"只能本地采样累积。
+ * 每次查询时和上次快照比 —— 充值/赠送只会让账上余额上升，把上升量累加即累计充值/赠送；
+ * 已使用 = 累计充值 + 累计赠送 - 当前余额。
+ * 只能统计**首次查询之后**的变化，更早的消费服务商不提供，无从追溯（消息里会注明起始日期）。
+ * 按币种分别累计，落盘到 data/balance.json。
+ */
+const BALANCE_FILE = path.join(SAVE_DIR, 'balance.json');
+let balanceStat = { currencies: {} };
+
+function initBalance() {
+    try {
+        const d = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
+        if (d && typeof d === 'object' && d.currencies) balanceStat = d;
+    } catch { balanceStat = { currencies: {} }; }
+}
+
+function saveBalance() {
+    try {
+        fs.mkdirSync(path.dirname(BALANCE_FILE), { recursive: true });
+        fs.writeFileSync(BALANCE_FILE, JSON.stringify(balanceStat, null, 2));
+    } catch (e) { console.error('余额统计落盘失败:', e.message); }
+}
+
+const balanceCents = (v) => Math.round(Number(v || 0) * 100);
+const balanceStr = (c) => (c / 100).toFixed(2);
+
+/** 把一次余额快照并进累计统计，返回该币种的统计对象 */
+function trackBalance(info) {
+    const cur = String(info.currency || 'CNY');
+    const st = balanceStat.currencies[cur]
+        || { rechargeCents: 0, grantedCents: 0, last: null, since: Date.now() };
+    const nowTop = balanceCents(info.topped_up_balance);
+    const nowGrant = balanceCents(info.granted_balance);
+    if (st.last) {
+        // 充值/赠送只会让余额上升；下降是消费，不计负
+        st.rechargeCents += Math.max(0, nowTop - st.last.top);
+        st.grantedCents += Math.max(0, nowGrant - st.last.grant);
+    } else {
+        // 首次采样：把账上现有的钱当作基线，此前的消费无法追溯
+        st.rechargeCents = Math.max(0, nowTop);
+        st.grantedCents = Math.max(0, nowGrant);
+    }
+    st.last = { top: nowTop, grant: nowGrant, total: balanceCents(info.total_balance), at: Date.now() };
+    balanceStat.currencies[cur] = st;
+    saveBalance();
+    return st;
+}
+
+/**
  * 查 AI 服务商账户余额（DeepSeek：GET /user/balance）。
  * 接口地址由 AI_API_URL 推导（去掉 /chat/completions 那段）——
  * 换成其它服务商时若没有这个接口，会返回一句友好提示而不是报错崩掉。
@@ -825,14 +877,24 @@ async function doBalance(event, role) {
         const data = await res.json();
         const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
         if (!infos.length) return sendReply(event, '💰 查到了响应，但里面没有余额信息（当前服务商可能不支持）');
-        const sym = (c) => (c === 'CNY' ? '¥' : c === 'USD' ? '$' : '');
-        const lines = infos.map((b) => {
-            const s = sym(b.currency);
-            const raw = s ? '' : ` ${b.currency || ''}`;
-            return `· 总余额 ${s}${b.total_balance}${raw}（充值 ${s}${b.topped_up_balance}${raw} + 赠送 ${s}${b.granted_balance}${raw}）`;
+
+        const multi = infos.length > 1;
+        const blocks = infos.map((b) => {
+            const st = trackBalance(b);
+            const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
+            const tag = sym || ` ${b.currency || ''} `;           // 没有符号的币种直接用代码
+            const total = balanceCents(b.total_balance);
+            const used = Math.max(0, st.rechargeCents + st.grantedCents - total);
+            const d0 = new Date(st.since);
+            const sinceStr = `${d0.getMonth() + 1}-${d0.getDate()}`;
+            const head = multi ? `【${b.currency || '?'}】\n` : '';
+            return head
+                + `· 当前余额：${tag}${balanceStr(total)}（充值余 ${tag}${balanceStr(balanceCents(b.topped_up_balance))} + 赠金余 ${tag}${balanceStr(balanceCents(b.granted_balance))}）\n`
+                + `· 累计充值：${tag}${balanceStr(st.rechargeCents)}　累计赠送：${tag}${balanceStr(st.grantedCents)}\n`
+                + `· 已使用：${tag}${balanceStr(used)}（自 ${sinceStr} 起统计）`;
         });
         const head = data.is_available ? '💰 AI 账户余额：' : '⚠️ AI 账户余额（当前不可用）：';
-        return sendReply(event, head + '\n' + lines.join('\n'));
+        return sendReply(event, head + '\n' + blocks.join('\n'));
     } catch (e) {
         return sendReply(event, '❌ 余额查询出错：' + String(e.message).slice(0, 120));
     }
