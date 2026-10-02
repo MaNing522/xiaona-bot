@@ -100,6 +100,30 @@ setInterval(() => {
     for (const [k, e] of engageSessions) if (now > e.exp) engageSessions.delete(k);
 }, 60 * 1000);
 
+/**
+ * 明确被要求"别说话"：出现这类制止语就直接不回复，连 AI 都不用叫。
+ * 这类句子（"别说了""闭嘴""不用回"）基本只在"叫住它"的场合出现，
+ * 万一认错人（其实是在说别人）也只是少回一句 —— 与"拿不准就不接"一个口径，宁可漏回。
+ */
+const SHUTUP_RE = /(?:别|不要|不用|甭|莫)(?:说话|说了|说啦|回复|回话|回我|回(?!头|来|去|家|忆)|理我|接话|插嘴|吭声|出声|搭理|吵)|闭嘴|闭麦|安静(?:点|会儿|一下)?|消停(?:点|会儿)?/;
+
+/**
+ * 是不是"在对小钠下别说话的指令"。
+ * 光匹配到字面还不够，要排掉三种明显不是下命令的说法：
+ *   · "**的**别说话" / "别说话**的**梗" —— 带「的」是在修饰名词，属于谈论这个说法；
+ *   · "**让你**别说话""**叫他**别说话" —— 在转述别人的命令，不是说给小钠听。
+ */
+function isShutUpDirective(text) {
+    const s = String(text || '');
+    const m = s.match(SHUTUP_RE);
+    if (!m) return false;
+    const before = s.slice(0, m.index);
+    const after = s.slice(m.index + m[0].length);
+    if (/的\s*$/.test(before) || /^\s*的/.test(after)) return false;
+    if (/(?:让|叫|要|劝)\s*[你他她它]\s*$/.test(before)) return false;
+    return true;
+}
+
 if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
 
 // 记忆模块初始化（配置化：条数/超时来自 .env）
@@ -207,8 +231,9 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
 /**
  * @param allowSearch 是否让 AI 判断要不要联网搜索（第二轮已搜完就不需要了）
  * @param allowSkip   是否让 AI 判断"这条其实不是在叫小钠"从而不回复。
- *                    只在"群里只命中了关键词"这种模糊触发时开启；
+ *                    只在"群里只命中了关键词"或"唤起会话的跟进消息"这类模糊触发时开启；
  *                    @了机器人、引用了机器人、私聊，都是明确在跟它说话，不允许跳过。
+ *                    开启时**从严**：只有明确输出【REPLY:是】才回复，其余（否/畸形/漏写）一律不接。
  */
 async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false) {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
@@ -226,10 +251,12 @@ ${tagRule}
     let step = 1;
     if (allowSkip) {
         decisionPrompt += `
-${step++}. **是否需要接话**：小钠刚被人叫过，现在判断这条消息要不要接。
-   - 关键区别：**冲着小钠来的**（问它、接它的话、追问、让它做事）→ 是；**把它当话题在跟别人聊**（评论它、拿它打比方、别人之间转去聊别的）→ 否。
-   - 是 → 输出【REPLY:是】；否 → 输出【REPLY:否】，并且不要再生成回复内容。
-   - 拿不准就回【REPLY:否】（宁可漏接一句，也别强行插话——真在叫小钠的人，会重新 @ 它或叫名字的）。
+${step++}. **是否需要接话（默认不接，一律从严）**：小钠刚被人叫过，现在判断这条消息要不要接。
+   - 只有**明确是在跟小钠说话**才接：直接问它、让它做事、接着它的话追问或补充、明确 @ 它或叫它名字。
+   - 以下**一律不接**：说给别人听的、别人之间的对话、把小钠当话题聊（评论它、拿它打比方）、转述或复述别人的话、没有文字内容（纯表情/图片/符号）、另一个机器人的寒暄，以及**明确让它别说话的要求**（“别说了”“闭嘴”“不用回”“安静点”）。
+   - **判断标准从严**：只要需要靠猜、或者有半分犹豫，就算不接。
+   - 你必须先输出【REPLY:是】或【REPLY:否】：**只有写【REPLY:是】才会真的发出去**；写【REPLY:否】、写成别的、或者忘了写，都会当作不接。
+   - 判【REPLY:否】时不要再生成任何回复内容。
 `;
     }
     if (allowSearch) {
@@ -267,8 +294,10 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
     // 解析标记：容忍全角冒号、空格、缺失关键词等写法
     let skip = false;
     if (allowSkip) {
-        const rm = reply.match(/【\s*REPLY\s*[:：]\s*(否|不|NO|no|false|0)\s*】/);
-        skip = !!rm;
+        // 从严：**只有明确写了【REPLY:是】才回复**。写成"否"、写成别的、或干脆忘了写，
+        // 一律当作不接 —— 拿不准时宁可漏回，真在叫小钠的人会再叫一次。
+        const yes = reply.match(/【\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*】/);
+        skip = !yes;
     }
     reply = reply.replace(/【\s*REPLY\s*[:：][^】]*】/g, '');
 
@@ -1643,6 +1672,14 @@ async function onMessage(event) {
             allowSkip = true;                  // 交给 AI 判断"是不是在跟小钠说话"
             if (ENGAGE_DEBUG) logger.info(`[唤起] ${convKey(event)} 跟进检查（${isInitiator ? '唤起人剩 ' + e.initLeft : '其他人剩 ' + e.otherLeft}）`);
         }
+    }
+
+    // 明确被要求"别说话"：直接不回复，也不烧 AI 额度；顺带结束这轮唤起会话
+    // （都让人闭嘴了，就不该再接着盯后面几条消息）
+    if (isShutUpDirective(userInput)) {
+        engageSessions.delete(convKey(event));
+        logger.info('🤐 对方明确要求别说话，跳过回复');
+        return;
     }
 
     if (isSuspicious(userInput)) {
