@@ -21,6 +21,8 @@ import { pushLog } from './state.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOG_DIR = path.join(__dirname, 'logs');
+// 跑测试时不写文件：否则 npm test 会把用例输出灌进运行日志里（Vitest 会设 VITEST）
+const FILE_LOG = !process.env.VITEST;
 
 /**
  * 终端字体（Consolas/宋体这类等宽字体）基本没有 emoji 和部分符号的字形，
@@ -81,6 +83,7 @@ function writeAll(levelName, msg) {
     /* pushLog 失败绝不能抛 */
   }
   // 3) 文件（按天；时间戳用本地时间，和文件名一致，排查时不必再换算时区）
+  if (!FILE_LOG) return;
   try {
     const d = new Date();
     const ts =
