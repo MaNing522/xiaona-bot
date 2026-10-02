@@ -441,12 +441,49 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
 
 // ---------- 指令 ----------
 
+// IP 归属地查询（主人私聊 #查询 用）：走 yuafeng 免费接口，结果缓存 30 分钟
+const ipLocCache = new Map();
+const IP_LOC_CACHE_MAX = 200;
+const IP_LOC_TTL = 30 * 60 * 1000;
+
+/** 内网 / 回环地址查归属地没意义（复用没接通时会拿到 127.0.0.1），直接跳过 */
+function isPrivateIp(ip) {
+    return /^(10\.|127\.|192\.168\.|169\.254\.|::1$|fc|fd|fe80)/i.test(String(ip || ''))
+        || /^172\.(1[6-9]|2\d|3[01])\./.test(String(ip || ''));
+}
+
+/** 查某个 IP 的归属地，返回一行文字；失败返回 ''（不影响 #查询 其余内容） */
+async function ipLocationOf(ip) {
+    const key = String(ip || '').trim();
+    if (!key || isPrivateIp(key)) return '';
+    const c = ipLocCache.get(key);
+    if (c && Date.now() < c.exp) return c.text;
+    try {
+        const res = await fetch('https://api-v2.yuafeng.cn/API/ip_location.php?ip=' + encodeURIComponent(key), {
+            signal: AbortSignal.timeout(10000),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        if (j.code !== 0 || !j.data || !j.data.location) throw new Error(j.msg || '返回格式异常');
+        const loc = j.data.location;
+        // "中国 北京市 北京市" 这种情况去个重，看着清爽
+        const parts = [...new Set([loc.country && loc.country.name, loc.region, loc.city].filter(Boolean))];
+        let text = parts.join(' ') || '未知';
+        if (loc.postcode) text += `（${loc.postcode}）`;
+        cacheSet(ipLocCache, key, IP_LOC_CACHE_MAX, { text, exp: Date.now() + IP_LOC_TTL });
+        return text;
+    } catch (e) {
+        console.log('[IP归属地] 查询失败:', key, e.message);
+        return '';
+    }
+}
+
 /**
  * 主人私聊专属：#查询 时额外附上登录 IP 与最近 5 次上下线。
  * 数据来自桥的 join/leave 事件（mod 2.4.0+ 的 join 事件才带真实客户端 IP），
  * 只保留机器人本次运行期间的记录，所以没记录时要说清是"没记到"而不是"没有"。
  */
-function ownerQueryExtra(name) {
+async function ownerQueryExtra(name) {
     const h = getPlayerHistory(name);
     const pad = (n) => String(n).padStart(2, '0');
     const when = (ms) => {
@@ -455,6 +492,11 @@ function ownerQueryExtra(name) {
     };
     const lines = ['———— 主人可见 ————'];
     lines.push(`📍 最近登录 IP：${h && h.ip ? h.ip : '暂无记录（需 mod 2.4.0+，且该玩家本次启动后进过服）'}`);
+    // 紧跟着补上这个 IP 的归属地
+    if (h && h.ip) {
+        const loc = await ipLocationOf(h.ip);
+        if (loc) lines.push(`🗺️ 归属地：${loc}`);
+    }
     if (h && h.events.length) {
         lines.push(`🕒 最近上下线（共 ${h.events.length} 条）：`);
         // 倒序：最新一条在最上面
@@ -544,9 +586,9 @@ async function handleCommand(event, text) {
             }
             try {
                 const out = formatPlanPlayer(target, await getPlanPlayer(target));
-                // 公开聊天里保持原样；只有主人私聊才额外附上登录 IP 与最近 5 次上下线
+                // 公开聊天里保持原样；只有主人私聊才额外附上登录 IP、归属地与最近 5 次上下线
                 if (r === 'owner' && event.message_type === 'private') {
-                    return sendReply(event, `${out}\n\n${ownerQueryExtra(target)}`);
+                    return sendReply(event, `${out}\n\n${await ownerQueryExtra(target)}`);
                 }
                 return sendReply(event, out);
             } catch (e) {
