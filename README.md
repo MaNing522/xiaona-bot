@@ -2,7 +2,7 @@
 
 基于**真实 QQ 账号**的群聊机器人，外加一个 **Minecraft Fabric 服务端模组**，把 QQ 群和游戏内聊天双向打通。
 
-- **本机（Windows）**：QQ 登录（NapCat / OneBot11）、AI 回复、语音、截图、网页控制面板、QQ ↔ 游戏ID 绑定、完整的命令系统。
+- **本机（Windows）**：QQ 登录（NapCat / OneBot11）、AI 回复、联网搜索、语音、截图、网页控制面板、QQ ↔ 游戏ID 绑定、完整的命令系统。
 - **服务端（Fabric 1.21.11）**：把游戏事件（聊天 / 进出服 / 死亡 / 成就）推给本机，接收本机投递的文本；**与 MC 共用同一个端口**（端口复用），即使服务商只放行一个端口也能用。
 
 > 本仓库不含 NapCat 本体（体积大，已在 `.gitignore` 中排除），需自行下载后放到 `napcat/` 目录。
@@ -21,7 +21,7 @@
                             ▼
                    本机 Node 机器人（index.js）
                    ├─ AI 回复（DeepSeek）+ 记忆
-                   ├─ 语音 / 截图
+                   ├─ 联网搜索 / 语音 / 截图
                    ├─ 命令系统 / 定时任务 / 权限
                    ├─ 网页控制面板 :8080
                    └─ 加签 HTTP + SSE  ◄──►  服务端 mod（端口复用，共用一个对外端口）
@@ -34,7 +34,8 @@
 
 ## 功能特性
 
-- **AI 对话**：群聊 @ 或含「小钠」关键词触发；私聊直接对话；支持会话记忆。
+- **AI 对话**：群聊 @ 或含「小钠」关键词触发；私聊直接对话；支持会话记忆与联网搜索。
+- **联网搜索**：接入百度智能搜索（千帆 ai_search），AI 自行判断何时需要搜索。
 - **QQ ↔ 游戏ID 绑定**：群里发 `#绑定 <游戏ID>`，过图形验证码即可把群里消息转发进游戏（每人最多 3 个）。
 - **游戏桥**：双向聊天转发、进出服/死亡/成就提示、游戏图片转 QQ 真图、公聊限速与重复内容屏蔽。
 - **网页控制面板**：登录鉴权 + 图形验证码 + 登录限速；可查看状态、管理权限、以机器人身份发消息、开关功能、人工接管。
@@ -56,7 +57,8 @@ QQBot/
 ├─ binding.js           QQ ↔ 游戏ID 绑定（验证码）
 ├─ memory.js            会话记忆            permission.js  主人/管理员/授权
 ├─ help.js              #帮助 菜单           scheduler.js   定时任务
-├─ tts.js               文字转语音          screenshot.js  屏幕 / 网址截图
+├─ search.js            联网搜索（百度智能搜索）
+├─ tts.js               文字转语音（玉峰）   screenshot.js  屏幕 / 网址截图
 ├─ mc.js                MC 服务器状态        captcha.js / shake.js / state.js
 ├─ web/index.html       控制面板页面
 ├─ prompt.txt           机器人人设提示词（改完保存即热更新）
@@ -121,6 +123,8 @@ gradlew.bat build
 | NapCat 面板 | `NAPCAT_WEBUI_TOKEN` / `NAPCAT_WEBUI_JWT_SECRET` | 固定面板密码与会话密钥，避免重启掉登录 |
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
 | AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 默认 DeepSeek |
+| 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
+| 语音 | `TTS_API_KEY` / `TTS_VOICE_ID` | 玉峰语音合成；音色默认 `2969`（可爱少女） |
 | 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
@@ -153,7 +157,7 @@ gradlew.bat build
 
 | 分类 | 命令 |
 |---|---|
-| 基础 | `#帮助` `#状态` `#查询 <玩家名>` `#mc <地址>` `#申请授权` |
+| 基础 | `#帮助` `#状态` `#查询 <玩家名>` `#mc <地址>` `#搜索 <关键词>` `#申请授权` |
 | 绑定 | `#绑定 <游戏ID>` `#我的绑定` `#解绑 <游戏ID\|all>` `#强制解绑 <QQ号> [游戏ID]` |
 | 记忆 | `#记住 <内容>` `#记忆 [关键词]` `#忘记 <序号>` `#清除记忆` |
 | 群管 | `#禁言` `#解禁` `#踢出` `#拉黑` `#全体禁言` `#群公告` |

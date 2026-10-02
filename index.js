@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
+import { getSearchContext, searchProviderName } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
@@ -179,32 +180,44 @@ const segRecord = (f) => ({ type: 'record', data: { file: segFile(f) } });
 // 内存里的图片（验证码等）：走 OneBot 的 base64:// 形式，不用落地文件
 const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
 
-// ---------- AI 决策（语音标记解析） ----------
-async function callAIWithDecision(userInput, memory = '') {
+// ---------- AI 决策（含搜索/语音标记解析） ----------
+async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true) {
     const url = process.env.AI_API_URL;
     const apiKey = process.env.AI_API_KEY;
     const model = process.env.AI_MODEL || 'deepseek-chat';
 
-    // 这个标记是"合法工具标签"，优先于提示词里的任何格式限制。
+    // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
-    // 结果就是该发语音时不发 —— 这里必须显式豁免。
-    const tagRule = '【VOICE:…】是合法的“工具标签”，优先于提示词里的任何格式限制'
+    // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
+    const tagRule = '【SEARCH:…】和【VOICE:…】是合法的“工具标签”，优先于提示词里的任何格式限制'
         + '（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释。';
 
-    const decisionPrompt = `你是小钠，一个智能QQ机器人助手。
+    let decisionPrompt = `你是小钠，一个智能QQ机器人助手。
 
-【重要】你需要完成以下判断，并在回复中通过特殊标记告知框架。
+【重要】你需要同时完成以下判断，并在回复中通过特殊标记告知框架。
 ${tagRule}
+`;
 
-1. **语音发送判断**：
+    let step = 1;
+    if (allowSearch) {
+        decisionPrompt += `
+${step++}. **联网搜索判断**：只在"这条消息必须靠实时/外部信息才能答好"时才搜（天气、新闻、股价、赛事、价格、某人的近况、你不确定的当下事实等）。
+   - 需要搜索 → 输出【SEARCH:需要|关键词:搜索词】
+   - 不需要（闲聊、常识、你本来就会的、能靠上下文答的）→ 输出【SEARCH:不需要】
+   - 关键词要短、能直接喂给搜索引擎（如“武汉今天天气”），别带“请问”“帮我查”这类口语。
+`;
+    }
+    decisionPrompt += `
+${step++}. **语音发送判断**：
    - 如果回复内容适合语音朗读（简短、自然、口语化），且用户有语音意图，标记：【VOICE:YES】
    - **重要**：当【VOICE:YES】时，回复文本必须是纯语音内容，不要添加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
    - 否则标记：【VOICE:NO】
 
-2. **生成回复**：
+${step}. **生成回复**：
    - 用自然、友好的中文回复用户
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
+${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以上搜索结果回答用户的问题。\n` : ''}
 
 现在请回复用户：${userInput}`;
 
@@ -230,13 +243,24 @@ ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复�
 
     let reply = data.choices[0].message.content || '';
 
-    // 解析标记：容忍全角冒号与空格写法
+    // 解析标记：容忍全角冒号、空格、缺失关键词等写法
+    let needSearch = false, searchKeyword = '';
+    if (allowSearch) {
+        const sm = reply.match(/【\s*SEARCH\s*[:：]\s*需要(?:\s*[|｜]\s*关键词\s*[:：]\s*([^】]+))?\s*】/);
+        if (sm) {
+            needSearch = true;
+            searchKeyword = String(sm[1] || '').trim();
+        }
+    }
+    // 无论是否解析出关键词，都把标记整体清掉 —— 否则畸形写法会漏到用户看到的消息里
+    reply = reply.replace(/【\s*SEARCH\s*[:：][^】]*】/g, '');
+
     let wantVoice = false;
     const voiceMatch = reply.match(/【\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*】/i);
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
     reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
 
-    return { reply: reply.trim(), wantVoice };
+    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice };
 }
 
 // ---------- 消息净化 / 攻击识别 ----------
@@ -526,6 +550,10 @@ async function handleCommand(event, text) {
             if (!arg) return sendReply(event, '❌ 用法：#mc 服务器地址[:端口]，如 #mc play.example.com 或 #mc 1.2.3.4:25565');
             return doMc(event, arg);
 
+        case '/搜索':
+            if (!arg) return sendReply(event, '❌ 用法：#搜索 <关键词>，如 #搜索 今天天气');
+            return doSearch(event, arg);
+
         // ===== 群管理（仅群里可用，需主人/管理员） =====
         case '/禁言':
         case '/解禁':
@@ -804,6 +832,25 @@ async function doMc(event, server) {
         await sendReply(event, formatServer(info));
     } catch (e) {
         await sendReply(event, '❌ MC 查询失败：' + e.message);
+    }
+}
+
+// 直接联网搜索（#搜索）
+async function doSearch(event, query) {
+    try {
+        await sendReply(event, `🔍 正在搜索：${query} ...`);
+        const results = await webSearch(query, 5);
+        if (!results.length) {
+            const p = searchProviderName();
+            const hint = p === '未配置'
+                ? '\n（没配搜索源：请在 .env 里填 BAIDU_SEARCH_KEY）'
+                : `\n（搜索源：${p}）`;
+            return sendReply(event, '❌ 没搜到结果，请稍后再试。' + hint);
+        }
+        const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet.slice(0, 80)}`);
+        return sendReply(event, `🔍 "${query}" 搜索结果：\n` + lines.join('\n'));
+    } catch (e) {
+        return sendReply(event, '❌ 搜索失败：' + e.message);
     }
 }
 
@@ -1589,7 +1636,21 @@ async function runAI(event, userInput) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        const { reply, wantVoice } = await callAIWithDecision(metaLine, mem);
+        const result = await callAIWithDecision(metaLine, null, mem);
+        let { reply, needSearch, searchKeyword, wantVoice } = result;
+
+        if (needSearch) {
+            // AI 判定了要搜；万一它没给出关键词，就退回用用户原话当搜索词（清掉 @ 等噪音）
+            const q = (searchKeyword || userInput || '').replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
+            if (q) {
+                console.log(`🔍 AI 决定搜索: "${q}"`);
+                const searchResults = await getSearchContext(q, 5);
+                // 第二轮不再让它判断要不要搜（已经搜完了），只让它据此作答
+                const finalResult = await callAIWithDecision(metaLine, searchResults, mem, false);
+                reply = finalResult.reply;
+                wantVoice = finalResult.wantVoice;
+            }
+        }
 
         let finalReply = reply.replace(/\[[^\]]+\]/g, '');
         if (!finalReply) finalReply = '嗯？我没听懂，能再说一遍吗？';
@@ -1642,7 +1703,16 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     recordMessage(key, 'user', text, { name: player, qq: '' });
     const mem = memoryContext(key);
 
-    const result = await callAIWithDecision(metaLine, mem);
+    let result = await callAIWithDecision(metaLine, null, mem);
+    if (result.needSearch) {
+        // 没给关键词就退回用玩家原话
+        const q = (result.searchKeyword || text || '').replace(/\s+/g, ' ').trim();
+        if (q) {
+            console.log(`🔍 游戏内 AI 决定搜索: "${q}"`);
+            const searchResults = await getSearchContext(q, 5);
+            result = await callAIWithDecision(metaLine, searchResults, mem, false);
+        }
+    }
 
     let reply = String(result.reply || '').replace(/\[[^\]]+\]/g, '').trim();
     if (!reply) reply = '嗯？我没听懂，能再说一遍吗？';
