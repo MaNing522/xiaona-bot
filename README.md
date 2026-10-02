@@ -35,6 +35,7 @@
 ## 功能特性
 
 - **AI 对话**：群聊 @ 或含「小钠」关键词触发；私聊直接对话；支持会话记忆与联网搜索。
+- **唤起会话**：被叫到之后，接下来即使没有 @ 也没提名字，也会继续判断有没有在跟它说话（像真人被叫住后会接着聊）。额度：首先唤起的人多接几条，别人插嘴只接一条；用完自动回到"不叫不理"。
 - **联网搜索**：接入百度智能搜索（千帆 ai_search），小钠自己判断何时需要搜索（无手动命令）。
 - **QQ ↔ 游戏ID 绑定**：群里发 `#绑定 <游戏ID>`，过图形验证码即可把群里消息转发进游戏（每人最多 3 个）。
 - **游戏桥**：双向聊天转发、进出服/死亡/成就提示、游戏图片转 QQ 真图、公聊限速与重复内容屏蔽。
@@ -129,6 +130,9 @@ gradlew.bat build
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
 | 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
 | 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
+| 记忆 | `MEMORY_MAX_RECENT` / `MEMORY_MAX_LONGTERM` / `MEMORY_MAX_AGE_DAYS` | 记忆保留上限与超时清理 |
+| 上下文 | `MEMORY_CONTEXT_RECENT` | 每次对话注入给 AI 的「最近对话」条数（默认 20，建议 20~30） |
+| 唤起会话 | `ENGAGE_DEBUG` | 置 `true` 打印唤起判断的额度消耗，便于排查 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
 | MC 桥开关 | `MC_BRIDGE_MC_TO_QQ` / `MC_BRIDGE_QQ_TO_MC` / `MC_BRIDGE_OP_RELAY` / `MC_BRIDGE_GAME_IMAGE` | 各方向开关 |

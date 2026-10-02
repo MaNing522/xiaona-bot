@@ -99,6 +99,21 @@ function logFeatureStates() {
     console.log(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
 }
 
+// ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
+// 被 @/关键词/引用 叫到，就像现实里被叫住一样，接下来对方继续说，也该继续听着；
+// 但也不能被无限占着，所以给额度：首先唤起的人多给几条，别人插嘴只给一条。
+const ENGAGE_TTL = 10 * 60 * 1000;          // 会话有效期（每次互动都续期）
+const ENGAGE_INITIATOR_LEFT = 3;            // 首先唤起的人：最多再检查 3 条
+const ENGAGE_OTHER_LEFT = 1;                // 其他人插嘴：只检查 1 条
+const ENGAGE_DEBUG = String(process.env.ENGAGE_DEBUG || '') === 'true';
+const engageSessions = new Map();           // convKey -> { initiator, initLeft, otherLeft, exp }
+
+/** 定期清掉过期的唤起会话（不依赖有没有新消息） */
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, e] of engageSessions) if (now > e.exp) engageSessions.delete(k);
+}, 60 * 1000);
+
 if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
 
 // 记忆模块初始化（配置化：条数/超时来自 .env）
@@ -106,6 +121,8 @@ initMemory(SAVE_DIR, {
   maxRecent: Number(process.env.MEMORY_MAX_RECENT || 30),
   maxLongterm: Number(process.env.MEMORY_MAX_LONGTERM || 50),
   maxAgeDays: Number(process.env.MEMORY_MAX_AGE_DAYS || 30),
+  // 每次对话注入给 AI 的「最近对话」条数：20~30 为宜（太多费 token，太少记不住上文）
+  contextRecent: Number(process.env.MEMORY_CONTEXT_RECENT || 20),
 });
 
 // 绑定模块初始化（QQ ↔ 游戏ID，#绑定；每人上限与验证码有效期来自 .env）
@@ -227,10 +244,10 @@ ${tagRule}
     let step = 1;
     if (allowSkip) {
         decisionPrompt += `
-${step++}. **是否需要接话**：判断这条消息是在“对小钠说”，还是只是在“说小钠”。
-   - 关键区别：**冲着小钠来的**（问它、叫它做事、回它的话）→ 是；**把它当话题在跟别人聊**（评论它、拿它打比方、顺口提到它的名字）→ 否。
+${step++}. **是否需要接话**：小钠刚被人叫过，现在判断这条消息要不要接。
+   - 关键区别：**冲着小钠来的**（问它、接它的话、追问、让它做事）→ 是；**把它当话题在跟别人聊**（评论它、拿它打比方、别人之间转去聊别的）→ 否。
    - 是 → 输出【REPLY:是】；否 → 输出【REPLY:否】，并且不要再生成回复内容。
-   - 拿不准就回【REPLY:是】。
+   - 拿不准就回【REPLY:是】（宁可接一句，也别让叫它的人冷场）。
 `;
     }
     if (allowSearch) {
@@ -1634,10 +1651,39 @@ async function onMessage(event) {
         const kw = /小钠/.test(raw);
         // "引用回应"：引用了机器人自己的发言 = 在跟它说话（主人审批的引用在那之前就 return 了，不受影响）
         const quoted = (!atBot && !kw) ? await quotedBot(segments, me) : false;
-        if (!atBot && !kw && !quoted) return;
-        // 只有"仅凭关键词撞上"的才让 AI 判断要不要接话：
-        // @了机器人、引用了机器人 = 明确在叫它，不必多花一次判断（也就不会被误跳过）
-        allowSkip = kw && !atBot && !quoted;
+        const triggered = atBot || kw || quoted;
+
+        if (triggered) {
+            // 被明确叫到：开启/续期「唤起会话」——接下来的几条，即使没 @ 也没关键词，
+            // 也继续交给 AI 判断是不是在跟它说话（就像真人被叫住后会接着聊）
+            const k = convKey(event);
+            engageSessions.set(k, {
+                initiator: String(event.user_id),
+                initLeft: ENGAGE_INITIATOR_LEFT,   // 首先唤起的人：最多再检查 3 条
+                otherLeft: ENGAGE_OTHER_LEFT,      // 别人插嘴：只检查 1 条
+                exp: Date.now() + ENGAGE_TTL,
+            });
+            // 只有"仅凭关键词撞上"的首次触发才需要判断；@/引用是明确在叫它，直接回
+            allowSkip = kw && !atBot && !quoted;
+            if (ENGAGE_DEBUG) console.log(`[唤起] ${k} 由 ${event.user_id} 唤起（续期）`);
+        } else {
+            // 没被叫到：看是不是处在「唤起会话」里
+            const e = engageSessions.get(convKey(event));
+            if (!e || Date.now() > e.exp) {
+                if (e) engageSessions.delete(convKey(event));
+                return;                       // 不在会话里：闲聊不参与
+            }
+            const isInitiator = String(event.user_id) === e.initiator;
+            const left = isInitiator ? e.initLeft : e.otherLeft;
+            if (left <= 0) {
+                if (ENGAGE_DEBUG) console.log(`[唤起] ${convKey(event)} 额度用尽，本条不再参与（${isInitiator ? '唤起人' : '其他人'}）`);
+                return;
+            }
+            if (isInitiator) e.initLeft -= 1; else e.otherLeft -= 1;
+            e.exp = Date.now() + ENGAGE_TTL;   // 有来有往就续期
+            allowSkip = true;                  // 交给 AI 判断"是不是在跟小钠说话"
+            if (ENGAGE_DEBUG) console.log(`[唤起] ${convKey(event)} 跟进检查（${isInitiator ? '唤起人剩 ' + e.initLeft : '其他人剩 ' + e.otherLeft}）`);
+        }
     }
 
     if (isSuspicious(userInput)) {

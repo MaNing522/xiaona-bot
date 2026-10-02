@@ -15,6 +15,7 @@ const CFG = {
   maxAgeDays: 30,  // 超过该天数的最近消息/摘要自动清理
   summaryKeep: 5,  // 窗口溢出时每次压缩的条数
   summaryCap: 800, // 摘要总字符上限
+  contextRecent: 20, // 每次对话注入给 AI 的「最近对话」条数（20~30 比较合适）
 };
 
 export function initMemory(saveDir, cfg = {}) {
@@ -148,7 +149,7 @@ export function memoryContext(key) {
   const parts = [];
   if (c.longterm.length) parts.push('【长期记忆】\n' + c.longterm.map((m) => `- ${m.text}`).join('\n'));
   if (c.summary.length) parts.push('【对话摘要】\n' + c.summary.slice(-3).map((m) => `- ${m.text}`).join('\n'));
-  const last = c.recent.slice(-6);
+  const last = c.recent.slice(-Math.max(1, CFG.contextRecent));
   if (last.length) parts.push('【最近对话】（下面每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
     + last.map((m) => `${label(m)}: ${m.text}`).join('\n'));
   return parts.join('\n');
