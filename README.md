@@ -122,7 +122,7 @@ gradlew.bat build
 | NapCat 面板 | `NAPCAT_WEBUI_TOKEN` / `NAPCAT_WEBUI_JWT_SECRET` | 固定面板密码与会话密钥，避免重启掉登录 |
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
 | AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 默认 DeepSeek |
-| 搜索 | `BOCHA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_API_KEY` | 正规搜索 API，**择一填写**（博查推荐）；都不填则退回 DuckDuckGo（国内常不可达） |
+| 搜索 | `SEARXNG_URL` / `BOCHA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_API_KEY` | 正规搜索源，按顺序降级；**自建 SearXNG 零成本**，都不配则退回 DuckDuckGo（国内常不可达） |
 | 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |

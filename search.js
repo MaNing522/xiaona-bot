@@ -1,15 +1,44 @@
 // ============================================================
 // search.js - 联网搜索
-// 用**正规搜索 API**（在 .env 里配一个 key 即可，按配置自动选择）：
-//   BOCHA_API_KEY  → 博查 Web Search（中文搜索，国内直连，推荐）
+// 按 .env 配置自动选择搜索源，逐个降级（前面的失败就试下一个）：
+//   SEARXNG_URL    → 自建 SearXNG（零成本、私有、keyless，推荐）
+//   BOCHA_API_KEY  → 博查 Web Search（中文搜索，国内直连）
 //   TAVILY_API_KEY → Tavily（为 AI 设计，返回干净摘要）
 //   BRAVE_API_KEY  → Brave Search（官方，有免费额度）
-// 都没配时退回 DuckDuckGo（免 key，但非官方且国内常不可用）。
+//   最后兜底        → DuckDuckGo（免 key，非官方，国内常不可达）
 // ============================================================
 
 import DDG from 'duck-duck-scrape';
 
 const TIMEOUT_MS = 15000;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+// ---------- 自建 SearXNG（JSON API） ----------
+async function searchSearxng(query, limit) {
+  const base = String(process.env.SEARXNG_URL || '').trim().replace(/\/+$/, '');
+  if (!base) throw new Error('未配置 SEARXNG_URL');
+  const url = `${base}/search?q=${encodeURIComponent(query)}`
+    + `&format=json&language=zh-CN&safesearch=1`;
+  const res = await fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': UA },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error('SearXNG HTTP ' + res.status);
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // 最常见的原因：settings.yml 的 search.formats 里没开 json，于是返回了 HTML
+    throw new Error('SearXNG 返回的不是 JSON（请在 settings.yml 的 search.formats 里加上 json 并重启）');
+  }
+  const items = Array.isArray(data.results) ? data.results : [];
+  return items.slice(0, limit).map((r) => ({
+    title: r.title || '',
+    url: r.url || '',
+    snippet: String(r.content || r.snippet || ''),
+  }));
+}
 
 // ---------- 博查（https://open.bochaai.com） ----------
 async function searchBocha(query, limit) {
@@ -86,38 +115,34 @@ async function searchDDG(query, limit) {
   }));
 }
 
-/** 按 .env 里配了哪个 key 选搜索源 */
-function pickProvider() {
-  if (process.env.BOCHA_API_KEY) return { name: '博查', run: searchBocha };
-  if (process.env.TAVILY_API_KEY) return { name: 'Tavily', run: searchTavily };
-  if (process.env.BRAVE_API_KEY) return { name: 'Brave', run: searchBrave };
-  return { name: 'DuckDuckGo', run: searchDDG };
+/** 按 .env 配置排出搜索源顺序，逐个降级；DuckDuckGo 永远垫底 */
+function pickProviders() {
+  const list = [];
+  if (String(process.env.SEARXNG_URL || '').trim()) list.push({ name: 'SearXNG', run: searchSearxng });
+  if (String(process.env.BOCHA_API_KEY || '').trim()) list.push({ name: '博查', run: searchBocha });
+  if (String(process.env.TAVILY_API_KEY || '').trim()) list.push({ name: 'Tavily', run: searchTavily });
+  if (String(process.env.BRAVE_API_KEY || '').trim()) list.push({ name: 'Brave', run: searchBrave });
+  list.push({ name: 'DuckDuckGo', run: searchDDG });
+  return list;
 }
 
 export async function webSearch(query, limit = 5) {
-  const p = pickProvider();
-  try {
-    const r = await p.run(query, limit);
-    if (r.length) return r;
-    console.log(`[搜索] ${p.name} 无结果`);
-  } catch (e) {
-    console.log(`[搜索] ${p.name} 失败: ${e.message}`);
-  }
-  // 非 DuckDuckGo 时再做一次兜底；DuckDuckGo 已经失败就不重复了
-  if (p.name !== 'DuckDuckGo') {
+  const providers = pickProviders();
+  for (const p of providers) {
     try {
-      const r = await searchDDG(query, limit);
+      const r = await p.run(query, limit);
       if (r.length) return r;
+      console.log(`[搜索] ${p.name} 无结果`);
     } catch (e) {
-      console.error('[搜索] DuckDuckGo 兜底也失败:', e.message);
+      console.log(`[搜索] ${p.name} 失败: ${e.message}`);
     }
   }
   return [];
 }
 
-/** 搜索是否已配置可用的搜索源（用于给人提示） */
+/** 当前搜索源名称（第一个配置好的），用于给人提示 */
 export function searchProviderName() {
-  return pickProvider().name;
+  return pickProviders()[0].name;
 }
 
 export async function getSearchContext(query, limit = 5) {

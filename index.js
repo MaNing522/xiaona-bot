@@ -797,7 +797,7 @@ async function doSearch(event, query) {
         if (!results.length) {
             const p = searchProviderName();
             const hint = p === 'DuckDuckGo'
-                ? '\n（当前没配搜索 API，只剩免费的 DuckDuckGo 兜底，国内常不可达；请在 .env 里配 BOCHA_API_KEY / TAVILY_API_KEY / BRAVE_API_KEY 之一）'
+                ? '\n（还没配搜索源，只剩免费的 DuckDuckGo 兜底，国内常不可达；请在 .env 里配 SEARXNG_URL 或 BOCHA_API_KEY / TAVILY_API_KEY / BRAVE_API_KEY）'
                 : `\n（搜索源：${p}）`;
             return sendReply(event, '❌ 没搜到结果，请稍后再试。' + hint);
         }
