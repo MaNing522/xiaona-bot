@@ -11,13 +11,15 @@ import { textToSpeech, cleanVoiceCache } from './tts.js';
 import { getSearchContext } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
-import { chatCompletion, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo } from './aiService.js';
+import { chatCompletion, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
+import { initRateLimit, acquire } from './rateLimit.js';
+import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
 import { startWebUI, setOwnerNotifier } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
-import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory } from './memory.js';
+import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
@@ -144,14 +146,40 @@ initBindings(SAVE_DIR, {
 // 上下线记录（主人私聊 #查询 用）落盘，重启不丢
 initPresence(SAVE_DIR);
 
+/** 读整型环境变量：留空/非法 → 用默认值（允许显式写 0） */
+function numEnv(name, dflt) {
+    const raw = String(process.env[name] || '').trim();
+    if (!raw) return dflt;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+
+// 限速初始化（宽松：正常聊天几乎无感，只对刷屏动手）。数值全部来自 .env，便于按需调整
+initRateLimit({
+    userCooldownMs: numEnv('RL_USER_COOLDOWN_MS', 2000),
+    userPerMinute: numEnv('RL_USER_PER_MINUTE', 8),
+    userPerHour: numEnv('RL_USER_PER_HOUR', 60),
+    userPerDay: numEnv('RL_USER_PER_DAY', 200),
+    groupPerMinute: numEnv('RL_GROUP_PER_MINUTE', 20),
+    groupPerHour: numEnv('RL_GROUP_PER_HOUR', 200),
+    globalMaxConcurrent: numEnv('RL_GLOBAL_CONCURRENT', 3),
+    globalPerMinute: numEnv('RL_GLOBAL_PER_MINUTE', 30),
+    queueMax: numEnv('RL_QUEUE_MAX', 15),
+    queueTimeoutMs: numEnv('RL_QUEUE_TIMEOUT_MS', 20000),
+    violationsToCooldown: numEnv('RL_VIOLATIONS_TO_COOLDOWN', 5),
+    penaltyCooldownMs: numEnv('RL_PENALTY_COOLDOWN_MS', 30000),
+    floodWindowMs: numEnv('RL_FLOOD_WINDOW_MS', 10000),
+    floodCount: numEnv('RL_FLOOD_COUNT', 15),
+    penaltyMuteMs: numEnv('RL_PENALTY_MUTE_MS', 300000),
+});
+
 // 余额统计（#余额 的累计充值/已使用）落盘，重启不丢
 // 状态变量先在这里声明（初始化要用）；读写与累计函数在下方「AI 账户余额」一节
 const BALANCE_FILE = path.join(SAVE_DIR, 'balance.json');
 let balanceStat = { currencies: {} };
 initBalance();
 
-// AI 并发锁：每个会话（群/私聊）同时只允许一个 AI 请求，防止过多请求堆积
-const aiBusy = new Map();
+// 会话 key（群/私聊）：供限速按会话串行、以及记忆/接管等按会话隔离使用
 const convKey = (event) =>
     (event.message_type === 'private' ? 'p:' + event.user_id : 'g:' + event.group_id);
 
@@ -234,8 +262,9 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
  *                    只在"群里只命中了关键词"或"唤起会话的跟进消息"这类模糊触发时开启；
  *                    @了机器人、引用了机器人、私聊，都是明确在跟它说话，不允许跳过。
  *                    开启时**从严**：只有明确输出【REPLY:是】才回复，其余（否/畸形/漏写）一律不接。
+ * @param userId      提问者 QQ，作为 user 传给 AI 服务商（KV 缓存隔离，提高同人连续对话的命中率）
  */
-async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false) {
+async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false, userId = '') {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
@@ -289,7 +318,7 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
         { role: 'user', content: decisionPrompt },
     ];
 
-    let reply = await chatCompletion({ messages, temperature: 0.7, maxTokens: 2048 });
+    let reply = await chatCompletion({ messages, temperature: 0.7, maxTokens: pickMaxTokens(userInput), userId });
 
     // 解析标记：容忍全角冒号、空格、缺失关键词等写法
     let skip = false;
@@ -1687,17 +1716,28 @@ async function onMessage(event) {
         return;
     }
 
-    // AI 并发锁：一个会话同时只允许一个 AI 请求
+    // AI 未启用：不用占限速额度，也不该因为"额度用满"去回复（那些话只有开 AI 时才该说）
+    if (!AI_ENABLED) return;
+
+    // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
+    // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
     const key = convKey(event);
-    if (aiBusy.get(key)) {
-        await sendReply(event, '⏳ 上一条消息还在处理，请稍候再发～');
-        return;
+    const ticket = await acquire({
+        userId: String(event.user_id),
+        groupId: event.message_type === 'group' ? String(event.group_id || '') : '',
+        convKey: key,
+    });
+    if (!ticket.ok) {
+        if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
+        if (ticket.reason === 'day') return sendReply(event, '📅 今天聊得够多啦，明天再来找我吧～');
+        if (ticket.reason === 'hour') return sendReply(event, '⏳ 说得有点快啦，歇一会儿再来～');
+        return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
     }
-    aiBusy.set(key, true);
+    if (ticket.waitMs > 3000) logger.info(`[限速] ${key} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
     try {
         await runAI(event, userInput, allowSkip);
     } finally {
-        aiBusy.delete(key);
+        ticket.release();
     }
 }
 
@@ -1719,7 +1759,7 @@ async function runAI(event, userInput, allowSkip = false) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip);
+        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip, String(event.user_id));
         let { reply, needSearch, searchKeyword, wantVoice } = result;
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
@@ -1735,7 +1775,7 @@ async function runAI(event, userInput, allowSkip = false) {
                 logger.info(`🔍 AI 决定搜索: "${q}"`);
                 const searchResults = await getSearchContext(q, 5);
                 // 第二轮不再让它判断要不要搜（已经搜完了），只让它据此作答
-                const finalResult = await callAIWithDecision(metaLine, searchResults, mem, false);
+                const finalResult = await callAIWithDecision(metaLine, searchResults, mem, false, false, String(event.user_id));
                 reply = finalResult.reply;
                 wantVoice = finalResult.wantVoice;
             }
@@ -1803,14 +1843,15 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     recordMessage(key, 'user', text, { name: player, qq: '' });
     const mem = memoryContext(key);
 
-    let result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED);
+    // 游戏玩家没有 QQ 号，用玩家名当 user（同样是稳定的"同一个人"标识，照样能吃到缓存隔离）
+    let result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, false, player);
     if (result.needSearch) {
         // 没给关键词就退回用玩家原话
         const q = (result.searchKeyword || text || '').replace(/\s+/g, ' ').trim();
         if (q) {
             logger.info(`🔍 游戏内 AI 决定搜索: "${q}"`);
             const searchResults = await getSearchContext(q, 5);
-            result = await callAIWithDecision(metaLine, searchResults, mem, false);
+            result = await callAIWithDecision(metaLine, searchResults, mem, false, false, player);
         }
     }
 
@@ -2353,5 +2394,29 @@ if (MC_ENABLED) {
 } else {
     logger.info('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
 }
+
+// 闲时维护：语音缓存清理 + 记忆过期清理。避开工作日高峰（9-12 / 14-18），
+// 高峰期自动推迟到闲时再跑，不跟实时对话抢资源。
+startIdleMaintenance(
+    [
+        {
+            name: '语音缓存清理',
+            run: () => cleanVoiceCache(numEnv('VOICE_CACHE_KEEP', 50)),
+        },
+        {
+            name: '记忆过期清理',
+            run: () => {
+                const r = pruneExpired();
+                if (r.messages || r.summary) {
+                    logger.info(`🧹 闲时清理：过期最近对话 ${r.messages} 条、摘要 ${r.summary} 条`);
+                }
+            },
+        },
+    ],
+    {
+        intervalMs: numEnv('IDLE_INTERVAL_MS', 6 * 3600000),
+        kickOffMs: numEnv('IDLE_KICKOFF_MS', 60000),
+    },
+);
 
 process.on('SIGINT', () => { logger.info('\n退出。'); process.exit(0); });

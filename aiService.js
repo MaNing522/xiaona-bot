@@ -77,19 +77,50 @@ export function balanceEndpoint() {
 }
 
 /**
+ * 按输入挑一个合适的 max_tokens（**绝不允许不设**：不设就是放任模型写长，那是成本大头）。
+ *   闲聊/默认 → AI_MAX_TOKENS（默认 512）
+ *   明显要长文（总结、展开、写一篇…）→ AI_MAX_TOKENS_LONG（默认 1200）
+ *   一句话的短问答 → AI_MAX_TOKENS_SHORT（默认 300）
+ */
+export function pickMaxTokens(userInput) {
+  const base = intEnv('AI_MAX_TOKENS', 512);
+  const short = intEnv('AI_MAX_TOKENS_SHORT', 300);
+  const long = intEnv('AI_MAX_TOKENS_LONG', 1200);
+  const s = String(userInput || '');
+  if (/总结|概括|归纳|展开|详细说|写一篇|写个方案|长文|分析一下全部|翻译全文/.test(s)) return long;
+  // 短问答：很短的一句问话，答完就完，不需要长篇
+  if (s.length <= 15 && /[?？]$/.test(s.trim())) return short;
+  return base;
+}
+
+function intEnv(name, dflt) {
+  const n = Number(String(process.env[name] || '').trim());
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
+/**
  * 发一次对话补全请求，返回助手回复文本。
- * @param {{messages:Array, temperature?:number, maxTokens?:number, timeoutMs?:number}} opts
+ * @param {{messages:Array, temperature?:number, maxTokens?:number, timeoutMs?:number, userId?:string}} opts
  * @returns {Promise<string>}
  */
-export async function chatCompletion({ messages, temperature = 0.7, maxTokens = 2048, timeoutMs = 60000 }) {
+export async function chatCompletion({ messages, temperature = 0.7, maxTokens, timeoutMs = 60000, userId }) {
   const c = getProviderInfo();
   if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
   if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
 
+  const body = {
+    model: c.model,
+    messages,
+    temperature,
+    max_tokens: maxTokens || intEnv('AI_MAX_TOKENS', 512),
+  };
+  // 传 user：服务商据此做 KVCache 隔离，同一个人的连续对话更容易命中前缀缓存（命中价差极大）
+  if (userId) body.user = String(userId);
+
   const res = await fetch(c.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
-    body: JSON.stringify({ model: c.model, messages, temperature, max_tokens: maxTokens }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`AI 请求失败 (${res.status})`);

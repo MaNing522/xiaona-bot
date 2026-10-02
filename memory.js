@@ -52,6 +52,19 @@ function pruneAge() {
   db.prepare('DELETE FROM summary WHERE ts < ?').run(limit);
 }
 
+/**
+ * 对外暴露的过期清理（供闲时维护任务调用）。
+ * 启动时会清一次，但长期运行的进程也得定期清，否则最近对话/摘要会一直堆到下次重启。
+ * @returns {{messages:number, summary:number}} 清掉的条数
+ */
+export function pruneExpired() {
+  if (!db) return { messages: 0, summary: 0 };
+  const limit = Date.now() - CFG.maxAgeDays * 86400000;
+  const m = db.prepare('DELETE FROM messages WHERE ts < ?').run(limit);
+  const s = db.prepare('DELETE FROM summary WHERE ts < ?').run(limit);
+  return { messages: Number(m.changes) || 0, summary: Number(s.changes) || 0 };
+}
+
 /** 历史里的一行该署谁的名：用户消息必须带上"谁说的"，否则 AI 分不清群里谁在说话 */
 function label(m) {
   if (m.role === 'ai') return '小钠';

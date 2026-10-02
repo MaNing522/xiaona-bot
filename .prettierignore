@@ -9,3 +9,5 @@
 !/aiService.js
 !/db.js
 !/logger.js
+!/rateLimit.js
+!/idle.js
