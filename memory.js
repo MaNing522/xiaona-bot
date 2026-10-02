@@ -3,8 +3,8 @@
 // 结构：recent(最近消息滑动窗口，区分 user/ai/system) + summary(溢出压缩摘要) + longterm(长期记忆)
 // 支持搜索/清理/条数上限/超时清理；旧格式数组自动迁移
 // ============================================================
-import fs from 'fs';
 import path from 'path';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 let FILE = '';
 let store = {}; // key -> { recent:[{role,text,t}], summary:[{text,t}], longterm:[{id,text,t}] }
@@ -25,7 +25,7 @@ export function initMemory(saveDir, cfg = {}) {
 
 function load() {
   try {
-    const d = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    const d = readJsonSafe(FILE, null, 'memory.json');
     if (d && typeof d === 'object') {
       // 迁移旧格式（数组 -> 新结构）
       for (const k of Object.keys(d)) {
@@ -42,8 +42,7 @@ function load() {
   save();
 }
 function save() {
-  if (!fs.existsSync(path.dirname(FILE))) fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(store, null, 2));
+  writeJsonAtomic(FILE, store);
 }
 function conv(key) {
   if (!store[key]) store[key] = { recent: [], summary: [], longterm: [] };

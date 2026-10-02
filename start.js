@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -23,17 +24,11 @@ const AUTO_TIMEOUT = 25000; // 自动登录最长等待
 
 // ---------- 历史登录账号（供自动登录） ----------
 function readSaved() {
-  try {
-    const d = JSON.parse(fs.readFileSync(LOGIN_FILE, 'utf8'));
-    return d && /^\d{5,14}$/.test(String(d.qq)) ? d : null;
-  } catch { return null; }
+  const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
+  return d && /^\d{5,14}$/.test(String(d.qq)) ? d : null;
 }
 function saveLogin(qq) {
-  try {
-    const dir = path.join(__dirname, 'data');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(LOGIN_FILE, JSON.stringify({ qq: String(qq), at: Date.now() }));
-  } catch {}
+  writeJsonAtomic(LOGIN_FILE, { qq: String(qq), at: Date.now() });
 }
 
 // ---------- 启动 NapCat（日志带前缀输出到终端） ----------

@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
 import { startWebUI, setOwnerNotifier } from './webui.js';
@@ -769,21 +770,17 @@ async function doMc(event, server) {
  * 余额统计：服务商只给"当前余额"，没有账单/用量接口，所以"累计充值""已使用"只能本地采样累积。
  * 每次查询时和上次快照比 —— 充值/赠送只会让账上余额上升，把上升量累加即累计充值/赠送；
  * 已使用 = 累计充值 + 累计赠送 - 当前余额。
- * 只能统计**首次查询之后**的变化，更早的消费服务商不提供，无从追溯（消息里会注明起始日期）。
+ * 只能统计**首次查询之后**的变化，更早的消费服务商不提供、无从追溯；
+ * 想覆盖更早的历史，用 .env 的 AI_BALANCE_*_BASE 填基数。
  * 按币种分别累计，落盘到 data/balance.json。
  */
 function initBalance() {
-    try {
-        const d = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
-        if (d && typeof d === 'object' && d.currencies) balanceStat = d;
-    } catch { balanceStat = { currencies: {} }; }
+    const d = readJsonSafe(BALANCE_FILE, null, 'balance.json');
+    balanceStat = (d && typeof d === 'object' && d.currencies) ? d : { currencies: {} };
 }
 
 function saveBalance() {
-    try {
-        fs.mkdirSync(path.dirname(BALANCE_FILE), { recursive: true });
-        fs.writeFileSync(BALANCE_FILE, JSON.stringify(balanceStat, null, 2));
-    } catch (e) { console.error('余额统计落盘失败:', e.message); }
+    writeJsonAtomic(BALANCE_FILE, balanceStat);
 }
 
 const balanceCents = (v) => Math.round(Number(v || 0) * 100);

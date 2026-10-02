@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import * as perm from './permission.js';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 
@@ -26,17 +27,11 @@ const MAX_LOG = 300;
 
 // ---------- 记住上次成功登录的账号（面板与启动脚本共用同一个文件） ----------
 function readSavedQq() {
-  try {
-    const d = JSON.parse(fs.readFileSync(LOGIN_FILE, 'utf8'));
-    return /^\d{5,14}$/.test(String(d.qq)) ? String(d.qq) : '';
-  } catch { return ''; }
+  const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
+  return d && /^\d{5,14}$/.test(String(d.qq)) ? String(d.qq) : '';
 }
 function saveLoginQq(qq) {
-  try {
-    const d = path.join(__dirname, 'data');
-    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-    fs.writeFileSync(LOGIN_FILE, JSON.stringify({ qq: String(qq), at: Date.now() }));
-  } catch {}
+  writeJsonAtomic(LOGIN_FILE, { qq: String(qq), at: Date.now() });
 }
 
 // 主人通知回调（由 index.js 注入，用于 QQ 通知主人审批）

@@ -3,10 +3,10 @@
 // 角色等级：owner > admin > authorized > guest
 // 授权由主人管理：普通用户提交申请 -> 主人同意/拒绝
 // ============================================================
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 保证在 init() 之前 process.env 已从 .env 加载（本模块可能在 index.js 的 dotenv.config() 之前被 import）
@@ -21,33 +21,19 @@ let admins = [];      // 来自 .env BOT_ADMINS
 let authorized = [];  // 已授权（持久化）
 let pending = [];     // 待主人审批的申请（持久化）
 
-function readJSON(file, fallback) {
-  try {
-    if (fs.existsSync(file)) {
-      const d = JSON.parse(fs.readFileSync(file, 'utf8'));
-      return d;
-    }
-  } catch (e) {
-    console.error('配置解析失败:', file, e.message);
-  }
-  return fallback;
-}
-
 function save() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ owner, authorized }, null, 2));
+  writeJsonAtomic(AUTH_FILE, { owner, authorized });
 }
 function savePending() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(PENDING_FILE, JSON.stringify({ pending }, null, 2));
+  writeJsonAtomic(PENDING_FILE, { pending });
 }
 
 export function init() {
   owner = String(process.env.BOT_OWNER || '').trim();
   admins = (process.env.BOT_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const a = readJSON(AUTH_FILE, {});
+  const a = readJsonSafe(AUTH_FILE, {}, 'auth.json');
   authorized = Array.isArray(a.authorized) ? a.authorized.map(String) : [];
-  const p = readJSON(PENDING_FILE, {});
+  const p = readJsonSafe(PENDING_FILE, {}, 'pending.json');
   pending = Array.isArray(p.pending) ? p.pending.map(String) : [];
 }
 

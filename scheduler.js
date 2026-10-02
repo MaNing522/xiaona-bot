@@ -2,9 +2,9 @@
 // scheduler.js - 定时任务模块（定时提醒 / 定时禁言 / 定时解禁）
 // 通过 initScheduler() 注入依赖，由 index.js 在启动时调用
 // ============================================================
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,14 +34,11 @@ export function initScheduler(deps) {
 }
 
 function schLoad() {
-  try {
-    const arr = JSON.parse(fs.readFileSync(SCH_FILE, 'utf8'));
-    if (Array.isArray(arr)) schTasks = arr;
-  } catch { /* 忽略 */ }
+  const arr = readJsonSafe(SCH_FILE, [], 'scheduler.json');
+  if (Array.isArray(arr)) schTasks = arr;
 }
 function schSave() {
-  if (!fs.existsSync(saveDir)) fs.mkdirSync(saveDir, { recursive: true });
-  fs.writeFileSync(SCH_FILE, JSON.stringify(schTasks, null, 2));
+  writeJsonAtomic(SCH_FILE, schTasks);
 }
 function nextClock(h, min, now) {
   const t = new Date(now);
