@@ -56,7 +56,7 @@ QQBot/
 ├─ binding.js           QQ ↔ 游戏ID 绑定（验证码）
 ├─ memory.js            会话记忆            permission.js  主人/管理员/授权
 ├─ help.js              #帮助 菜单           scheduler.js   定时任务
-├─ search.js            联网搜索（Bing/DDG，无需 Key）
+├─ search.js            联网搜索（博查 / Tavily / Brave，DuckDuckGo 兜底）
 ├─ tts.js               文字转语音          screenshot.js  屏幕 / 网址截图
 ├─ mc.js                MC 服务器状态        captcha.js / shake.js / state.js
 ├─ web/index.html       控制面板页面
@@ -122,6 +122,8 @@ gradlew.bat build
 | NapCat 面板 | `NAPCAT_WEBUI_TOKEN` / `NAPCAT_WEBUI_JWT_SECRET` | 固定面板密码与会话密钥，避免重启掉登录 |
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
 | AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 默认 DeepSeek |
+| 搜索 | `BOCHA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_API_KEY` | 正规搜索 API，**择一填写**（博查推荐）；都不填则退回 DuckDuckGo（国内常不可达） |
+| 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
 | MC 桥开关 | `MC_BRIDGE_MC_TO_QQ` / `MC_BRIDGE_QQ_TO_MC` / `MC_BRIDGE_OP_RELAY` / `MC_BRIDGE_GAME_IMAGE` | 各方向开关 |

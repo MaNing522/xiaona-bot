@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { getSearchContext } from './search.js';
+import { getSearchContext, searchProviderName } from './search.js';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
@@ -794,7 +794,13 @@ async function doSearch(event, query) {
     try {
         await sendReply(event, `🔍 正在搜索：${query} ...`);
         const results = await webSearch(query, 5);
-        if (!results.length) return sendReply(event, '❌ 搜索失败或没有结果，请稍后再试。');
+        if (!results.length) {
+            const p = searchProviderName();
+            const hint = p === 'DuckDuckGo'
+                ? '\n（当前没配搜索 API，只剩免费的 DuckDuckGo 兜底，国内常不可达；请在 .env 里配 BOCHA_API_KEY / TAVILY_API_KEY / BRAVE_API_KEY 之一）'
+                : `\n（搜索源：${p}）`;
+            return sendReply(event, '❌ 没搜到结果，请稍后再试。' + hint);
+        }
         const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet.slice(0, 80)}`);
         return sendReply(event, `🔍 "${query}" 搜索结果：\n` + lines.join('\n'));
     } catch (e) {
@@ -833,20 +839,34 @@ const balanceStr = (c) => (c / 100).toFixed(2);
 /** 把一次余额快照并进累计统计，返回该币种的统计对象 */
 function trackBalance(info) {
     const cur = String(info.currency || 'CNY');
-    const st = balanceStat.currencies[cur]
-        || { rechargeCents: 0, grantedCents: 0, last: null, since: Date.now() };
     const nowTop = balanceCents(info.topped_up_balance);
     const nowGrant = balanceCents(info.granted_balance);
-    if (st.last) {
-        // 充值/赠送只会让余额上升；下降是消费，不计负
-        st.rechargeCents += Math.max(0, nowTop - st.last.top);
-        st.grantedCents += Math.max(0, nowGrant - st.last.grant);
-    } else {
-        // 首次采样：把账上现有的钱当作基线，此前的消费无法追溯
-        st.rechargeCents = Math.max(0, nowTop);
-        st.grantedCents = Math.max(0, nowGrant);
+    const nowTotal = balanceCents(info.total_balance);
+    let st = balanceStat.currencies[cur];
+    if (!st) {
+        // 首次：账上现有的钱当作"累计充值/赠送"的起点。
+        // .env 里若显式给了基数（补齐服务商不提供的更早历史），用配置值覆盖。
+        const envRecharge = balanceCents(process.env.AI_BALANCE_RECHARGE_BASE);
+        const envGrant = balanceCents(process.env.AI_BALANCE_GRANT_BASE);
+        const envUsed = balanceCents(process.env.AI_BALANCE_USED_BASE);
+        st = {
+            rechargeCents: envRecharge > 0 ? envRecharge : nowTop,
+            grantedCents: envGrant > 0 ? envGrant : nowGrant,
+            usedBaseCents: envUsed,
+            firstTotalCents: nowTotal,
+            inflowCents: 0,     // 统计开始后累计"入账"增量（充值+赠送）
+            manual: envRecharge > 0 || envGrant > 0 || envUsed > 0,
+            last: null,
+            since: Date.now(),
+        };
+    } else if (st.last) {
+        const topUp = Math.max(0, nowTop - st.last.top);
+        const grantUp = Math.max(0, nowGrant - st.last.grant);
+        st.rechargeCents += topUp;          // 充值只会让余额升，上升量即新充的钱
+        st.grantedCents += grantUp;
+        st.inflowCents += topUp + grantUp;
     }
-    st.last = { top: nowTop, grant: nowGrant, total: balanceCents(info.total_balance), at: Date.now() };
+    st.last = { top: nowTop, grant: nowGrant, total: nowTotal, at: Date.now() };
     balanceStat.currencies[cur] = st;
     saveBalance();
     return st;
@@ -879,22 +899,29 @@ async function doBalance(event, role) {
         if (!infos.length) return sendReply(event, '💰 查到了响应，但里面没有余额信息（当前服务商可能不支持）');
 
         const multi = infos.length > 1;
+        let autoMode = false;
         const blocks = infos.map((b) => {
             const st = trackBalance(b);
+            if (!st.manual) autoMode = true;
             const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
             const tag = sym || ` ${b.currency || ''} `;           // 没有符号的币种直接用代码
             const total = balanceCents(b.total_balance);
-            const used = Math.max(0, st.rechargeCents + st.grantedCents - total);
-            const d0 = new Date(st.since);
-            const sinceStr = `${d0.getMonth() + 1}-${d0.getDate()}`;
+            // 已使用 = 统计开始前已用 + （起始余额 + 之后的入账 - 当前余额）
+            const used = Math.max(0, st.usedBaseCents + st.firstTotalCents + st.inflowCents - total);
             const head = multi ? `【${b.currency || '?'}】\n` : '';
             return head
                 + `· 当前余额：${tag}${balanceStr(total)}（充值余 ${tag}${balanceStr(balanceCents(b.topped_up_balance))} + 赠金余 ${tag}${balanceStr(balanceCents(b.granted_balance))}）\n`
                 + `· 累计充值：${tag}${balanceStr(st.rechargeCents)}　累计赠送：${tag}${balanceStr(st.grantedCents)}\n`
-                + `· 已使用：${tag}${balanceStr(used)}（自 ${sinceStr} 起统计）`;
+                + `· 已使用（累计）：${tag}${balanceStr(used)}`;
         });
+        let tail = '';
+        if (autoMode) {
+            const d0 = new Date(Math.min(...infos.map((b) => balanceStat.currencies[String(b.currency || 'CNY')].since)));
+            tail = `\n（服务商不提供历史账单，累计值自 ${d0.getMonth() + 1}-${d0.getDate()} 首次查询起记账；`
+                + '要把更早的历史算进来，可在 .env 里填 AI_BALANCE_RECHARGE_BASE / AI_BALANCE_USED_BASE）';
+        }
         const head = data.is_available ? '💰 AI 账户余额：' : '⚠️ AI 账户余额（当前不可用）：';
-        return sendReply(event, head + '\n' + blocks.join('\n'));
+        return sendReply(event, head + '\n' + blocks.join('\n') + tail);
     } catch (e) {
         return sendReply(event, '❌ 余额查询出错：' + String(e.message).slice(0, 120));
     }
