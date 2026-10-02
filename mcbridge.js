@@ -160,7 +160,15 @@ export async function getBridgeStatus() {
  */
 export async function getPlanPlayer(name) {
     const r = await api('/bridge/player', { method: 'POST', body: { name: String(name) } });
-    if (!r || r.ok !== true) throw new Error((r && r.error) || '服务器没有返回玩家数据');
+    if (!r || r.ok !== true) {
+        const err = String((r && r.error) || '服务器没有返回玩家数据');
+        // Plan 查不到人时回 400 + "was not found in the database"。
+        // 这是最常见的"名字打错了 / 没进过服"，别把一坨原始 JSON 甩给用户看。
+        if (/not found in the database|HTTP 400/i.test(err)) {
+            throw new Error(`没有找到玩家「${name}」（可能名字输错，或他没进过服、数据还没生成）`);
+        }
+        throw new Error(err);
+    }
     // 老玩家（会话多）的原始数据能到几百 KB，服务端会先把用不上的分布数组裁掉再带回来
     if (r.trimmed) {
         console.log(`[MC桥] ${name} 的 Plan 数据已裁剪：${r.rawSize} → ${JSON.stringify(r.player || {}).length} 字符`);

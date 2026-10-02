@@ -180,8 +180,14 @@ const segRecord = (f) => ({ type: 'record', data: { file: segFile(f) } });
 // 内存里的图片（验证码等）：走 OneBot 的 base64:// 形式，不用落地文件
 const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
 
-// ---------- AI 决策（含搜索/语音标记解析） ----------
-async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true) {
+// ---------- AI 决策（含搜索/语音/跳过/多条回复标记解析） ----------
+/**
+ * @param allowSearch 是否让 AI 判断要不要联网搜索（第二轮已搜完就不需要了）
+ * @param allowSkip   是否让 AI 判断"这条其实不是在叫小钠"从而不回复。
+ *                    只在"群里只命中了关键词"这种模糊触发时开启；
+ *                    @了机器人、引用了机器人、私聊，都是明确在跟它说话，不允许跳过。
+ */
+async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false) {
     const url = process.env.AI_API_URL;
     const apiKey = process.env.AI_API_KEY;
     const model = process.env.AI_MODEL || 'deepseek-chat';
@@ -189,8 +195,8 @@ async function callAIWithDecision(userInput, searchResults = null, memory = '', 
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
-    const tagRule = '【SEARCH:…】和【VOICE:…】是合法的“工具标签”，优先于提示词里的任何格式限制'
-        + '（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释。';
+    const tagRule = '【SEARCH:…】【VOICE:…】【REPLY:…】和“单独一行的三个连字符”都是合法的“工具标记”，'
+        + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释。';
 
     let decisionPrompt = `你是小钠，一个智能QQ机器人助手。
 
@@ -199,6 +205,14 @@ ${tagRule}
 `;
 
     let step = 1;
+    if (allowSkip) {
+        decisionPrompt += `
+${step++}. **是否需要接话**：判断这条消息是在“对小钠说”，还是只是在“说小钠”。
+   - 关键区别：**冲着小钠来的**（问它、叫它做事、回它的话）→ 是；**把它当话题在跟别人聊**（评论它、拿它打比方、顺口提到它的名字）→ 否。
+   - 是 → 输出【REPLY:是】；否 → 输出【REPLY:否】，并且不要再生成回复内容。
+   - 拿不准就回【REPLY:是】。
+`;
+    }
     if (allowSearch) {
         decisionPrompt += `
 ${step++}. **联网搜索判断**（默认不搜，拿不准就别搜）：
@@ -216,6 +230,7 @@ ${step++}. **语音发送判断**：
 
 ${step}. **生成回复**：
    - 用自然、友好的中文回复用户
+   - 一条内容太长、或本来就想分几口气说时，可以拆成多条发：**单独占一行写三个连字符 ---** 当作分隔，最多 3 条；不需要拆就别写分隔线。
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
 ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以上搜索结果回答用户的问题。\n` : ''}
@@ -245,6 +260,13 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
     let reply = data.choices[0].message.content || '';
 
     // 解析标记：容忍全角冒号、空格、缺失关键词等写法
+    let skip = false;
+    if (allowSkip) {
+        const rm = reply.match(/【\s*REPLY\s*[:：]\s*(否|不|NO|no|false|0)\s*】/);
+        skip = !!rm;
+    }
+    reply = reply.replace(/【\s*REPLY\s*[:：][^】]*】/g, '');
+
     let needSearch = false, searchKeyword = '';
     if (allowSearch) {
         const sm = reply.match(/【\s*SEARCH\s*[:：]\s*需要(?:\s*[|｜]\s*关键词\s*[:：]\s*([^】]+))?\s*】/);
@@ -261,7 +283,19 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
     reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
 
-    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice };
+    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice, skip };
+}
+
+/**
+ * 把 AI 的一条回复拆成多条（它用单独一行的 --- 分隔）。
+ * 超过 max 条时把剩下的并进最后一条，避免丢内容。
+ */
+function splitReplies(text, max = 3) {
+    const raw = String(text || '');
+    const parts = raw.split(/\r?\n[ \t]*-{3,}[ \t]*\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length <= 1) return raw.trim() ? [raw.trim()] : [];
+    if (parts.length > max) parts.splice(max - 1, parts.length, parts.slice(max - 1).join(' '));
+    return parts;
 }
 
 // ---------- 消息净化 / 攻击识别 ----------
@@ -1573,11 +1607,15 @@ async function onMessage(event) {
 
     // AI 触发：私聊直接回；群聊需 @机器人、消息包含关键词"小钠"、或引用了机器人自己发的消息
     // 关键词不剥离，完整消息（含"小钠"）交给 AI，如"所以小钠你是谁啊"；只发"小钠"也回复
+    let allowSkip = false;
     if (event.message_type === 'group') {
         const kw = /小钠/.test(raw);
         // "引用回应"：引用了机器人自己的发言 = 在跟它说话（主人审批的引用在那之前就 return 了，不受影响）
         const quoted = (!atBot && !kw) ? await quotedBot(segments, me) : false;
         if (!atBot && !kw && !quoted) return;
+        // 只有"仅凭关键词撞上"的才让 AI 判断要不要接话：
+        // @了机器人、引用了机器人 = 明确在叫它，不必多花一次判断（也就不会被误跳过）
+        allowSkip = kw && !atBot && !quoted;
     }
 
     if (isSuspicious(userInput)) {
@@ -1593,14 +1631,15 @@ async function onMessage(event) {
     }
     aiBusy.set(key, true);
     try {
-        await runAI(event, userInput);
+        await runAI(event, userInput, allowSkip);
     } finally {
         aiBusy.delete(key);
     }
 }
 
-// AI 回复主流程（含搜索/语音）
-async function runAI(event, userInput) {
+// AI 回复主流程（含搜索/语音/多条回复）
+// allowSkip：只在"群里仅命中关键词"这种模糊触发下为 true，交给 AI 判断是否真的在叫它
+async function runAI(event, userInput, allowSkip = false) {
     try {
         // 注入会话元数据（对话类型/昵称/身份/好感度/群头衔/时间等），格式与参考项目一致
         const meta = await getMemberMeta(event);
@@ -1614,8 +1653,14 @@ async function runAI(event, userInput) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        const result = await callAIWithDecision(metaLine, null, mem);
+        const result = await callAIWithDecision(metaLine, null, mem, true, allowSkip);
         let { reply, needSearch, searchKeyword, wantVoice } = result;
+
+        // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
+        if (result.skip) {
+            console.log('🤐 AI 判断这条不是在叫小钠，跳过回复');
+            return;
+        }
 
         if (needSearch) {
             // AI 判定了要搜；万一它没给出关键词，就退回用用户原话当搜索词（清掉 @ 等噪音）
@@ -1630,18 +1675,26 @@ async function runAI(event, userInput) {
             }
         }
 
-        let finalReply = reply.replace(/\[[^\]]+\]/g, '');
-        if (!finalReply) finalReply = '嗯？我没听懂，能再说一遍吗？';
-        if (finalReply.includes('[') || finalReply.includes(']')) {
-            finalReply = '这个我发不了，重新说一遍？';
+        // 逐条清洗（去掉方括号等），保留 AI 拆出的多条
+        let parts = splitReplies(reply)
+            .map((t) => t.replace(/\[[^\]]+\]/g, '').trim())
+            .filter(Boolean);
+        if (!parts.length) { parts = ['嗯？我没听懂，能再说一遍吗？']; wantVoice = false; }
+        if (parts.some((t) => t.includes('[') || t.includes(']'))) {
+            parts = ['这个我发不了，重新说一遍？'];
             wantVoice = false;
         }
 
+        // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
         const withAt = event.message_type === 'group';
-        await sendReply(event, finalReply, wantVoice, withAt);
+        for (let i = 0; i < parts.length; i++) {
+            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0);
+            if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 700));
+        }
         // 写入记忆（滑动窗口，角色 ai）
+        const finalReply = parts.join('\n');
         recordMessage(convKey(event), 'ai', finalReply);
-        console.log(`✅ 回复已发送 (语音:${wantVoice})`);
+        console.log(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
     } catch (err) {
         console.error('❌ 处理异常:', err);
         await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
