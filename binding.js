@@ -22,17 +22,34 @@ let ttlSec = 300;
 let data = { qq: {} };
 /** 待验证：qq -> { answer, gameId, expires, tries } */
 const pending = new Map();
+/** 绑定关系变化时的回调（index.js 注入：通知服务器刷新这些玩家的计分板） */
+let onChange = null;
 
 export function initBindings(saveDir, opts = {}) {
   file = path.join(saveDir, 'bindings.json');
   maxPerQq = Number(opts.maxPerQq) > 0 ? Number(opts.maxPerQq) : 3;
   ttlSec = Number(opts.ttlSec) > 0 ? Number(opts.ttlSec) : 300;
+  // 没传就清空：重新初始化不能沿用上一轮的回调
+  onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
   // 先清空再加载：重新初始化（如测试/重启）不能沿用上一轮的内存状态
   data = { qq: {} };
   pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
   if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
   logger.info(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
+}
+
+/**
+ * 通知外部"这几个游戏ID 的绑定状态变了"，好让它去刷新游戏内计分板。
+ * 只是通知，失败/没接回调都不该影响绑定本身的结果。
+ */
+function notifyChange(ids) {
+  if (!onChange || !Array.isArray(ids) || !ids.length) return;
+  try {
+    onChange(ids.slice());
+  } catch (e) {
+    logger.error('[绑定] 绑定变化通知失败（不影响绑定结果）:', e.message);
+  }
 }
 
 function save() {
@@ -127,6 +144,7 @@ export function answerCaptcha(qq, text) {
   entry.at = Date.now();
   save();
   logger.info(`[绑定] QQ ${key} ↔ 游戏ID ${p.gameId}（该QQ共 ${entry.ids.length} 个）`);
+  notifyChange([p.gameId]);   // 人可能正在游戏里：让服务器把计分板撤掉
   return {
     handled: true,
     ok: true,
@@ -147,6 +165,7 @@ export function unbind(qq, arg) {
   if (a.toLowerCase() === 'all' || a === '全部') {
     delete data.qq[key];      // 不留空壳，否则「N 个 QQ 的绑定记录」会一直虚高
     save();
+    notifyChange(ids);
     return { ok: true, msg: `🗑️ 已解绑全部：${ids.join('、')}` };
   }
   const i = ids.findIndex((x) => x.toLowerCase() === a.toLowerCase());
@@ -155,6 +174,7 @@ export function unbind(qq, arg) {
   if (!ids.length) delete data.qq[key];
   else entry.at = Date.now();
   save();
+  notifyChange([removed]);
   return { ok: true, msg: `🗑️ 已解绑 ${removed}${ids.length ? `，剩余：${ids.join('、')}` : '，你已没有绑定'}` };
 }
 
@@ -172,6 +192,7 @@ export function forceUnbind(qq, gameId) {
     const all = ids.slice();
     delete data.qq[key];
     save();
+    notifyChange(all);
     return { ok: true, msg: `🗑️ 已强制解绑 QQ ${key} 的全部绑定：${all.join('、')}`, ids: all };
   }
   const i = ids.findIndex((x) => x.toLowerCase() === a.toLowerCase());
@@ -180,6 +201,7 @@ export function forceUnbind(qq, gameId) {
   if (!ids.length) delete data.qq[key];
   else entry.at = Date.now();
   save();
+  notifyChange([removed]);
   return { ok: true, msg: `🗑️ 已强制解绑 QQ ${key} 的 ${removed}`, ids: [removed] };
 }
 

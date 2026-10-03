@@ -179,13 +179,16 @@ export async function getPlanPlayer(name) {
 }
 
 /**
- * 玩家上线时把"这名玩家是否已绑定"回给服务端 mod。
+ * 把"这名玩家是否已绑定"回给服务端 mod，让它据此显示/撤掉计分板。
  *
- * 不再整表推送：谁绑定只有本机知道，但服务端其实只需要"上线这一个玩家"的答案。
- * 所以由 mod 的 join 事件带上玩家名，本机查完立刻回一条，mod 只为这名玩家渲染计分板。
- * 这样机器人不用反复投递整张表，也不会因为表变化而给全服重算。
+ * 两个调用点：
+ *   1. 玩家**上线**时（mod 的 join 事件带玩家名）；
+ *   2. **绑定关系变化**时（QQ 侧 #绑定 / #解绑）——人可能正在游戏里，
+ *      绑定成功要立刻把板子撤掉，解绑了要重新挂上。
+ *
+ * 判定每次都按当前绑定表现算，所以解绑后"这个ID 是否还有别人绑着"也是准的。
  */
-async function bindCheck(name) {
+export async function bindCheck(name) {
     if (!cfg || !cfg.base || !name) return;
     const ids = (deps && typeof deps.getBoundIds === 'function') ? (deps.getBoundIds() || []) : [];
     const who = String(name).toLowerCase();

@@ -23,7 +23,7 @@ import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryCon
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind } from './binding.js';
 
@@ -141,6 +141,13 @@ initMemory(SAVE_DIR, {
 initBindings(SAVE_DIR, {
   maxPerQq: Number(process.env.BIND_MAX_PER_QQ || 3),
   ttlSec: Number(process.env.BIND_CAPTCHA_TTL || 300),
+  // 绑定关系一变就通知服务器刷新计分板：人可能正挂在游戏里，
+  // 绑好了要马上把提示板撤掉，解绑了要重新挂上（否则得重进服才生效）
+  onChange: (ids) => {
+    for (const id of ids) {
+      bindCheck(id).catch((e) => logger.warn('[MC桥] 刷新计分板失败:', e.message));
+    }
+  },
 });
 
 // 上下线记录（主人私聊 #查询 用）落盘，重启不丢

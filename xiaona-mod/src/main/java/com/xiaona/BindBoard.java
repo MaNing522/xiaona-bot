@@ -31,8 +31,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 谁绑定了游戏ID只有本机（QQ 侧）知道，但服务端不需要整张绑定表：
  * 玩家**上线时**本机回一条"这名玩家是否已绑定"（{@code POST /bridge/bindcheck}），
- * 服务端只为这一名玩家渲染。拿不到答复时按"未绑定"显示 ——
- * 多显示一块提示板，总好过让已绑定的玩家一直看不到引导。
+ * 服务端只为这一名玩家渲染。
+ *
+ * 规则：**在名单里的不管，不在名单里才创建计分板**。
+ * 所以上线时不会先挂一块板等答复 —— 那样已绑定的玩家会先看到板再被撤掉（闪一下）；
+ * 首次见到的玩家一律不挂板，等本机答复说"没绑定"才创建。
  */
 public class BindBoard {
     private static final String OBJECTIVE = "xiaona_bind";
@@ -92,19 +95,27 @@ public class BindBoard {
         });
     }
 
-    /** 上线先按"未绑定"显示，等本机的答复；答复万一没来，板子上那行提示会告诉玩家重新进服 */
+    /**
+     * 上线时：**在名单里的一律不管，只有确定不在名单里的才创建计分板**。
+     * 首次见到的玩家先不挂板，等本机的答复（答复说"没绑定"才创建）——
+     * 这样已绑定的玩家不会先看到一块板再被撤掉。
+     */
     public void onJoin(ServerPlayerEntity p) {
         if (!enabled()) return;
-        show(p);
+        // 只有"已知未绑定"才提前挂板；未知（首次上线）等 bindcheck 的答复
+        if (Boolean.FALSE.equals(verdict.get(key(p.getName().getString())))) show(p);
     }
 
-    /** 重生后按上次判定恢复（客户端重生会重渲染侧边栏）；没有判定就按未绑定显示 */
+    /**
+     * 重生后按上次判定恢复（客户端重生会重渲染侧边栏）。
+     * 判定为已绑定、或还没有判定 → 都不挂板，与上线时的规则保持一致。
+     */
     public void onRespawn(ServerPlayerEntity p) {
         if (p == null) return;
         if (!enabled()) { hide(p); return; }
         Boolean v = verdict.get(key(p.getName().getString()));
-        if (v != null && v) hide(p);
-        else show(p);
+        if (Boolean.FALSE.equals(v)) show(p);
+        else hide(p);
     }
 
     private boolean enabled() {
