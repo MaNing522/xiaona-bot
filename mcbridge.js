@@ -431,8 +431,12 @@ async function onEvent(ev) {
         // 「记录」只记私聊（问题 + 小钠的回答）—— 其余事件一律不投递给 OP；
         // 提问者自己若也是 OP，则不再把记录回发给他（他刚看过回复，纯属重复）
         await relayToOps(`游戏私聊 ${who}: ${ev.text}`, who);
-        const reply = (await askAi({ player: who, text: ev.text, isPrivate: true }))
-            || '小钠暂时答不上来，稍后再试。';
+        // #开头 = 指令：先跑指令系统，命中了就不走 AI
+        const cmd = await runGameCommand({ player: who, text: ev.text, isPrivate: true });
+        const reply = cmd !== null
+            ? (cmd || '（这条指令没有输出）')
+            : ((await askAi({ player: who, text: ev.text, isPrivate: true }))
+                || '小钠暂时答不上来，稍后再试。');
         await relayToOps(`小钠 → ${who}: ${reply}`, who);
         const r = await sendToMc(reply, { player: who, prefix: '[小钠] ' });
         if (!r.ok) logger.error(`[MC桥] 回复给 ${who} 失败:`, r.error);
@@ -450,6 +454,18 @@ async function onEvent(ev) {
     for (const u of pics) {
         const src = imageSourceOf(u);
         if (src) await toBridgeGroupImage(src);
+    }
+
+    // #开头 = 指令：执行后**只回给提问者**（公聊里挂一屏菜单会把服务器刷爆）。
+    // 放在转发之后：指令本身也留在群里，方便留痕。
+    // 只处理真正的玩家发言——小钠注入游戏的消息走 broadcast，不会回到这里，
+    // 所以不存在"自己发的话被当成命令再执行一遍"。
+    const cmd = await runGameCommand({ player: who, text: ev.text, isPrivate: false });
+    if (cmd !== null) {
+        const out = cmd || '（这条指令没有输出）';
+        const cr = await sendToMc(out, { player: who, prefix: '[小钠] ' });
+        if (!cr.ok) logger.error(`[MC桥] 指令回复给 ${who} 失败:`, cr.error);
+        return;
     }
 
     if (!cfg.keyword || !String(ev.text || '').includes(cfg.keyword)) return;
@@ -569,6 +585,20 @@ async function askAi(payload) {
         return await deps.askAi(payload);
     } catch (e) {
         logger.error('[MC桥] AI 调用失败:', e.message);
+        return null;
+    }
+}
+
+/**
+ * 游戏内玩家发的 #命令，交给本机指令系统执行。
+ * @returns {Promise<string|null>} null = 不是指令（调用方继续走 AI）
+ */
+async function runGameCommand(payload) {
+    if (!deps || typeof deps.runGameCommand !== 'function') return null;
+    try {
+        return await deps.runGameCommand(payload);
+    } catch (e) {
+        logger.error('[MC桥] 游戏内指令执行失败:', e.message);
         return null;
     }
 }

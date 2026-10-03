@@ -73,6 +73,20 @@ export function getReceivers() {
   return [...set];
 }
 
+/**
+ * 反查：某个游戏ID 绑在哪个 QQ 上（没有则返回 ''）。
+ * 游戏内发 #命令 时用它还原身份——不还原的话 #我的绑定、主人权限这些全是错的。
+ * 同一个ID 被多人绑定时取先遇到的那个（罕见，且彼此等价）。
+ */
+export function getQqOf(gameId) {
+  const want = String(gameId || '').trim().toLowerCase();
+  if (!want) return '';
+  for (const qq of Object.keys(data.qq)) {
+    if (getGameIdsOf(qq).some((id) => String(id).toLowerCase() === want)) return qq;
+  }
+  return '';
+}
+
 /** 该 QQ 的绑定记录（无则 null），并顺手清掉已经空掉的壳 */
 function entryOf(qq) {
   const key = String(qq);

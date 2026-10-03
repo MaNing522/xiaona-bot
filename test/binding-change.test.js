@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initBindings, startBind, answerCaptcha, unbind, forceUnbind } from '../binding.js';
+import { initBindings, startBind, answerCaptcha, unbind, forceUnbind, getQqOf } from '../binding.js';
 
 let dir;
 /** 回调收到的游戏ID（按调用顺序累积） */
@@ -96,5 +96,34 @@ describe('绑定变化通知（用于刷新游戏内计分板）', () => {
     startBind('10001', 'Steve');
     answerCaptcha('10001', '1111');
     expect(seen).toEqual([]);
+  });
+});
+
+describe('getQqOf（游戏ID → QQ 反查，游戏内指令靠它认身份）', () => {
+  it('已绑定的ID能反查到QQ，且大小写不敏感', () => {
+    startBind('10001', 'Steve');
+    answerCaptcha('10001', '1111');
+    expect(getQqOf('Steve')).toBe('10001');
+    expect(getQqOf('steve')).toBe('10001');
+  });
+
+  it('没绑定的ID / 空输入 → 空串', () => {
+    expect(getQqOf('Nobody')).toBe('');
+    expect(getQqOf('')).toBe('');
+    expect(getQqOf(undefined)).toBe('');
+  });
+
+  it('解绑之后就反查不到了', () => {
+    startBind('10001', 'Steve');
+    answerCaptcha('10001', '1111');
+    expect(getQqOf('Steve')).toBe('10001');
+    unbind('10001', 'Steve');
+    expect(getQqOf('Steve')).toBe('');
+  });
+
+  it('多个QQ绑同名ID时，反查得到其中一个', () => {
+    startBind('10001', 'Alex');
+    answerCaptcha('10001', '1111');
+    expect(['10001', '10002']).toContain(getQqOf('Alex'));
   });
 });

@@ -25,7 +25,7 @@ import { buildHelp } from './help.js';
 import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -187,8 +187,10 @@ let balanceStat = { currencies: {} };
 initBalance();
 
 // 会话 key（群/私聊）：供限速按会话串行、以及记忆/接管等按会话隔离使用
+// __convKey 是给"游戏内合成的伪事件"用的：游戏没有 QQ 群号，得显式指定会话，
+// 否则会全落到 g:0，所有游戏玩家共用一个记忆桶
 const convKey = (event) =>
-    (event.message_type === 'private' ? 'p:' + event.user_id : 'g:' + event.group_id);
+    event.__convKey || (event.message_type === 'private' ? 'p:' + event.user_id : 'g:' + event.group_id);
 
 // 忽略的机器人 QQ（不响应）：内置常见官方机器人 + .env BOT_IGNORE_QQ 追加（逗号分隔）
 const IGNORED_BOTS = new Set([
@@ -415,6 +417,12 @@ function sanitizeOutgoing(text) {
 
 // ---------- 发送 ----------
 async function sendReply(event, message, wantVoice = false, withAt = false) {
+    // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
+    if (Array.isArray(event.__replySink)) {
+        const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
+        if (t) event.__replySink.push(t);
+        return;
+    }
     const target = event.message_type === 'private'
         ? { action: 'send_private_msg', id: event.user_id }
         : { action: 'send_group_msg', id: event.group_id };
@@ -1821,6 +1829,50 @@ function mcTimeStr(d = new Date()) {
         + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/**
+ * 游戏内玩家发的 #命令：跑一遍指令系统，把结果收集起来回注进游戏。
+ *
+ * 只处理**真正的玩家发言**（公聊 CHAT_MESSAGE / 游戏内 /xn 私聊）。
+ * 小钠自己注入游戏的消息走的是 broadcast（服务端系统消息），不会触发 CHAT_MESSAGE、
+ * 也不会回到这里，所以不存在"自己发的话被自己当成命令再执行一遍"。
+ *
+ * 身份：这个游戏ID 绑过 QQ 就用那个 QQ（否则 #我的绑定、主人权限全是错的）；
+ * 没绑过就当一个匿名成员，用 'mc:<玩家名>' 占位。
+ *
+ * @returns {Promise<string|null>} null = 不是指令（交回 AI 流程）；字符串 = 指令的输出
+ */
+async function runGameCommand({ player, text, isPrivate }) {
+    const raw = String(text || '').trim();
+    if (!/^#\S/.test(raw)) return null;   // 只认 # 开头，/ 是游戏自身的命令前缀
+
+    // 绑定要过图形验证码，图片发不进游戏；直接引导去 QQ 群
+    // （否则会给 'mc:<玩家名>' 这种占位身份建一条无意义的绑定记录）
+    if (/^#绑定(?:\s|$)/.test(raw)) {
+        return '绑定要过图形验证码，来 QQ 群发 #绑定 <游戏ID> 吧。';
+    }
+
+    const sink = [];
+    const qq = getQqOf(player);
+    const event = {
+        message_type: isPrivate ? 'private' : 'group',
+        user_id: qq || 'mc:' + player,
+        group_id: 0,                 // 群管类指令在游戏里没有意义，喂 0 让它自然失败
+        // 记忆按键和游戏内 AI 用同一套（'mc:<玩家名>'），
+        // 这样 #记住 存的东西，游戏里聊天时 AI 也读得到
+        __convKey: 'mc:' + player,
+        __replySink: sink,
+    };
+    let handled = true;
+    try {
+        handled = await handleCommand(event, raw);
+    } catch (e) {
+        sink.push('❌ 指令错误：' + e.message);
+    }
+    if (handled === false) return null;   // 认不出的指令：不算已处理，交回 AI 流程
+    // 去掉方括号（输出硬规矩），再拼成一段
+    return sink.join('\n').replace(/\[[^\]]+\]/g, '').trim();
+}
+
 /** 游戏内玩家提问（公聊关键词触发 / /xn 私聊）走本机 AI，返回回复文本 */
 const mcAiBusy = new Set();
 async function askAiFromMc({ player, text, isPrivate }) {
@@ -2397,7 +2449,7 @@ if (WEBUI_ENABLED) {
 // 启动与 Minecraft 服务器侧 mod 的桥：接收游戏聊天/进出服事件，并把回复注入游戏
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
 if (MC_ENABLED) {
-    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers });
+    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, runGameCommand });
 } else {
     logger.info('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
 }
