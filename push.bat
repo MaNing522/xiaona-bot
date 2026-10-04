@@ -23,7 +23,14 @@ if not exist ".env" (
 
 set "GH_TOKEN="
 set "GH_REPO="
-for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+rem Read .env with findstr instead of: for /f ... in (".env")
+rem cmd's for /f reads NOTHING from an LF-only file (the default line ending
+rem of most editors), which shows up as a bogus "GITHUB_TOKEN is empty".
+rem findstr matches both LF and CRLF files. /b anchors to the line start so a
+rem commented-out variable with the same name is not picked up.
+rem NOTE: keep this file ASCII-only. Chinese comments get mangled under the
+rem OEM codepage and break the rem lines.
+for /f "usebackq tokens=1,* delims==" %%a in (`findstr /b "GITHUB_TOKEN= GITHUB_REPO=" ".env"`) do (
   if /i "%%a"=="GITHUB_TOKEN" set "GH_TOKEN=%%b"
   if /i "%%a"=="GITHUB_REPO" set "GH_REPO=%%b"
 )
