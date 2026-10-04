@@ -11,3 +11,4 @@
 !/logger.js
 !/rateLimit.js
 !/idle.js
+!/forward.js

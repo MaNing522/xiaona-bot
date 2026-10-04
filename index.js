@@ -25,6 +25,7 @@ import { buildHelp } from './help.js';
 import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
+import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -638,11 +639,26 @@ async function ownerQueryExtra(name) {
     return lines.join('\n');
 }
 
+// ---------- #聊天记录（伪造合并转发） ----------
+/** 每个群上次发送时间：防止连点刷卡片。内存态，重启即清（不需要持久化） */
+const forwardSentAt = new Map();
+/**
+ * 发卡片前的间隔（防封）：服务器收到请求会立刻响应，发得太密集容易被判定为机器批量操作。
+ * **下限 500ms**，.env 里只能调大、调不小（调小不会更安全）。
+ */
+const FORWARD_DELAY_MS = Math.max(500, numEnv('FORWARD_DELAY_MS', 800));
+/** 同一个群两次发送的最小间隔 */
+const FORWARD_COOLDOWN_MS = numEnv('FORWARD_COOLDOWN_MS', 5000);
+const FORWARD_USAGE = '\n用法：每行一条，「QQ号 或 @某人」+ 空格 + 文案\n'
+    + '例：\n#聊天记录\n12345678 你好呀\n@张三 在吗';
+
 async function handleCommand(event, text) {
     const [rawCmd, ...rest] = text.split(/\s+/);
     // 命令前缀：支持 "#"（推荐）与 "/"（兼容），内部统一按 "/" 处理
     const cmd = rawCmd.startsWith('#') ? '/' + rawCmd.slice(1) : rawCmd;
     const arg = rest.join(' ').trim();
+    // 多行内容用的原件：#聊天记录 靠换行分行，不能被上面的 split(/\s+/) + join 压成一行
+    const argRaw = rawArgAfter(text, rawCmd);
     const uid = String(event.user_id);
     const r = perm.role(uid);
 
@@ -788,6 +804,50 @@ async function handleCommand(event, text) {
             if (!perm.hasPermission(uid)) return sendReply(event, `❌ 无权限（未授权）。发送 #申请授权 等待主人审批`);
             if (!/^https?:\/\//i.test(arg)) return sendReply(event, '❌ 用法：#shot https://example.com');
             return doShot(event, arg);
+
+        // 伪造合并转发：主人/管理员专用，一次只发一张卡片
+        case '/聊天记录': {
+            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以用这个');
+            const gid = event.message_type === 'group' ? String(event.group_id) : '';
+            if (!gid) return sendReply(event, '❌ 合并转发只能发在群里');
+            if (!argRaw) return sendReply(event, `❌ 后面要跟内容${FORWARD_USAGE}`);
+
+            const now = Date.now();
+            const last = forwardSentAt.get(gid) || 0;
+            if (now - last < FORWARD_COOLDOWN_MS) {
+                const left = Math.ceil((FORWARD_COOLDOWN_MS - (now - last)) / 1000);
+                return sendReply(event, `⏳ 刚发过一张，${left} 秒后再试`);
+            }
+
+            // @昵称 得先换成 QQ 号（卡片节点的 uin 必须是号码）。
+            // 只有真出现"非数字的 @"才去拉群成员名单，省一次可能很重的接口调用。
+            const nameMap = /@\D/.test(argRaw) ? (await memberMapOf(gid)).map : new Map();
+            const resolveAt = (t) => (/^\d{5,14}$/.test(t) ? t : nameMap.get(t) || '');
+            const { entries, errors } = parseForwardInput(argRaw, resolveAt);
+            if (!entries.length) {
+                return sendReply(event, `❌ 没解析出可用内容\n${errors.join('\n')}${FORWARD_USAGE}`);
+            }
+
+            // 卡片左边显示的名字：查不到就退回号码，别留空
+            for (const e of entries) e.name = await atDisplayName(gid, e.uin, '');
+
+            // 防封 + 不阻塞事件循环：await 等一会儿再发（别用 sleep 阻塞线程）
+            await new Promise((resolve) => setTimeout(resolve, FORWARD_DELAY_MS));
+            try {
+                await callApi('send_group_forward_msg', {
+                    group_id: Number(gid),
+                    messages: buildForwardNodes(entries),
+                });
+            } catch (e) {
+                logger.error('[合并转发] 发送失败:', e.message);
+                return sendReply(event, `❌ 发送失败：${e.message.slice(0, 80)}\n（也可能是当前 NapCat 不支持合并转发）`);
+            }
+
+            forwardSentAt.set(gid, Date.now());
+            logger.info(`[合并转发] 群 ${gid} 已发出 ${entries.length} 条（操作者 ${uid}）`);
+            const skipped = errors.length ? `\n⚠️ 跳过 ${errors.length} 行：\n${errors.slice(0, 3).join('\n')}` : '';
+            return sendReply(event, `✅ 已发送合并转发（${entries.length} 条）${skipped}`);
+        }
 
         case '/换名':
         case '/换头像':
