@@ -546,13 +546,11 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
     const dialog = event.message_type === 'private' ? '私信' : '群聊';
     const dialogId = event.message_type === 'private' ? uid : String(event.group_id || '');
 
-    // 身份：主人 > 群主/管理员(群角色) > 管理员 > 授权用户 > 成员
+    // 身份：主人 > 群主/群管理员(群角色) > 管理员 > 授权用户 > 普通用户
     const role = perm.role(uid);
-    let ident, favor;
-    if (role === 'owner') { ident = '主人'; favor = 100; }
-    else if (role === 'admin') { ident = '管理员'; favor = 90; }
-    else if (role === 'authorized') { ident = '授权用户'; favor = 75; }
-    else { ident = '成员'; favor = 50; }
+    const tier = perm.TIER_META[role] || perm.TIER_META.guest;
+    let ident = tier.name;
+    let favor = tier.favor;
     if (event.message_type === 'group' && role !== 'owner') {
         if (meta.groupRole === 'owner') { ident = '群主'; favor = 95; }
         else if (meta.groupRole === 'admin') { ident = '管理员'; favor = 80; }
@@ -805,9 +803,9 @@ async function handleCommand(event, text) {
             if (!/^https?:\/\//i.test(arg)) return sendReply(event, '❌ 用法：#shot https://example.com');
             return doShot(event, arg);
 
-        // 伪造合并转发：主人/管理员专用，一次只发一张卡片
+        // 合成转发：授权用户及以上可用（普通用户先 #申请授权），一次只发一张卡片
         case '/聊天记录': {
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以用这个');
+            if (r === 'guest') return sendReply(event, '❌ 未授权。发送 #申请授权 等待主人审批');
             const gid = event.message_type === 'group' ? String(event.group_id) : '';
             if (!gid) return sendReply(event, '❌ 合并转发只能发在群里');
             if (!argRaw) return sendReply(event, `❌ 后面要跟内容${FORWARD_USAGE}`);
@@ -867,7 +865,8 @@ async function handleCommand(event, text) {
             return sendReply(event, '🤝 已人工接管本会话，自动回复已暂停。用 #恢复AI 恢复，或在面板上操作。');
 
         case '/恢复AI':
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 仅主人/管理员可执行该操作。');
+            // 接管是主人专属，恢复自然也归主人（管理员不继承主人专属命令）
+            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行该操作。');
             setTakeoverMode(convKey(event), 'auto', uid);
             return sendReply(event, '✅ 已恢复自动回复。');
 
@@ -1954,9 +1953,12 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     // 没配 AI_API_KEY：游戏内也停用 AI，私聊回一句说明，公聊直接不吭声
     if (!AI_ENABLED) return isPrivate ? '小钠没开 AI，答不了话。' : '';
 
-    // MC 玩家没有 QQ 号，直接按参考项目的元数据格式拼一行，不做 NapCat 成员查询
+    // MC 玩家没有 QQ 号的话默认普通用户；绑过 QQ 的按那个 QQ 的档位（主人/管理员/授权用户），
+    // 否则主人自己在游戏里说话会被当成普通用户，主人特权就失效了
+    const mcQq = getQqOf(player);
+    const mcTier = perm.TIER_META[perm.role(mcQq || '')] || perm.TIER_META.guest;
     const metaLine = `[当前对话:${isPrivate ? '游戏私聊' : '游戏公聊'}|对话ID:${key}]`
-        + `[名称:${player}| QQ:-|身份:成员|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+        + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${mcTier.favor}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ ${player}: ${text} ]`;
 
     recordMessage(key, 'user', text, { name: player, qq: '' });

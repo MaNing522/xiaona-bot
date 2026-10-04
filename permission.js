@@ -1,6 +1,7 @@
 // ============================================================
 // permission.js - 授权 / 权限系统（持久化到 data/）
-// 角色等级：owner > admin > authorized > guest
+// 角色档位（从高到低）：owner(主人) > admin(管理员) > authorized(授权用户) > guest(普通用户)
+// 高档自动包含低档的全部权限；命令与档位的对应关系见 help.js 的 HELP_CMDS/TIERS。
 // 授权由主人管理：普通用户提交申请 -> 主人同意/拒绝
 // ============================================================
 import path from 'path';
@@ -46,6 +47,17 @@ export function role(userId) {
   if (authorized.includes(id)) return 'authorized';
   return 'guest';
 }
+
+/**
+ * 四档的显示名与好感度（从高到低，供元数据/日志统一引用，避免各处各写一套）：
+ *   owner 主人 > admin 管理员 > authorized 授权用户 > guest 普通用户
+ */
+export const TIER_META = {
+  owner: { name: '主人', favor: 100 },
+  admin: { name: '管理员', favor: 90 },
+  authorized: { name: '授权用户', favor: 75 },
+  guest: { name: '普通用户', favor: 50 },
+};
 
 /** 是否有使用受限指令的权限 */
 export function hasPermission(userId) {
