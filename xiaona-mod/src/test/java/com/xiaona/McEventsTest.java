@@ -140,6 +140,38 @@ public class McEventsTest {
                 "正文应是聊天默认的白色");
     }
 
+    /** 开头连续两个标签：两个都染色，正文仍是白色 */
+    @Test
+    public void testConsecutiveTagsAreColored() {
+        TextColor gold = McEvents.parseColor("gold");
+        Text t = McEvents.render("[QQ] [123456] Steve: 你好", gold);
+        assertEquals("[QQ] [123456] Steve: 你好", t.getString(), "染色不能改变可见文本");
+        assertEquals(gold, t.getStyle().getColor(), "第一个标签 [QQ] 应是金色");
+
+        // 段结构：根 = "[QQ]"，兄弟依次为 " [123456]" 与 " Steve: 你好"
+        assertEquals(2, t.getSiblings().size());
+        Text tag2 = t.getSiblings().get(0);
+        assertEquals(" [123456]", tag2.getString());
+        assertEquals(gold, tag2.getStyle().getColor(), "第二个标签 [123456] 也应同色");
+
+        Text body = t.getSiblings().get(1);
+        assertEquals(" Steve: 你好", body.getString());
+        assertEquals(TextColor.fromFormatting(Formatting.WHITE), effectiveColor(t, body),
+                "正文仍应是白色，不能跟着标签变金");
+        assertNotEquals(gold, effectiveColor(t, body));
+    }
+
+    /** 单个标签时行为不变：不产生多余兄弟段 */
+    @Test
+    public void testSingleTagStillOneBodySibling() {
+        TextColor gold = McEvents.parseColor("gold");
+        Text t = McEvents.render("[QQ] Steve: 你好", gold);
+        assertEquals(1, t.getSiblings().size(), "单标签仍应只有 1 段正文");
+        assertEquals(gold, t.getStyle().getColor());
+        assertEquals(TextColor.fromFormatting(Formatting.WHITE),
+                effectiveColor(t, t.getSiblings().get(0)));
+    }
+
     /** 不染色 / 没有标签 / 超长方括号：一律保持纯文本，不拆段 */
     @Test
     public void testRenderKeepsPlainWhenNoTag() {

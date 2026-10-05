@@ -1407,7 +1407,7 @@ async function onNotice(event) {
         // 桥接群的进出也同步进游戏；同样只投给「已绑定游戏ID」的账号。
         // 没人绑定时不提示（进群退群是自然发生的，不是有人要用功能）
         if (MC_BRIDGE_QQ_TO_MC && MC_BRIDGE_GROUP && String(gid) === MC_BRIDGE_GROUP) {
-            sendToBoundPlayers(`${name} ${kind}`);
+            sendToBoundPlayers(`${name} ${kind}`, uid);
         }
     } catch (e) {
         logger.error('[进群退群提示] 发送失败:', e.message);
@@ -2110,15 +2110,18 @@ async function buildForwardText(segments, groupId, depth = 0) {
 
 /**
  * 只投递给「已绑定游戏ID」的账号：一次请求带上全部目标，避免发 N 次请求。
+ * qq 非空时在其后附加一个独立的 [QQ号] 标签，进游戏就能看到是谁发的
+ * （[QQ] 与 [QQ号] 是两个标签，mod 会把开头的连续标签一并染色）。
  * 返回是否有接收者（false 表示一个都没绑定）；投递结果异步处理，失败只记日志。
  */
-function sendToBoundPlayers(text) {
+function sendToBoundPlayers(text, qq) {
     const receivers = getReceivers();
     if (!receivers.length) {
         logger.info('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
         return false;
     }
-    sendToMc(text, { players: receivers, prefix: '[QQ] ' })
+    const prefix = qq ? `[QQ] [${qq}] ` : '[QQ] ';
+    sendToMc(text, { players: receivers, prefix })
         .then((r) => {
             if (!r) return;
             if (!r.ok) {
@@ -2147,7 +2150,7 @@ function forwardGroupToMc(event, who) {
         .then(() => buildForwardText(event.message, event.group_id))
         .then((text) => {
             if (!text) return;
-            if (!sendToBoundPlayers(`${who}: ${text}`)) hintNobodyBound();
+            if (!sendToBoundPlayers(`${who}: ${text}`, event.user_id)) hintNobodyBound();
         })
         .catch((e) => logger.error('[MC桥] 转发内容渲染失败:', e.message));
 }

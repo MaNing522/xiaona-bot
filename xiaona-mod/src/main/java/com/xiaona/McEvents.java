@@ -234,8 +234,10 @@ public class McEvents {
     private static final int MAX_TAG_LEN = 24;
 
     /**
-     * 把注入文本渲染成 {@link Text}：**只把开头的 [标签]**（如 [QQ]、[MC]）染成 tagColor，
+     * 把注入文本渲染成 {@link Text}：**把开头连续的 [标签]**（如 [QQ] [123456]）都染成 tagColor，
      * 其余部分保持默认颜色。tagColor 为 null、或开头不是短标签时按纯文本处理。
+     *
+     * 标签之间允许有空格，空格连同标签一起染色（视觉上看不出）；正文必须是最后一段。
      *
      * 注意：{@code append} 的子节点在渲染时会**继承父节点样式**，所以正文必须显式写死
      * 默认色（白），否则会跟着标签一起变成金色。
@@ -243,16 +245,47 @@ public class McEvents {
     public static Text render(String text, TextColor tagColor) {
         if (text == null || text.isEmpty()) return Text.literal("");
         if (tagColor == null || text.charAt(0) != '[') return Text.literal(text);
-        int close = text.indexOf(']');
-        if (close < 2 || close > MAX_TAG_LEN) return Text.literal(text);
 
-        MutableText out = Text.literal(text.substring(0, close + 1));
-        out.setStyle(Style.EMPTY.withColor(tagColor));
-        String rest = text.substring(close + 1);
+        // 依次吃下开头的连续标签（允许标签之间有空格）
+        List<int[]> tags = new ArrayList<>();
+        int pos = 0;
+        while (true) {
+            int close = tagEnd(text, pos);
+            if (close < 0) break;
+            tags.add(new int[]{pos, close});
+            pos = close + 1;
+            int n = pos;
+            while (n < text.length() && text.charAt(n) == ' ') n++;
+            if (n < text.length() && tagEnd(text, n) >= 0) pos = n;
+            else break;
+        }
+        if (tags.isEmpty()) return Text.literal(text);
+
+        // 第一个标签当根节点，其余标签作为兄弟节点追加；每段都显式染色，避免继承串色
+        MutableText out = null;
+        int prev = 0;
+        for (int[] t : tags) {
+            MutableText seg = Text.literal(text.substring(prev, t[1] + 1))
+                    .setStyle(Style.EMPTY.withColor(tagColor));
+            if (out == null) out = seg;
+            else out.append(seg);
+            prev = t[1] + 1;
+        }
+        String rest = text.substring(prev);
         if (!rest.isEmpty()) {
             out.append(Text.literal(rest).setStyle(Style.EMPTY.withColor(BODY_COLOR)));
         }
         return out;
+    }
+
+    /** 从 start 起是否是一个可染色的 [标签]；是则返回 ']' 的下标，否则 -1 */
+    private static int tagEnd(String text, int start) {
+        if (start < 0 || start >= text.length() || text.charAt(start) != '[') return -1;
+        int close = text.indexOf(']', start + 1);
+        if (close < 0) return -1;
+        if (close < start + 2) return -1;          // "[]" 不算标签
+        if (close - start > MAX_TAG_LEN) return -1; // 超长方括号不当标签
+        return close;
     }
 
     /** 正文颜色：原版聊天默认就是白色，写死它才能断掉从标签继承下来的颜色 */
