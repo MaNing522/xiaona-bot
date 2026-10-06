@@ -451,6 +451,25 @@ export function getPlayerHistory(name) {
 
 async function onEvent(ev) {
     const who = ev.player || '?';
+
+    // 白名单模式：服务端在玩家进服时顺着这条事件流询问"这名玩家在不在绑定名单里"
+    // （mod 缓存没命中才会问，所以这里回的必须是实时结果），查完立刻 HTTP 回一条。
+    if (ev.type === 'whitelist_query') {
+        const ids = (deps && typeof deps.getBoundIds === 'function') ? (deps.getBoundIds() || []) : [];
+        const target = String(ev.player || '').toLowerCase();
+        const bound = ids.some((id) => String(id).toLowerCase() === target);
+        try {
+            await api('/bridge/whitelist_response', {
+                method: 'POST',
+                body: { id: String(ev.text || ''), player: String(ev.player || ''), bound },
+                timeoutMs: 5000,
+            });
+        } catch (e) {
+            logger.warn(`[MC桥] 回答白名单询问失败（${who}）：${e.message}`);
+        }
+        return;
+    }
+
     if (ev.type === 'join' || ev.type === 'leave') {
         if (ev.player) recordPresence(ev.type, ev.player, ev.ip);
         // 端口复用下 MC 只看到 127.0.0.1，mod 已用端口映射还原出真实客户端 IP，这里只记到控制台

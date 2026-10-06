@@ -54,6 +54,7 @@ public class XiaonaMod implements ModInitializer {
             boolean whitelistMode = config.whitelist != null && config.whitelist.enabled;
             bindBoard = whitelistMode ? null : new BindBoard(config.board);
             whitelistGate = new WhitelistGate(config.whitelist);
+            whitelistGate.setEvents(events);   // 进服时顺着事件流向本机实时询问绑定状态
             bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate);
             preparePortRelocation();
         } catch (Throwable e) {

@@ -184,6 +184,29 @@ public class BridgeServerTest {
         }
     }
 
+    /** 白名单模式：本机对"进服询问"的回答要能落到闸门（并顺手校正缓存） */
+    @Test
+    public void testWhitelistQueryResponse() throws Exception {
+        Config c = newConfig();
+        WhitelistGate gate = new WhitelistGate(c.whitelist);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, gate);
+        assertTrue(srv.start("127.0.0.1", 0));
+        try {
+            String[] r = postJson(srv.boundPort(), "/bridge/whitelist_response",
+                    "{\"id\":\"req1\",\"player\":\"Steve\",\"bound\":true}");
+            assertEquals("200", r[0], r[1]);
+            assertTrue(r[1].contains("\"bound\":true"), r[1]);
+            assertEquals(1, gate.size(), "回答应同时把缓存校正为「已绑定」");
+
+            String[] r2 = postJson(srv.boundPort(), "/bridge/whitelist_response",
+                    "{\"id\":\"req2\",\"player\":\"Steve\",\"bound\":false}");
+            assertEquals("200", r2[0], r2[1]);
+            assertEquals(0, gate.size(), "回答「未绑定」应把缓存清掉");
+        } finally {
+            srv.stop();
+        }
+    }
+
     @Test
     public void testEventsAreDeliveredOverSse() throws Exception {
         Config c = newConfig();

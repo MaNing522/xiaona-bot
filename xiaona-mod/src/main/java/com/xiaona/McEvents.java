@@ -101,6 +101,8 @@ public class McEvents {
     public void leave(String player, boolean op) { push("leave", player, "", op); }
     public void death(String player, String text) { push("death", player, text, false); }
     public void advancement(String player, String text) { push("advancement", player, text, false); }
+    /** 白名单模式：请本机回答"这名玩家在不在 QQ 绑定名单里"（text 里带请求 id） */
+    public void whitelistQuery(String player, String reqId) { push("whitelist_query", player, reqId, false); }
 
     private void push(String type, String player, String text, boolean op) { push(type, player, text, op, ""); }
 
