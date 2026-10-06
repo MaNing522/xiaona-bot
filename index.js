@@ -23,7 +23,7 @@ import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryCon
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
@@ -142,11 +142,15 @@ initMemory(SAVE_DIR, {
 initBindings(SAVE_DIR, {
   maxPerQq: Number(process.env.BIND_MAX_PER_QQ || 3),
   ttlSec: Number(process.env.BIND_CAPTCHA_TTL || 300),
-  // 绑定关系一变就通知服务器刷新计分板：人可能正挂在游戏里，
-  // 绑好了要马上把提示板撤掉，解绑了要重新挂上（否则得重进服才生效）
+  // 绑定关系一变就通知服务器：人可能正挂在游戏里，
+  // 绑好了要马上把计分板撤掉，解绑了要重新挂上（否则得重进服才生效）；
+  // 同时把该ID 的最新绑定状态推给白名单模式（在名单里才放行）。
+  // 注意：一个游戏ID 可能被多个QQ 绑定，所以"是否仍绑定"按变更后的全量名单算。
   onChange: (ids) => {
+    const all = new Set(getReceivers().map((x) => String(x).toLowerCase()));
     for (const id of ids) {
       bindCheck(id).catch((e) => logger.warn('[MC桥] 刷新计分板失败:', e.message));
+      pushWhitelist(id, all.has(String(id).toLowerCase())).catch(() => {});
     }
   },
 });
