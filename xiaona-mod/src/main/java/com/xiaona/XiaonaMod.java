@@ -56,8 +56,6 @@ public class XiaonaMod implements ModInitializer {
             whitelistGate = new WhitelistGate(config.whitelist);
             bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate);
             preparePortRelocation();
-            // 让 Simple Voice Chat 的 UDP 语音也走那个唯一对外开放的端口（TCP/UDP 可同号共存）
-            VoiceChatCompat.apply(config.http.sharePort);
         } catch (Throwable e) {
             BotState.error("初始化失败: " + e.getMessage());
             throw new RuntimeException("小钠桥 mod 初始化失败", e);
