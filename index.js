@@ -443,10 +443,12 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
         // 发送途中若已被标记禁言，直接放弃本条
         if (gidKey && mutedGroups.has(gidKey)) return;
         try {
-            await callApi(target.action, {
+            const res = await callApi(target.action, {
                 [event.message_type === 'private' ? 'user_id' : 'group_id']: target.id,
                 message: segments,
             });
+            // 记下这条是我自己发的，供 #撤回 定位（只撤自己的，不碰别人的消息）
+            recordBotMsg(convKey(event), res && res.message_id);
             // 发送成功说明未被禁言，解除标记
             if (gidKey) mutedGroups.delete(gidKey);
         } catch (e) {
@@ -499,6 +501,80 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
         if (!String(t ?? '').trim()) continue;
         await doSend(withAt ? [segAt(event.user_id), segText(t)] : [segText(t)]);
     }
+}
+
+// ---------- #撤回：主人/管理员撤回机器人自己发的消息 ----------
+/** convKey -> [{id, ts}]：只记最近若干条自己发出去的消息，供 #撤回 定位 */
+const botSentMsgs = new Map();
+const BOT_SENT_MAX = 30;                 // 每个会话最多记这么多条
+const BOT_SENT_TTL = 10 * 60 * 1000;     // 超过这么久的不再考虑（QQ 侧多半也撤不动了）
+
+function recordBotMsg(key, id) {
+    if (!key || id === undefined || id === null || id === '') return;
+    const now = Date.now();
+    const arr = (botSentMsgs.get(key) || []).filter((x) => now - x.ts < BOT_SENT_TTL);
+    arr.push({ id, ts: now });
+    while (arr.length > BOT_SENT_MAX) arr.shift();
+    botSentMsgs.set(key, arr);
+}
+
+/**
+ * #撤回：把机器人自己发过的消息撤回来（主人/管理员可用）。
+ *   （引用我发的消息）#撤回            撤回被引用的那条
+ *   （引用我发的消息）#撤回 <条数>     从被引用的那条起，连同它前面我发的共 <条数> 条
+ *   不引用时 #撤回 [条数]              直接撤回我最近发的若干条（默认 1）
+ */
+async function handleRecall(event, arg, roleName) {
+    if (roleName !== 'owner' && roleName !== 'admin') {
+        return sendReply(event, '❌ 无权限（需主人/管理员）。');
+    }
+    const key = convKey(event);
+    const list = botSentMsgs.get(key) || [];
+    const segs = Array.isArray(event.message) ? event.message : [];
+    const replySeg = segs.find((s) => s && s.type === 'reply');
+    const quotedId = replySeg && replySeg.data
+        ? String(replySeg.data.id || replySeg.data.message_id || '').trim() : '';
+    const nM = String(arg || '').match(/\d+/);
+    const n = nM ? Math.min(Math.max(Number(nM[0]), 1), 10) : 1;   // 条数：默认 1，一次最多 10
+
+    let targets;
+    if (quotedId) {
+        const idx = list.findIndex((x) => String(x.id) === quotedId);
+        if (idx >= 0) {
+            targets = list.slice(Math.max(0, idx - n + 1), idx + 1);   // 到被引用那条为止的 n 条
+        } else {
+            // 不在本次记录里（可能是重启前发的）：查一次，确认确实是我自己发的才撤
+            let mine = false;
+            try {
+                const m = await callApi('get_msg', { message_id: /^\d+$/.test(quotedId) ? Number(quotedId) : quotedId });
+                mine = String((m && m.sender && m.sender.user_id) || '') === String(event.self_id || botId);
+            } catch { /* 查不到就按"不是我发的"处理 */ }
+            if (!mine) return sendReply(event, '❌ 只能撤回我自己发的消息。');
+            targets = [{ id: quotedId }];
+        }
+    } else {
+        if (!list.length) return sendReply(event, '❌ 最近没有我发的消息可撤回。');
+        targets = list.slice(-n);
+    }
+    if (!targets.length) return sendReply(event, '❌ 没有可撤回的消息。');
+
+    const deleted = new Set();
+    let failMsg = '';
+    for (const t of targets) {
+        const id = String(t.id);
+        try {
+            await callApi('delete_msg', { message_id: /^\d+$/.test(id) ? Number(id) : id });
+            deleted.add(id);
+        } catch (e) {
+            if (!failMsg) failMsg = String((e && e.message) || e).slice(0, 80);
+        }
+    }
+    // 撤掉的从记录里清掉，避免下次又去撤同一条
+    if (deleted.size) botSentMsgs.set(key, (botSentMsgs.get(key) || []).filter((x) => !deleted.has(String(x.id))));
+
+    if (!deleted.size) return sendReply(event, `❌ 撤回失败：${failMsg || '未知原因'}\n（QQ 只允许撤回一定时限内的消息）`);
+    if (failMsg) return sendReply(event, `⚠️ 已撤回 ${deleted.size} 条，${targets.length - deleted.size} 条失败：${failMsg}`);
+    return sendReply(event, `✅ 已撤回 ${deleted.size} 条消息。`);
 }
 
 // ---------- 会话元数据（按参考项目格式注入 prompt） ----------
@@ -683,6 +759,11 @@ async function handleCommand(event, text) {
         case '/解除全体禁言':
         case '/群公告':
             return handleGroupAdmin(event, cmd, arg, r);
+
+        // 撤回我自己发的消息（引用那条 + #撤回，或 #撤回 <条数>）
+        case '/撤回':
+        case '/撤销':
+            return handleRecall(event, arg, r);
 
         case '/解绑': {
             const r = unbindGame(uid, arg);
