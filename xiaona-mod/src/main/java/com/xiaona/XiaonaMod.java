@@ -32,6 +32,7 @@ public class XiaonaMod implements ModInitializer {
     private McEvents events;
     private BridgeServer bridge;
     private BindBoard bindBoard;
+    private WhitelistGate whitelistGate;
     private PortMux portMux;
     /** 提前占住的对外端口；只有拿到了才允许把 MC 挪到内部端口 */
     private java.net.ServerSocket reservedShare = null;
@@ -49,8 +50,11 @@ public class XiaonaMod implements ModInitializer {
             toggles = new RuntimeToggles(config);
             events = new McEvents(config.bridge.queueSize);
             events.setTagColor(config.bridge.prefixColor);
-            bindBoard = new BindBoard(config.board);
-            bridge = new BridgeServer(config, events, toggles, bindBoard);
+            // 白名单模式：弃用计分板（改用服务器白名单把门），所以不再创建计分板
+            boolean whitelistMode = config.whitelist != null && config.whitelist.enabled;
+            bindBoard = whitelistMode ? null : new BindBoard(config.board);
+            whitelistGate = new WhitelistGate(config.whitelist);
+            bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate);
             preparePortRelocation();
         } catch (Throwable e) {
             BotState.error("初始化失败: " + e.getMessage());
@@ -61,7 +65,11 @@ public class XiaonaMod implements ModInitializer {
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             events.setServer(server);
-            bindBoard.setServer(server);
+            if (bindBoard != null) bindBoard.setServer(server);
+            if (whitelistGate != null) {
+                whitelistGate.setServer(server);
+                whitelistGate.onServerStarted();
+            }
             startListen(server);
         });
 

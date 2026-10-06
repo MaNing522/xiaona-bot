@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   GET  /bridge/players  在线玩家 + 是否 OP
  *   POST /bridge/player   取 Plan 面板里某个玩家的数据（靠本机去取，面板端口不对外开放）
  *   POST /bridge/bindcheck 本机回"某个玩家是否已绑定"（决定这名玩家显不显示计分板）
+ *   POST /bridge/whitelist 本机推"谁绑定了游戏ID"（白名单模式：单人变更 / 整张名单）
  *   GET  /bridge/status   版本、玩家数、开关状态
  *
  * 注意：这里**不提供**任意服务器命令执行接口 —— 桥只能往聊天里发文本。
@@ -80,20 +81,24 @@ public class BridgeServer {
     private final McEvents events;
     private final RuntimeToggles toggles;
     private final BridgeAuth auth;
-    /** 未绑定玩家的侧边栏计分板；绑定判定由本机逐个玩家告知 */
+    /** 未绑定玩家的侧边栏计分板；绑定判定由本机逐个玩家告知（白名单模式下为 null） */
     private final BindBoard board;
+    /** 白名单模式的判定闸门：接收本机推来的绑定名单 */
+    private final WhitelistGate whitelistGate;
 
     private volatile HttpServer server;
     private volatile int sharePort = 0;      // 复用端口（0 = 未启用复用）
     private final AtomicInteger windowCount = new AtomicInteger();
     private volatile long windowStart = System.currentTimeMillis();
 
-    public BridgeServer(Config cfg, McEvents events, RuntimeToggles toggles, BindBoard board) {
+    public BridgeServer(Config cfg, McEvents events, RuntimeToggles toggles, BindBoard board,
+                        WhitelistGate whitelistGate) {
         this.bcfg = cfg.bridge;
         this.pcfg = cfg.plan == null ? new Config.Plan() : cfg.plan;
         this.events = events;
         this.toggles = toggles;
         this.board = board;
+        this.whitelistGate = whitelistGate;
         this.auth = new BridgeAuth(cfg.bridge);
     }
 
@@ -150,6 +155,7 @@ public class BridgeServer {
         hs.createContext("/bridge/players", ex -> route(ex, this::handlePlayers));
         hs.createContext("/bridge/player", ex -> route(ex, this::handlePlanPlayer));
         hs.createContext("/bridge/bindcheck", ex -> route(ex, this::handleBindCheck));
+        hs.createContext("/bridge/whitelist", ex -> route(ex, this::handleWhitelist));
         hs.createContext("/bridge/status", ex -> route(ex, this::handleStatus));
         hs.createContext("/", ex -> route(ex, this::handleNotFound));
         hs.setExecutor(new ThreadPoolExecutor(4, 32, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(),
@@ -257,6 +263,48 @@ public class BridgeServer {
         m.put("ok", true);
         m.put("player", player);
         m.put("bound", bound);
+        sendJson(ex, 200, m);
+    }
+
+    /**
+     * 本机推来"谁绑定了游戏ID"，供白名单模式使用。两种形态：
+     *   {"player":"Steve","bound":true}   单个玩家的绑定状态变化（绑定/解绑时推）
+     *   {"players":["Steve","Alex"]}      整张绑定名单（本机连接上桥时推，全量替换）
+     *
+     * 白名单模式没开时也照收（只更新缓存，不判定、不动白名单），这样开关切换后立刻就有数据。
+     */
+    private void handleWhitelist(HttpExchange ex, String body) throws IOException {
+        JsonObject o;
+        try {
+            o = JsonParser.parseString(body == null || body.isBlank() ? "{}" : body).getAsJsonObject();
+        } catch (Exception e) {
+            sendJson(ex, 400, Map.of("ok", false, "error", "请求体不是合法 JSON"));
+            return;
+        }
+        if (whitelistGate == null) {
+            sendJson(ex, 503, Map.of("ok", false, "error", "白名单闸门未就绪"));
+            return;
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (o.has("players") && o.get("players").isJsonArray()) {
+            List<String> names = strList(o, "players", 1000);
+            whitelistGate.setAll(names);
+            m.put("ok", true);
+            m.put("players", names.size());
+        } else {
+            String player = opt(o, "player").trim();
+            if (player.isBlank()) {
+                sendJson(ex, 400, Map.of("ok", false, "error", "需要 player，或 players 数组"));
+                return;
+            }
+            boolean bound = o.has("bound") && !o.get("bound").isJsonNull() && o.get("bound").getAsBoolean();
+            whitelistGate.setBound(player, bound);
+            m.put("ok", true);
+            m.put("player", player);
+            m.put("bound", bound);
+        }
+        m.put("mode", whitelistGate.enabled());
+        m.put("count", whitelistGate.size());
         sendJson(ex, 200, m);
     }
 

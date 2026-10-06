@@ -29,6 +29,7 @@ let needResync = false;
 let playersCache = { at: 0, list: [] };
 let warnedOldMod = false;
 let warnedNoBindCheck = false;
+let warnedNoWhitelist = false;
 /** 玩家 → { start, count, warned }：游戏公聊 → QQ 的限速窗口 */
 const chatRate = new Map();
 /** 限速状态表上限，防止长期运行时随人数一路涨 */
@@ -204,6 +205,46 @@ export async function bindCheck(name) {
     }
 }
 
+/**
+ * 把"谁绑定了游戏ID"推给服务端，供白名单模式判定（见 mod 的 /bridge/whitelist）。
+ *
+ * 服务端是"桥的宿主"、本机是客户端 —— 服务端没法反向问本机，所以由本机主动推：
+ * 单人变更（绑定/解绑时）用 {@link pushWhitelist}，连上桥时用 {@link pushWhitelistAll} 推整张名单。
+ * 旧版 mod 不认识该接口会回 404，只在第一次提醒升级。
+ */
+export async function pushWhitelist(name, bound) {
+    if (!cfg || !cfg.base || !name) return;
+    try {
+        await api('/bridge/whitelist', {
+            method: 'POST',
+            body: { player: String(name), bound: !!bound },
+            timeoutMs: 8000,
+        });
+    } catch (e) {
+        warnNoWhitelist(e);
+    }
+}
+
+/** 推整张绑定名单（连接上桥时调用；服务端据此全量替换缓存） */
+export async function pushWhitelistAll() {
+    if (!cfg || !cfg.base) return;
+    const ids = (deps && typeof deps.getBoundIds === 'function') ? (deps.getBoundIds() || []) : [];
+    try {
+        await api('/bridge/whitelist', { method: 'POST', body: { players: ids.map(String) }, timeoutMs: 8000 });
+    } catch (e) {
+        warnNoWhitelist(e);
+    }
+}
+
+function warnNoWhitelist(e) {
+    if (warnedNoWhitelist) return;
+    logger.error(
+        `[MC桥] 推送绑定名单失败：${e.message}。`
+        + `白名单模式需要 mod ≥ 2.5.6 的 /bridge/whitelist 接口，若为 404 请升级 mod。`,
+    );
+    warnedNoWhitelist = true;
+}
+
 /** 在线玩家（带 10 秒缓存） */
 export async function getPlayers(force = false) {
     if (!force && Date.now() - playersCache.at < 10000) return playersCache.list;
@@ -252,7 +293,8 @@ function handleSseBlock(block) {
             lastEventId = 0;
             needResync = true;   // 由 streamLoop 断开本条连接后重连（不带光标）
         }
-        // 连上不再推送整张绑定表：计分板改由"玩家上线时逐人查"驱动（见 bindCheck）
+        // 连上后推整张绑定名单：白名单模式靠它把门（计分板仍由玩家上线时逐人回 bindCheck 驱动）
+        pushWhitelistAll().catch(() => {});
         return;
     }
     if (event === 'gap') {

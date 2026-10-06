@@ -3,7 +3,7 @@
   "minVersion": "0.8",
   "package": "com.xiaona.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["ServerNetworkIoMixin", "ClientConnectionMixin"],
+  "mixins": ["ServerNetworkIoMixin", "ClientConnectionMixin", "PlayerManagerMixin"],
   "injectors": {
     "defaultRequire": 1
   }

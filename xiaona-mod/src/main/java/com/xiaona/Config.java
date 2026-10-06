@@ -21,6 +21,7 @@ public class Config {
     public Http http = new Http();
     public Plan plan = new Plan();
     public Board board = new Board();
+    public Whitelist whitelist = new Whitelist();
 
     /**
      * 未绑定玩家的侧边栏计分板：进服时若还没绑定游戏ID，就给一条"进QQ群发 #绑定"的指引，
@@ -29,6 +30,21 @@ public class Config {
     public static class Board {
         public boolean enabled = true;
         public String title = "小钠 · QQ 绑定";
+    }
+
+    /**
+     * 白名单模式：开启后**弃用计分板**，改用服务器白名单把门。
+     *
+     * 已在原版白名单里（或 OP）的玩家照常进；其余玩家由**本机机器人推来的绑定名单**决定：
+     * 在名单里 → 补进原版白名单并放行；不在 → 按 kickMessage 踢出。
+     * 机器人侧在"有人绑定/解绑"时和"连接上桥时"都会把名单推给服务端，见 /bridge/whitelist。
+     */
+    public static class Whitelist {
+        public boolean enabled = false;
+        /** 踢出提示里展示的 QQ 群号（{group} 会被替换成它） */
+        public String group = "714965699";
+        /** 踢出时显示的文案；{group} 会被替换成群号 */
+        public String kickMessage = "你还未绑定游戏ID。\n请加入 QQ 群 {group}，发送 #绑定 <游戏ID> 完成绑定后再进服。";
     }
 
     /** MC 服务器侧的桥：向本机机器人推送游戏事件、接收它投递的文本 */
@@ -140,5 +156,12 @@ public class Config {
         if (board == null) board = new Board();
         if (board.title == null || board.title.isBlank()) board.title = "小钠 · QQ 绑定";
         board.title = board.title.trim();
+
+        if (whitelist == null) whitelist = new Whitelist();
+        if (whitelist.group == null) whitelist.group = "";
+        whitelist.group = whitelist.group.trim();
+        if (whitelist.kickMessage == null || whitelist.kickMessage.isBlank()) {
+            whitelist.kickMessage = "你还未绑定游戏ID。\n请加入 QQ 群 {group}，发送 #绑定 <游戏ID> 完成绑定后再进服。";
+        }
     }
 }
