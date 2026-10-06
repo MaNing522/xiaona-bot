@@ -1492,7 +1492,7 @@ async function onNotice(event) {
         // 桥接群的进出也同步进游戏；同样只投给「已绑定游戏ID」的账号。
         // 没人绑定时不提示（进群退群是自然发生的，不是有人要用功能）
         if (MC_BRIDGE_QQ_TO_MC && MC_BRIDGE_GROUP && String(gid) === MC_BRIDGE_GROUP) {
-            sendToBoundPlayers(`${name} ${kind}`, uid);
+            sendToBoundPlayers(` ${kind}`, uid, name);
         }
     } catch (e) {
         logger.error('[进群退群提示] 发送失败:', e.message);
@@ -2195,17 +2195,21 @@ async function buildForwardText(segments, groupId, depth = 0) {
 
 /**
  * 只投递给「已绑定游戏ID」的账号：一次请求带上全部目标，避免发 N 次请求。
- * qq 非空时在其后附加一个独立的 [QQ号] 标签，进游戏就能看到是谁发的
- * （[QQ] 与 [QQ号] 是两个标签，mod 会把开头的连续标签一并染色）。
+ * 开头的标签是 [QQ][昵称][QQ号]，mod 会把开头的连续标签一并染色。
+ * text 需自带与标签之间的分隔（聊天是「：」，进出群是空格）。
  * 返回是否有接收者（false 表示一个都没绑定）；投递结果异步处理，失败只记日志。
  */
-function sendToBoundPlayers(text, qq) {
+function sendToBoundPlayers(text, qq, name) {
     const receivers = getReceivers();
     if (!receivers.length) {
         logger.info('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
         return false;
     }
-    const prefix = qq ? `[QQ] [${qq}] ` : '[QQ] ';
+    // 昵称里的方括号会破坏标签解析，去掉
+    const safeName = name ? String(name).replace(/[[\]]/g, '') : '';
+    let prefix = '[QQ]';
+    if (safeName) prefix += `[${safeName}]`;
+    if (qq) prefix += `[${qq}]`;
     sendToMc(text, { players: receivers, prefix })
         .then((r) => {
             if (!r) return;
@@ -2235,7 +2239,7 @@ function forwardGroupToMc(event, who) {
         .then(() => buildForwardText(event.message, event.group_id))
         .then((text) => {
             if (!text) return;
-            if (!sendToBoundPlayers(`${who}: ${text}`, event.user_id)) hintNobodyBound();
+            if (!sendToBoundPlayers(`：${text}`, event.user_id, who)) hintNobodyBound();
         })
         .catch((e) => logger.error('[MC桥] 转发内容渲染失败:', e.message));
 }
