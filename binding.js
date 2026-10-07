@@ -163,7 +163,7 @@ export function answerCaptcha(qq, text) {
     handled: true,
     ok: true,
     msg: `✅ 绑定成功：${p.gameId}（${entry.ids.length}/${maxPerQq}）\n`
-      + `之后群里有人发言，就会以 [QQ] 前缀转发进游戏给你这个账号。`,
+      + `之后群里有人发言，游戏里会显示成 [QQ][昵称][QQ号]：内容 转发给你这个账号。`,
   };
 }
 
