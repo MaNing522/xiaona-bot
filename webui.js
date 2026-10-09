@@ -27,6 +27,9 @@ const WEB_DIR = path.join(__dirname, 'web', 'index.html');
 
 const MAX_LOG = 300;
 
+// WebUI 实际监听的端口（配置端口被占用时会自动顺延，这里记录真实值供状态页展示）
+let webuiPort = 0;
+
 // ---------- 记住上次成功登录的账号（面板与启动脚本共用同一个文件） ----------
 function readSavedQq() {
   const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
@@ -460,6 +463,7 @@ async function route(req, res, url) {
       serviceUp: true,
       model: process.env.AI_MODEL || 'deepseek-chat',
       wsUrl: process.env.NAPCAT_WS || 'ws://127.0.0.1:3001',
+      webuiPort,
       botConnected: bot.connected,
       botError: bot.lastError,
       owner: perm.getOwner(),
@@ -551,16 +555,38 @@ export async function startWebUI() {
     route(req, res, url).catch((e) => sendJSON(res, 500, { error: e.message }));
   });
 
-  await new Promise((resolve, reject) => {
-    server.listen(port, host, resolve);
-    server.on('error', reject);
-  });
+  // 端口被占用时自动顺延，避免整个面板起不来：
+  // 端口 80 常被 Steam++(Watt Toolkit)、IIS、nginx 等占用，硬绑会 EADDRINUSE。
+  // 依次尝试「配置端口 → 8080 → 8888 → 由系统分配(0)」，最后一个必然成功。
+  const candidates = [...new Set([port, 8080, 8888, 0])];
+  for (let i = 0; i < candidates.length; i++) {
+    const p = candidates[i];
+    try {
+      await new Promise((resolve, reject) => {
+        const onErr = (e) => { server.removeListener('listening', onOk); reject(e); };
+        const onOk = () => { server.removeListener('error', onErr); resolve(); };
+        server.once('error', onErr);
+        server.once('listening', onOk);
+        server.listen(p, host);
+      });
+      const actual = server.address().port;
+      webuiPort = actual;
+      if (p !== port) {
+        logger.warn(`⚠️  端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
+          + ' 想固定端口请改 .env 的 WEBUI_PORT。');
+      }
+      break;
+    } catch (e) {
+      if (e.code === 'EADDRINUSE' && i < candidates.length - 1) continue;
+      throw e;
+    }
+  }
 
   // 公开到局域网时，把能找到的本机地址都列出来，省得去查 IP
   const lan = Object.values(os.networkInterfaces()).flat()
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
-    .map((n) => `http://${n.address}:${port}`);
-  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `http://${host}:${port}`;
+    .map((n) => `http://${n.address}:${webuiPort}`);
+  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `http://${host}:${webuiPort}`;
   logger.info(`🌐 WebUI: ${shown}  [需登录，账号 ${PANEL_USER}]`);
   if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
   if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');

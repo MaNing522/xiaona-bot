@@ -255,6 +255,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="stat"><span>NapCat 在线</span><span id="stNapcat" class="pill warn">…</span></div>
       <div class="stat"><span>AI 模型</span><b id="stModel">—</b></div>
       <div class="stat"><span>NapCat 地址</span><b id="stWs">—</b></div>
+      <div class="stat"><span>WebUI 端口</span><b id="stWebuiPort">—</b></div>
       <div class="stat"><span>登录进程</span><b id="stLogin">—</b></div>
     </div>
     <div class="card span2">
@@ -307,6 +308,7 @@ async function load(){try{const s=await api('/api/status');
   set('stNapcat',s.napcatUp?'在线':'离线',s.napcatUp?'ok':'warn');
   set('stNpBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
   $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
+  if($('stWebuiPort'))$('stWebuiPort').textContent=s.webuiPort||'—';
   $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
   $('sub').textContent=s.wsUrl+' · 授权由主人管理'+(s.botError?' · '+s.botError:'');
   set('lvUp','服务在线','ok');set('lvBot',s.botConnected?'机器人已连接':'机器人未连接',s.botConnected?'ok':'warn');
