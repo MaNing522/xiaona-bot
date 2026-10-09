@@ -253,49 +253,37 @@ function loginPage(msg = '') {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0f1420">
+<meta name="theme-color" content="#f0f2f5">
 <title>小钠控制面板 · 登录</title>
 <style>
 :root{
-  --bg:#0f1420; --card:#171f31; --card2:#121a2a; --line:#27314a;
-  --txt:#e8eef9; --sub:#94a3bd; --accent:#4f8cff; --accent2:#7c5cff; --danger:#ef5350; --radius:16px;
+  --bg:#f0f2f5; --card:#fff; --card2:#f5f7fa; --line:#e8ebf0;
+  --txt:#1f2329; --sub:#8a919f; --accent:#1677ff; --danger:#ff4d4f; --radius:10px;
 }
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
-  background:radial-gradient(1200px 600px at 15% -10%, rgba(79,140,255,.18), transparent 60%),
-             radial-gradient(900px 500px at 100% 0%, rgba(124,92,255,.14), transparent 55%),
-             var(--bg);
-  color:var(--txt);
+  background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.card{width:340px;max-width:100%;padding:26px 24px;border-radius:var(--radius);
-  background:linear-gradient(180deg,rgba(255,255,255,.02),transparent),var(--card);
-  border:1px solid var(--line);box-shadow:0 10px 40px rgba(0,0,0,.4)}
+.card{width:360px;max-width:100%;padding:28px 26px;border-radius:var(--radius);
+  background:var(--card);border:1px solid #f0f0f0;box-shadow:0 2px 12px rgba(0,0,0,.06)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
-.logo{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:20px;flex:0 0 auto;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 6px 18px rgba(79,140,255,.35)}
+.logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;flex:0 0 auto;
+  background:linear-gradient(135deg,#1677ff,#4096ff);box-shadow:0 2px 8px rgba(22,119,255,.28)}
 h1{margin:0;font-size:17px}
 .sub{color:var(--sub);font-size:12px;line-height:1.5}
 label{display:block;font-size:13px;color:var(--sub);margin:12px 0 5px}
-input{width:100%;min-height:44px;padding:0 14px;border-radius:13px;border:1px solid var(--line);
-  background:var(--card2);color:var(--txt);font-size:15px}
-input:focus{outline:none;border-color:var(--accent)}
+input{width:100%;min-height:44px;padding:0 14px;border-radius:8px;border:1px solid #d9d9d9;
+  background:var(--card);color:var(--txt);font-size:15px}
+input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(22,119,255,.12)}
 .row{display:flex;gap:10px;align-items:center;margin-top:8px}
 .row input{flex:1}
-.row img{height:44px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer}
-button{width:100%;margin-top:18px;min-height:46px;border:0;border-radius:13px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
-  font-family:inherit;font-size:15px;font-weight:600;cursor:pointer}
+.row img{height:44px;border-radius:8px;border:1px solid #d9d9d9;background:#fff;cursor:pointer}
+button{width:100%;margin-top:18px;min-height:46px;border:1px solid var(--accent);border-radius:8px;
+  background:var(--accent);color:#fff;font-family:inherit;font-size:15px;font-weight:500;cursor:pointer;transition:.15s}
+button:hover{filter:brightness(1.06)}
 button:active{transform:scale(.98)}
 button:disabled{opacity:.6;cursor:default}
-.err{margin-top:12px;color:#ff8b8b;font-size:12px;min-height:16px}
-@media (prefers-color-scheme:light){
-  body{background:radial-gradient(1200px 600px at 15% -10%, rgba(79,140,255,.12), transparent 60%),#eef2f9;
-       color:#1a2436}
-  .card{background:#fff;border-color:#dbe3f1}
-  .sub,label{color:#5b6b86}
-  input{background:#f4f7ff;border-color:#dbe3f1;color:#1a2436}
-  .row img{border-color:#dbe3f1}
-}
+.err{margin-top:12px;color:var(--danger);font-size:12px;min-height:16px}
 </style></head><body>
 <form class="card" id="f">
   <div class="brand">
@@ -556,7 +544,7 @@ export async function startWebUI() {
       + '可参考 .env.example。');
   }
   const host = process.env.WEBUI_HOST || '127.0.0.1';
-  const port = Number(process.env.WEBUI_PORT) || 8080;
+  const port = Number(process.env.WEBUI_PORT) || 80; // 默认走 HTTP 标准端口 80
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
