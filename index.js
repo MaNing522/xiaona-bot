@@ -27,6 +27,7 @@ import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, ge
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
+import { config } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +37,17 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 
 // 日志统一走 logger.js（终端 termSafe + WebUI pushLog + 按天文件），不再挂钩 console
 setLogLevel(process.env.LOG_LEVEL);
+
+// 运行时可调参数（冷却 / 限流 / 时效）：来自 config.json，与 .env 分离
+const cfg = config();
+
+/** 读整型环境变量：留空/非法 → 用默认值（允许显式写 0）。仅用于仍留在 .env 的少量数值项 */
+function numEnv(name, dflt) {
+    const raw = String(process.env[name] || '').trim();
+    if (!raw) return dflt;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
 
 /**
  * 写入带过期的缓存，并在写之前封顶：先清已过期的，仍满就丢最早写入的（Map 保持插入顺序）。
@@ -91,9 +103,9 @@ function logFeatureStates() {
 // ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
 // 被 @/关键词/引用 叫到，就像现实里被叫住一样，接下来对方继续说，也该继续听着；
 // 但也不能被无限占着，所以给额度：首先唤起的人多给几条，别人插嘴只给一条。
-const ENGAGE_TTL = 10 * 60 * 1000;          // 会话有效期（每次互动都续期）
-const ENGAGE_INITIATOR_LEFT = 3;            // 首先唤起的人：最多再检查 3 条
-const ENGAGE_OTHER_LEFT = 1;                // 其他人插嘴：只检查 1 条
+const ENGAGE_TTL = cfg.engage.ttlMs;        // 会话有效期（每次互动都续期）
+const ENGAGE_INITIATOR_LEFT = cfg.engage.initiatorLeft; // 首先唤起的人：最多再检查几条
+const ENGAGE_OTHER_LEFT = cfg.engage.otherLeft;         // 其他人插嘴：只检查几条
 const ENGAGE_DEBUG = String(process.env.ENGAGE_DEBUG || '') === 'true';
 const engageSessions = new Map();           // convKey -> { initiator, initLeft, otherLeft, exp }
 
@@ -158,32 +170,8 @@ initBindings(SAVE_DIR, {
 // 上下线记录（主人私聊 #查询 用）落盘，重启不丢
 initPresence(SAVE_DIR);
 
-/** 读整型环境变量：留空/非法 → 用默认值（允许显式写 0） */
-function numEnv(name, dflt) {
-    const raw = String(process.env[name] || '').trim();
-    if (!raw) return dflt;
-    const n = Number(raw);
-    return Number.isFinite(n) && n >= 0 ? n : dflt;
-}
-
-// 限速初始化（宽松：正常聊天几乎无感，只对刷屏动手）。数值全部来自 .env，便于按需调整
-initRateLimit({
-    userCooldownMs: numEnv('RL_USER_COOLDOWN_MS', 2000),
-    userPerMinute: numEnv('RL_USER_PER_MINUTE', 8),
-    userPerHour: numEnv('RL_USER_PER_HOUR', 60),
-    userPerDay: numEnv('RL_USER_PER_DAY', 200),
-    groupPerMinute: numEnv('RL_GROUP_PER_MINUTE', 20),
-    groupPerHour: numEnv('RL_GROUP_PER_HOUR', 200),
-    globalMaxConcurrent: numEnv('RL_GLOBAL_CONCURRENT', 3),
-    globalPerMinute: numEnv('RL_GLOBAL_PER_MINUTE', 30),
-    queueMax: numEnv('RL_QUEUE_MAX', 15),
-    queueTimeoutMs: numEnv('RL_QUEUE_TIMEOUT_MS', 20000),
-    violationsToCooldown: numEnv('RL_VIOLATIONS_TO_COOLDOWN', 5),
-    penaltyCooldownMs: numEnv('RL_PENALTY_COOLDOWN_MS', 30000),
-    floodWindowMs: numEnv('RL_FLOOD_WINDOW_MS', 10000),
-    floodCount: numEnv('RL_FLOOD_COUNT', 15),
-    penaltyMuteMs: numEnv('RL_PENALTY_MUTE_MS', 300000),
-});
+// 限速初始化（宽松：正常聊天几乎无感，只对刷屏动手）。数值见 config.json 的 rateLimit
+initRateLimit(cfg.rateLimit);
 
 // 余额统计（#余额 的累计充值/已使用）落盘，重启不丢
 // 状态变量先在这里声明（初始化要用）；读写与累计函数在下方「AI 账户余额」一节
@@ -722,11 +710,11 @@ async function ownerQueryExtra(name) {
 const forwardSentAt = new Map();
 /**
  * 发卡片前的间隔（防封）：服务器收到请求会立刻响应，发得太密集容易被判定为机器批量操作。
- * **下限 500ms**，.env 里只能调大、调不小（调小不会更安全）。
+ * **下限 500ms**，config.json 里只能调大、调不小（调小不会更安全）。
  */
-const FORWARD_DELAY_MS = Math.max(500, numEnv('FORWARD_DELAY_MS', 800));
+const FORWARD_DELAY_MS = Math.max(500, cfg.cooldown.forwardDelayMs);
 /** 同一个群两次发送的最小间隔 */
-const FORWARD_COOLDOWN_MS = numEnv('FORWARD_COOLDOWN_MS', 5000);
+const FORWARD_COOLDOWN_MS = cfg.cooldown.forwardMs;
 const FORWARD_USAGE = '\n用法：每行一条，「QQ号 或 @某人」+ 空格 + 文案\n'
     + '例：\n#聊天记录\n12345678 你好呀\n@张三 在吗';
 
@@ -1398,8 +1386,8 @@ async function memberName(gid, qq, memberLeft) {
 // ---------- 戳一戳：有人戳小钠就回一句 ----------
 /** 回应开关（.env 的 POKE_REPLY，默认开） */
 const POKE_REPLY = (process.env.POKE_REPLY || 'true') !== 'false';
-/** 每个会话的冷却：连点不刷屏 */
-const POKE_COOLDOWN_MS = 3000;
+/** 每个会话的冷却：连点不刷屏（见 config.json 的 cooldown.pokeMs） */
+const POKE_COOLDOWN_MS = cfg.cooldown.pokeMs;
 const pokeCooldown = new Map();
 const POKE_LINES = [
     '别戳啦，再戳我可要咬人了',
@@ -2245,8 +2233,8 @@ function forwardGroupToMc(event, who) {
 }
 
 // ---------- 彩蛋：摇一摇对答 ----------
-/** 同一会话的接话间隔，避免有人刷屏把机器人刷爆 */
-const SHAKE_COOLDOWN = 2000;
+/** 同一会话的接话间隔，避免有人刷屏把机器人刷爆（见 config.json 的 cooldown.shakeMs） */
+const SHAKE_COOLDOWN = cfg.cooldown.shakeMs;
 /** 隔太久就当新起一段，不拿旧上下文接话 */
 const SHAKE_CTX_TTL = 5 * 60 * 1000;
 const shakeAt = new Map();    // 会话 → 上次接话时间
