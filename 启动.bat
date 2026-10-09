@@ -1,27 +1,29 @@
 @echo off
 chcp 65001 >nul
-title 小钠 QQ 机器人启动器
+title Xiaona QQ Bot Launcher
 
 rem ============================================================
-rem  自动请求管理员权限：
-rem  WebUI 默认监听 80 端口（HTTP 标准端口），Windows 上绑定
-rem  1024 以下的端口需要管理员权限，否则会报 EACCES 启动失败。
-rem  用 fltmc 判断当前是否已有管理员权限；没有就用 PowerShell
-rem  的 Start-Process -Verb RunAs 弹 UAC，以管理员身份重新拉起本脚本。
-rem  （已提升的实例会走 :elevated，不会再次弹 UAC。）
+rem  Auto-elevate to Administrator.
+rem  The WebUI listens on port 80 by default, and binding ports
+rem  below 1024 on Windows requires Administrator (else EACCES).
+rem
+rem  IMPORTANT: keep this file ASCII-only and CRLF.
+rem  A .bat containing non-ASCII (UTF-8) text together with
+rem  "chcp 65001" makes cmd.exe lose its read position and abort
+rem  mid-script -- that is exactly why elevation never ran before.
+rem
+rem  Passing the "elevated" argument means we are already elevated;
+rem  it also prevents an endless re-launch loop.
 rem ============================================================
+if "%~1"=="elevated" goto elevated
+
 fltmc >nul 2>&1
-if %errorlevel%==0 goto elevated
+if not errorlevel 1 goto elevated
 
-echo [启动] 正在请求管理员权限（WebUI 默认监听 80 端口，需要管理员）...
-echo        若不需要管理员，可在 .env 里把 WEBUI_PORT 改成大于 1024 的端口。
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
-if errorlevel 1 (
-  echo [启动] 未获取到管理员权限（可能被取消），仍以普通权限启动；WebUI 端口若小于 1024 会失败。
-  goto elevated
-)
-rem 已成功拉起管理员实例，本进程退出
-exit /b
+echo [launcher] Requesting Administrator rights (WebUI listens on port 80)...
+powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList 'elevated' -WorkingDirectory '%~dp0' -Verb RunAs"
+if not errorlevel 1 exit /b
+echo [launcher] Elevation not granted, starting without admin; WEBUI_PORT < 1024 will fail.
 
 :elevated
 cd /d "%~dp0"

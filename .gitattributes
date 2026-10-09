@@ -1,0 +1,4 @@
+# Windows 批处理必须用 CRLF 换行：LF 会让 cmd 解析 goto/标签/if 块出错。
+# 这里强制 .bat/.cmd 检出为 CRLF，避免再次踩坑。
+*.bat text eol=crlf
+*.cmd text eol=crlf
