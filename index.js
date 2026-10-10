@@ -28,7 +28,6 @@ import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
 import { config } from './config.js';
-import { queryGrief, formatGrief, summarizeGrief } from './grief.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,12 +114,6 @@ setInterval(() => {
     const now = Date.now();
     for (const [k, e] of engageSessions) if (now > e.exp) engageSessions.delete(k);
 }, 60 * 1000);
-
-// ---------- GriefLogger 记录查询：AI 路径"是否继续"的待确认状态 ----------
-// AI 判定了要查、且条数超过阈值时，先把问题挂起（等用户回"继续"），避免未经同意就把一大堆数据喂给模型。
-const griefPending = new Map();               // convKey -> { player, hours, limit, userInput, at }
-const GRIEF_PENDING_TTL = 5 * 60 * 1000;      // 5 分钟内回"继续"才认
-const GRIEF_CONFIRM_RE = /^(继续|确定|确认|好的|好|是|嗯|可以|y|yes|ok)[！。.!~]*$/i;
 
 /**
  * 明确被要求"别说话"：出现这类制止语就直接不回复，连 AI 都不用叫。
@@ -290,11 +283,11 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
  *                    开启时**从严**：只有明确输出【REPLY:是】才回复，其余（否/畸形/漏写）一律不接。
  * @param userId      提问者 QQ，作为 user 传给 AI 服务商（KV 缓存隔离，提高同人连续对话的命中率）
  */
-async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false, userId = '', allowGrief = false) {
+async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false, userId = '') {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
-    const tagRule = '【SEARCH:…】【VOICE:…】【REPLY:…】【GRIEF:…】和“单独一行的三个连字符”都是合法的“工具标记”，'
+    const tagRule = '【SEARCH:…】【VOICE:…】【REPLY:…】和“单独一行的三个连字符”都是合法的“工具标记”，'
         + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释。';
 
     let decisionPrompt = `你是小钠，一个智能QQ机器人助手。
@@ -321,16 +314,6 @@ ${step++}. **联网搜索判断**（默认不搜，拿不准就别搜）：
    - 以下一律不搜：闲聊寒暄、情绪吐槽、玩笑调侃、常识、算数、翻译、写代码/写文案、能靠上下文答的、以及问小钠自己的事。
    - 需要搜索 → 输出【SEARCH:需要|关键词:搜索词】；不需要 → 输出【SEARCH:不需要】
    - 关键词要短、能直接喂给搜索引擎（如“武汉今天天气”），别带“请问”“帮我查”这类口语。
-`;
-    }
-    if (allowGrief) {
-        decisionPrompt += `
-${step++}. **服务器操作记录查询判断（GriefLogger）**（默认不查，拿不准就别查）：
-   - 只有用户**明确想看服务器上"谁挖了/放了什么方块、谁动了箱子/容器、谁击杀了实体"**这类操作记录时才查。
-   - 需要查 → 输出【GRIEF:查询|玩家:游戏ID|小时:24】；不需要 → 输出【GRIEF:不需要】
-     · 「玩家」：用户点名了某玩家就填其游戏ID，没说就留空（写成 玩家: ）表示查全服。
-     · 「小时」：用户说"最近几小时/今天/最近几天"就换算成小时（今天≈24，三天≈72）；没说写 24。
-   - 与查询无关、或只是问"这个功能是什么" → 一律【GRIEF:不需要】。
 `;
     }
     decisionPrompt += `
@@ -382,22 +365,7 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
     reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
 
-    // 服务器记录查询：只有明确写了【GRIEF:查询…】才算，【GRIEF:不需要】与畸形写法都不查
-    let needGrief = false, griefPlayer = '', griefHours = 0;
-    if (allowGrief) {
-        const gm = reply.match(/【\s*GRIEF\s*[:：]\s*查询([^】]*)】/);
-        if (gm) {
-            needGrief = true;
-            const body = gm[1] || '';
-            const pm = body.match(/玩家\s*[:：]\s*([^|｜】]*)/);
-            if (pm) griefPlayer = pm[1].trim();
-            const hm = body.match(/小时\s*[:：]\s*(\d+)/);
-            if (hm) griefHours = parseInt(hm[1], 10) || 0;
-        }
-    }
-    reply = reply.replace(/【\s*GRIEF\s*[:：][^】]*】/g, '');
-
-    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice, skip, needGrief, griefPlayer, griefHours };
+    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice, skip };
 }
 
 /**
@@ -859,19 +827,6 @@ async function handleCommand(event, text) {
             } catch (e) {
                 return sendReply(event, `❌ 查询失败：${e.message}`);
             }
-        }
-
-        case '/查记录': {
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以查询服务器操作记录');
-            // 参数：[玩家名] [小时数]，顺序随意；不写玩家 = 全服，不写小时 = 默认 24
-            const parts = arg.split(/\s+/).filter(Boolean);
-            let player = '', hours = 0;
-            for (const t of parts) {
-                if (/^\d+$/.test(t)) hours = Number(t);
-                else if (!player) player = t;
-            }
-            const res = await queryGrief({ player, hours: hours || cfg.grief.defaultHours, limit: cfg.grief.threshold });
-            return sendReply(event, formatGrief(res, cfg.grief.threshold));
         }
 
         case '/申请授权':
@@ -1846,9 +1801,6 @@ async function onMessage(event) {
     // 主人引用「进群/好友申请通知」回复同意或拒绝：优先于命令与 AI 处理
     if (await handleOwnerApproval(event, segments, userInput)) return;
 
-    // 服务器记录查询的"继续"确认：挂起的问题 + 回复确认词 → 直接总结，不再走 AI
-    if (userInput && !/^[#/]/.test(userInput) && await handleGriefConfirm(event, userInput)) return;
-
     if (userInput) {
         // 记录最近消息流（供 GUI 人工接管挑选会话）
         pushTakeoverMsg({ key: convKey(event), dir: 'in', from: String(event.user_id), text: raw || userInput, t: Date.now() });
@@ -1979,21 +1931,12 @@ async function runAI(event, userInput, allowSkip = false) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        // 服务器记录查询只对主人/管理员开放：没权限就不让 AI 产生该选项
-        const role = perm.role(String(event.user_id));
-        const allowGrief = role === 'owner' || role === 'admin';
-        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip, String(event.user_id), allowGrief);
+        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip, String(event.user_id));
         let { reply, needSearch, searchKeyword, wantVoice } = result;
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
         if (result.skip) {
             logger.info('🤐 AI 判断这条不是在叫小钠，跳过回复');
-            return;
-        }
-
-        // 服务器操作记录查询：查完（必要时先问"继续"）再总结，走的是另一条回复路径
-        if (result.needGrief) {
-            await runGriefQuery(event, result.griefPlayer, result.griefHours, userInput);
             return;
         }
 
@@ -2034,67 +1977,6 @@ async function runAI(event, userInput, allowSkip = false) {
         logger.error('❌ 处理异常:', err);
         await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
     }
-}
-
-/**
- * AI 路径的服务器记录查询：查 → 条数超过阈值先问"继续" → 否则直接交给 AI 总结。
- * 只有主人/管理员能用（调用方已判过，这里再兜一次，防止误触发）。
- */
-async function runGriefQuery(event, player, hours, userInput) {
-    const uid = String(event.user_id);
-    const role = perm.role(uid);
-    if (role !== 'owner' && role !== 'admin') {
-        await sendReply(event, '❌ 只有主人/管理员可以查询服务器操作记录。');
-        return;
-    }
-    const h = hours > 0 ? hours : cfg.grief.defaultHours;
-    const lim = cfg.grief.maxRows;
-    const res = await queryGrief({ player: player || '', hours: h, limit: lim });
-    if (!res.ok) {
-        await sendReply(event, `❌ 查询失败：${res.error}`);
-        return;
-    }
-    if (res.total === 0) {
-        await sendReply(event, `🔍 ${res.player ? `玩家「${res.player}」` : '全服'}最近 ${res.hours} 小时没有操作记录。`);
-        return;
-    }
-    if (res.total > cfg.grief.threshold) {
-        griefPending.set(convKey(event), { player: player || '', hours: h, limit: lim, userInput, at: Date.now() });
-        await sendReply(event, `📊 查到 ${res.total} 条记录（超过 ${cfg.grief.threshold} 条）。`
-            + `继续的话，我会把最近 ${res.rows.length} 条汇总成一句话发给你，回复「继续」即可。`);
-        return;
-    }
-    await sendReply(event, await summarizeGrief(res.rows, res.total, userInput, uid));
-}
-
-/**
- * 处理"继续"确认：本会话有挂起的记录查询、且用户回了确认词时执行总结。
- * @returns {Promise<boolean>} 是否已处理（true 时调用方应直接 return）
- */
-async function handleGriefConfirm(event, userInput) {
-    const key = convKey(event);
-    const p = griefPending.get(key);
-    if (!p) return false;
-    if (Date.now() - p.at > GRIEF_PENDING_TTL) { griefPending.delete(key); return false; }
-    if (!GRIEF_CONFIRM_RE.test(String(userInput).trim())) return false;
-    const uid = String(event.user_id);
-    const role = perm.role(uid);
-    // 不是主人/管理员：不认这条确认，也不动挂起状态（别让别人的一句"好"把主人的待确认吞掉）
-    if (role !== 'owner' && role !== 'admin') return false;
-    griefPending.delete(key);
-    try {
-        const res = await queryGrief({ player: p.player, hours: p.hours, limit: p.limit });
-        if (!res.ok) {
-            await sendReply(event, `❌ 查询失败：${res.error}`);
-        } else if (!res.total) {
-            await sendReply(event, '🔍 这段时间没有查到操作记录。');
-        } else {
-            await sendReply(event, await summarizeGrief(res.rows, res.total, p.userInput, uid));
-        }
-    } catch (e) {
-        await sendReply(event, `❌ 查询失败：${e.message}`);
-    }
-    return true;
 }
 
 // ---------- MC 桥：游戏内提问 → 本机 AI → 回投游戏 ----------

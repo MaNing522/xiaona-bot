@@ -48,12 +48,6 @@ export const DEFAULTS = {
         initiatorLeft: 3,
         otherLeft: 1,
     },
-    // GriefLogger 服务器记录查询（方块破坏/放置、容器存取等）
-    grief: {
-        threshold: 50,     // 记录条数超过它时，AI 路径先询问是否继续；#查记录用它当展示上限
-        defaultHours: 24,  // 没指定时间范围时，默认往回查多少小时
-        maxRows: 100,      // 单次最多取回多少条（AI 总结时喂给模型的条数上限）
-    },
 };
 
 /**
