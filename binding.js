@@ -20,6 +20,9 @@ let file = '';
 let maxPerQq = 3;
 let ttlSec = 300;
 let data = { qq: {} };
+/** 封禁名单：qq -> { until, reason, at }。until=0 表示永久（不会自动过期） */
+let bans = {};
+let banFile = '';
 /** 待验证：qq -> { answer, gameId, expires, tries } */
 const pending = new Map();
 /** 绑定关系变化时的回调（index.js 注入：通知服务器刷新这些玩家的计分板） */
@@ -27,16 +30,25 @@ let onChange = null;
 
 export function initBindings(saveDir, opts = {}) {
   file = path.join(saveDir, 'bindings.json');
+  banFile = path.join(saveDir, 'bans.json');
   maxPerQq = Number(opts.maxPerQq) > 0 ? Number(opts.maxPerQq) : 3;
   ttlSec = Number(opts.ttlSec) > 0 ? Number(opts.ttlSec) : 300;
   // 没传就清空：重新初始化不能沿用上一轮的回调
   onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
   // 先清空再加载：重新初始化（如测试/重启）不能沿用上一轮的内存状态
   data = { qq: {} };
+  bans = {};
   pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
   if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
+  const bj = readJsonSafe(banFile, null, 'bans.json');
+  if (bj && typeof bj === 'object') {
+    for (const [k, v] of Object.entries(bj)) {
+      if (v && typeof v === 'object') bans[k] = { until: Number(v.until) || 0, reason: String(v.reason || ''), at: Number(v.at) || 0 };
+    }
+  }
   logger.info(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
+  if (Object.keys(bans).length) logger.info(`[绑定] 已加载 ${Object.keys(bans).length} 条封禁记录`);
 }
 
 /**
@@ -54,6 +66,10 @@ function notifyChange(ids) {
 
 function save() {
   writeJsonAtomic(file, data);
+}
+
+function saveBans() {
+  writeJsonAtomic(banFile, bans);
 }
 
 export function maxPerQQ() { return maxPerQq; }
@@ -101,17 +117,102 @@ function sweepPending() {
   for (const [k, p] of pending) if (now > p.expires) pending.delete(k);
 }
 
+/* ============================================================
+ * 封禁：被封禁的 QQ 不能绑定游戏ID，且封禁时解绑其名下所有账号。
+ * 时间支持组合单位 5y3d3h3m3s（年/天/时/分/秒），n 表示永久；
+ * 不填时间（或时间位置填了非时间内容）一律按永久处理。
+ * ============================================================ */
+const BAN_UNIT_MS = { y: 365 * 24 * 3600 * 1000, d: 24 * 3600 * 1000, h: 3600 * 1000, m: 60 * 1000, s: 1000 };
+const BAN_DUR_RE = /^(?:(\d+)y)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i;
+const BAN_PERMANENT = new Set(['n', '永久', 'permanent', 'forever', '∞']);
+
 /**
- * 发起绑定：校验游戏ID与名额，生成验证码。
+ * 解析封禁时间：'' / n / 永久 → 永久；5y3d3h3m3s → 毫秒数。
+ * @returns {{permanent:boolean, ms:number}|null} 解析失败返回 null
+ */
+export function parseBanTime(str) {
+  const s = String(str || '').trim();
+  if (!s || BAN_PERMANENT.has(s.toLowerCase())) return { permanent: true, ms: 0 };
+  const m = s.match(BAN_DUR_RE);
+  if (!m || m.slice(1).every((x) => x === undefined)) return null; // 一个单位都没给 → 不是时间
+  let ms = 0;
+  const units = ['y', 'd', 'h', 'm', 's'];
+  units.forEach((u, i) => { if (m[i + 1]) ms += Number(m[i + 1]) * BAN_UNIT_MS[u]; });
+  if (ms <= 0) return null;
+  return { permanent: false, ms };
+}
+
+/** 毫秒 → 「5年3天3小时3分3秒」（用于展示剩余时间/封禁时长） */
+export function humanDuration(ms) {
+  let rest = Math.max(0, Math.floor(ms / 1000));
+  const y = Math.floor(rest / (365 * 24 * 3600)); rest %= 365 * 24 * 3600;
+  const d = Math.floor(rest / (24 * 3600)); rest %= 24 * 3600;
+  const h = Math.floor(rest / 3600); rest %= 3600;
+  const mi = Math.floor(rest / 60);
+  const s = rest % 60;
+  const parts = [];
+  if (y) parts.push(`${y}年`);
+  if (d) parts.push(`${d}天`);
+  if (h) parts.push(`${h}小时`);
+  if (mi) parts.push(`${mi}分`);
+  if (s) parts.push(`${s}秒`);
+  return parts.join('') || '0秒';
+}
+
+/** 该 QQ 是否在封禁中（过期自动清除）；是则返回记录，否则 null */
+export function isBanned(qq) {
+  const key = String(qq || '');
+  const e = bans[key];
+  if (!e) return null;
+  if (e.until && Date.now() > e.until) { delete bans[key]; saveBans(); return null; }
+  return e;
+}
+
+/** 封禁生效期间的提示文案 */
+function bannedMsg(e) {
+  const left = e.until ? `（剩余 ${humanDuration(e.until - Date.now())}）` : '（永久）';
+  const why = e.reason ? `，原因：${e.reason}` : '';
+  return `你已被封禁${left}${why}，无法绑定游戏ID。如有疑问请联系管理员。`;
+}
+
+/**
+ * 封禁一个 QQ：写入名单并立即解绑其名下所有游戏ID。
+ * @param {string} qq 目标 QQ
+ * @param {string} timeStr 时间（5y3d3h3m3s / n / 空）；填了非时间内容会被当作原因
+ * @param {string} reason 原因（可空）
+ * @returns {{ok:boolean, error?:string, permanent?:boolean, until?:number, reason?:string, ids?:string[]}}
+ */
+export function banUser(qq, timeStr, reason) {
+  const key = String(qq || '').trim();
+  if (!/^\d{5,14}$/.test(key)) return { ok: false, error: 'QQ 号格式不对（5-14 位数字）' };
+  const time = String(timeStr || '').trim();
+  let why = String(reason || '').trim();
+  let dur = parseBanTime(time);
+  // 时间位置填的不是时间 → 那是原因，整体按永久处理
+  if (time && !dur) { why = [time, why].filter(Boolean).join(' '); dur = { permanent: true, ms: 0 }; }
+  const until = dur.permanent ? 0 : Date.now() + dur.ms;
+  bans[key] = { until, reason: why, at: Date.now() };
+  saveBans();
+  // 解绑其名下所有账号：玩家可能正在游戏里，onChange 会顺带撤销白名单放行
+  const ub = forceUnbind(key);
+  const ids = ub.ok ? ub.ids : [];
+  logger.info(`[封禁] QQ ${key} ${dur.permanent ? '永久' : humanDuration(dur.ms)}${why ? ` 原因：${why}` : ''}，已解绑 ${ids.length} 个账号`);
+  return { ok: true, permanent: dur.permanent, until, reason: why, ids };
+}
+
+/**
+ * 发起绑定：校验是否被封禁、游戏ID与名额，生成验证码。
  * @returns {{ok:boolean, error?:string, image?:Buffer, gameId?:string, count?:number, ttlSec?:number}}
  */
 export function startBind(qq, gameId) {
   sweepPending();
+  const key = String(qq);
+  const ban = isBanned(key);
+  if (ban) return { ok: false, error: bannedMsg(ban) };
   const id = String(gameId || '').trim();
   if (!GAME_ID.test(id)) {
     return { ok: false, error: '游戏ID 只能是 3-16 位的字母、数字或下划线，例如 Steve' };
   }
-  const key = String(qq);
   const ids = getGameIdsOf(key);
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
     return { ok: false, error: `你已经绑定过 ${id} 了。查看： #我的绑定` };
@@ -133,6 +234,11 @@ export function answerCaptcha(qq, text) {
   const key = String(qq);
   const p = pending.get(key);
   if (!p) return { handled: false };
+  const ban = isBanned(key);
+  if (ban) {
+    pending.delete(key);
+    return { handled: true, ok: false, msg: `⛔ ${bannedMsg(ban)}` };
+  }
   if (Date.now() > p.expires) {
     pending.delete(key);
     return { handled: true, ok: false, msg: `⌛ 验证码已过期，请重新发送 #绑定 ${p.gameId}` };

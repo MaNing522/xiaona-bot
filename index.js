@@ -26,7 +26,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, banUser, humanDuration } from './binding.js';
 import { config } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -785,6 +785,27 @@ async function handleCommand(event, text) {
             if (!q) return sendReply(event, '❌ 用法：#强制解绑 <QQ号> [游戏ID]\n不带游戏ID则清空该QQ的全部绑定');
             const fr = forceUnbind(q, gid);
             return sendReply(event, fr.ok ? fr.msg : `❌ ${fr.error}`);
+        }
+
+        case '/封禁': {
+            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以封禁');
+            const target = resolveTarget(event, arg);
+            if (!target) {
+                return sendReply(event, '❌ 用法：#封禁 @或QQ号 [时间] [原因]\n'
+                    + '时间支持 5y3d3h3m3s（年月日时分秒）或 n（永久），不填则永久；原因可留空\n'
+                    + '例：#封禁 12345 5y3d3h3m3s 开挂 ｜ #封禁 114514 1h5s 骂人 ｜ #封禁 25656');
+            }
+            // 去掉参数开头的 @昵称 或 QQ号后，第一个词是时间，其后都是原因
+            const toks = arg.split(/\s+/).filter(Boolean);
+            if (toks.length && (/^@/.test(toks[0]) || toks[0] === String(target) || /^\d{5,14}$/.test(toks[0]))) toks.shift();
+            const timeArg = toks.shift() || '';
+            const reason = toks.join(' ');
+            const ab = banUser(target, timeArg, reason);
+            if (!ab.ok) return sendReply(event, `❌ ${ab.error}`);
+            const when = ab.permanent ? '永久' : humanDuration(ab.until - Date.now());
+            return sendReply(event, `⛔ 已封禁 QQ ${target}（${when}）${ab.reason ? `｜原因：${ab.reason}` : ''}\n`
+                + (ab.ids.length ? `已解绑其名下账号：${ab.ids.join('、')}` : '该 QQ 名下没有绑定账号')
+                + '\n封禁期间其无法再绑定游戏ID。');
         }
 
         case '/绑定': {
