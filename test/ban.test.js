@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initBindings, startBind, answerCaptcha, banUser, isBanned, parseBanTime, humanDuration, getGameIdsOf } from '../binding.js';
+import { initBindings, startBind, answerCaptcha, banUser, unbanUser, isBanned, parseBanTime, humanDuration, getGameIdsOf } from '../binding.js';
 
 const YEAR = 365 * 24 * 3600 * 1000;
 
@@ -123,5 +123,32 @@ describe('banUser / isBanned（封禁与解绑）', () => {
     banUser('10008', 'n', '测试');
     initBindings(dir, { maxPerQq: 3, ttlSec: 300 });
     expect(isBanned('10008')).not.toBeNull();
+  });
+});
+
+describe('unbanUser（解封）', () => {
+  it('解封后在名单中消失，可重新绑定', () => {
+    banUser('20001', 'n', '测试');
+    expect(isBanned('20001')).not.toBeNull();
+    expect(unbanUser('20001').ok).toBe(true);
+    expect(isBanned('20001')).toBeNull();
+    expect(startBind('20001', 'Steve').ok).toBe(true);
+  });
+
+  it('不在封禁名单 → 返回错误', () => {
+    const r = unbanUser('20002');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('不在封禁名单');
+  });
+
+  it('QQ 号格式不对 → 拒绝', () => {
+    expect(unbanUser('abc').ok).toBe(false);
+  });
+
+  it('解封会落盘', () => {
+    banUser('20003', 'n', '');
+    unbanUser('20003');
+    initBindings(dir, { maxPerQq: 3, ttlSec: 300 });
+    expect(isBanned('20003')).toBeNull();
   });
 });

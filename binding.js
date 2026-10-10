@@ -201,6 +201,21 @@ export function banUser(qq, timeStr, reason) {
 }
 
 /**
+ * 解封一个 QQ：移出封禁名单（不恢复被封时已解绑的游戏ID，需本人重新 #绑定）。
+ * @returns {{ok:boolean, error?:string}}
+ */
+export function unbanUser(qq) {
+  const key = String(qq || '').trim();
+  if (!/^\d{5,14}$/.test(key)) return { ok: false, error: 'QQ 号格式不对（5-14 位数字）' };
+  if (!bans[key]) return { ok: false, error: `QQ ${key} 不在封禁名单中` };
+  const e = bans[key];
+  delete bans[key];
+  saveBans();
+  logger.info(`[解封] QQ ${key} 已解封${e.reason ? `（原封禁原因：${e.reason}）` : ''}`);
+  return { ok: true };
+}
+
+/**
  * 发起绑定：校验是否被封禁、游戏ID与名额，生成验证码。
  * @returns {{ok:boolean, error?:string, image?:Buffer, gameId?:string, count?:number, ttlSec?:number}}
  */

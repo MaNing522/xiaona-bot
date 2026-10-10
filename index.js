@@ -26,7 +26,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, banUser, humanDuration } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, banUser, unbanUser, humanDuration } from './binding.js';
 import { config } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -806,6 +806,15 @@ async function handleCommand(event, text) {
             return sendReply(event, `⛔ 已封禁 QQ ${target}（${when}）${ab.reason ? `｜原因：${ab.reason}` : ''}\n`
                 + (ab.ids.length ? `已解绑其名下账号：${ab.ids.join('、')}` : '该 QQ 名下没有绑定账号')
                 + '\n封禁期间其无法再绑定游戏ID。');
+        }
+
+        case '/解封': {
+            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以解封');
+            const target = resolveTarget(event, arg);
+            if (!target) return sendReply(event, '❌ 用法：#解封 @或QQ号\n解封后对方可重新 #绑定 游戏ID');
+            const ub = unbanUser(target);
+            if (!ub.ok) return sendReply(event, `❌ ${ub.error}`);
+            return sendReply(event, `✅ 已解封 QQ ${target}。对方可重新 #绑定 游戏ID（被封时已解绑的账号不会自动恢复）。`);
         }
 
         case '/绑定': {
