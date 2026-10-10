@@ -247,6 +247,23 @@ function callApi(action, params) {
     });
 }
 
+/**
+ * 把 OneBot 返回的错误 JSON 精简成一行，便于日志阅读。
+ * NapCat 的失败信息里 message 常常是带换行的一长串（EventChecker / NTEvent …），
+ * 原样打出来会把日志刷得没法看，这里只留 retcode + 首行摘要。
+ */
+function briefApiErr(e) {
+    const s = String((e && e.message) || e || '');
+    try {
+        const o = JSON.parse(s);
+        if (o && typeof o === 'object' && (o.retcode !== undefined || o.message)) {
+            const first = String(o.message || '').split('\n')[0].trim().slice(0, 140);
+            return `retcode=${o.retcode}${first ? ' ' + first : ''}`;
+        }
+    } catch { /* 不是 JSON，原样截断 */ }
+    return s.slice(0, 200);
+}
+
 // ---------- 消息段 ----------
 const segText = (t) => ({ type: 'text', data: { text: t } });
 const segAt = (qq) => ({ type: 'at', data: { qq: String(qq) } });
@@ -1474,7 +1491,15 @@ async function onNotice(event) {
         const msg = joined
             ? [segAt(uid), segText(' 欢迎加入群聊！🎉')]
             : [segText(`👋 ${name} ${kind}${note}`)];
-        await callApi('send_group_msg', { group_id: gid, message: msg });
+        try {
+            await callApi('send_group_msg', { group_id: gid, message: msg });
+        } catch (e) {
+            // @ 有时会被 QQ 拒掉（对方刚进群、对方本身是机器人/被风控等），
+            // 退一步改用纯文本再发一次；仍失败就交给外层统一记录。
+            if (!joined) throw e;
+            logger.warn(`⚠️ [群 ${gid}] 迎宾 @ 发送失败，改用纯文本重试：${briefApiErr(e)}`);
+            await callApi('send_group_msg', { group_id: gid, message: [segText('🎉 欢迎加入群聊！')] });
+        }
         logger.info(`🚪 [群 ${gid}] ${joined ? '进群' : '退群'}: ${name}(${uid})`);
 
         // 桥接群的进出也同步进游戏；同样只投给「已绑定游戏ID」的账号。
@@ -1483,7 +1508,7 @@ async function onNotice(event) {
             sendToBoundPlayers(` ${kind}`, uid, name);
         }
     } catch (e) {
-        logger.error('[进群退群提示] 发送失败:', e.message);
+        logger.error(`[进群退群提示] [群 ${gid}] 发送失败：${briefApiErr(e)}`);
     }
 }
 
