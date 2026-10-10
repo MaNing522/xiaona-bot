@@ -22,6 +22,23 @@ public class Config {
     public Plan plan = new Plan();
     public Board board = new Board();
     public Whitelist whitelist = new Whitelist();
+    public Grief grief = new Grief();
+
+    /**
+     * GriefLogger 方块/容器日志查询：直接以只读方式打开 GriefLogger 的 SQLite 数据库取数据。
+     *
+     * 数据库默认在 {@code <游戏目录>/config/grieflogger/database.db}（GriefLogger 的默认取值），
+     * 如服务器改过位置，可用 dbFile 指定绝对路径。
+     */
+    public static class Grief {
+        public boolean enabled = true;
+        /** 数据库文件路径；空 = 用默认的 <游戏目录>/config/grieflogger/database.db */
+        public String dbFile = "";
+        /** 未显式指定时间范围时，默认往回查多少小时 */
+        public int defaultHours = 24;
+        /** 单次最多返回多少条（本机请求可再收窄，但不会超过硬上限） */
+        public int maxRows = 200;
+    }
 
     /**
      * 未绑定玩家的侧边栏计分板：进服时若还没绑定游戏ID，就给一条"进QQ群发 #绑定"的指引，
@@ -163,5 +180,13 @@ public class Config {
         if (whitelist.kickMessage == null || whitelist.kickMessage.isBlank()) {
             whitelist.kickMessage = "你还未绑定游戏ID。\n请加入 QQ 群 {group}，发送 #绑定 <游戏ID> 完成绑定后再进服。";
         }
+
+        if (grief == null) grief = new Grief();
+        if (grief.dbFile == null) grief.dbFile = "";
+        grief.dbFile = grief.dbFile.trim();
+        if (grief.defaultHours <= 0) grief.defaultHours = 24;
+        if (grief.defaultHours > 24 * 30) grief.defaultHours = 24 * 30;
+        if (grief.maxRows <= 0) grief.maxRows = 200;
+        if (grief.maxRows > 500) grief.maxRows = 500;
     }
 }

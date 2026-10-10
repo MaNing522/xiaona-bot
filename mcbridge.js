@@ -180,6 +180,25 @@ export async function getPlanPlayer(name) {
 }
 
 /**
+ * 只读查询 GriefLogger 的方块/容器操作日志（见 mod 的 /bridge/grief）。
+ *
+ * 服务端 mod 直接读 GriefLogger 的 SQLite 数据库，本机只管拿到结果。
+ * 返回 {ok,total,rows,hours,player,db,error}；旧版 mod 不认识该接口会回 404。
+ *
+ * @param {object} [q]
+ * @param {string} [q.player] 只查某玩家（空 = 全部）
+ * @param {number} [q.hours]  往回查多少小时（0 = 用服务端默认）
+ * @param {number} [q.limit]  返回条数上限（0 = 用服务端默认）
+ */
+export async function getGriefRecords({ player = '', hours = 0, limit = 0 } = {}) {
+    return api('/bridge/grief', {
+        method: 'POST',
+        body: { player: String(player || ''), hours: Number(hours) || 0, limit: Number(limit) || 0 },
+        timeoutMs: 15000,
+    });
+}
+
+/**
  * 把"这名玩家是否已绑定"回给服务端 mod，让它据此显示/撤掉计分板。
  *
  * 两个调用点：
