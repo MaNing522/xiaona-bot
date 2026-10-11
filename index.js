@@ -382,9 +382,8 @@ function splitReplies(text, max = 3) {
 
 // ---------- 消息净化 / 攻击识别 ----------
 function cleanMessage(content) {
-    let clean = content.replace(/\[[^\]]+\]/g, '').trim();
-    clean = clean.replace(/@小钠/g, '').trim();
-    return clean;
+    // 只剥掉对机器人的 @，不再删方括号内容：用户正常输入里的方括号照原样交给 AI
+    return String(content ?? '').replace(/@小钠/g, '').trim();
 }
 
 function isSuspicious(text) {
@@ -1983,15 +1982,11 @@ async function runAI(event, userInput, allowSkip = false) {
             }
         }
 
-        // 逐条清洗（去掉方括号等），保留 AI 拆出的多条
+        // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
-            .map((t) => t.replace(/\[[^\]]+\]/g, '').trim())
+            .map((t) => t.trim())
             .filter(Boolean);
         if (!parts.length) { parts = ['嗯？我没听懂，能再说一遍吗？']; wantVoice = false; }
-        if (parts.some((t) => t.includes('[') || t.includes(']'))) {
-            parts = ['这个我发不了，重新说一遍？'];
-            wantVoice = false;
-        }
 
         // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
         const withAt = event.message_type === 'group';
@@ -2056,8 +2051,8 @@ async function runGameCommand({ player, text, isPrivate }) {
         sink.push('❌ 指令错误：' + e.message);
     }
     if (handled === false) return null;   // 认不出的指令：不算已处理，交回 AI 流程
-    // 去掉方括号（输出硬规矩），再拼成一段
-    return sink.join('\n').replace(/\[[^\]]+\]/g, '').trim();
+    // 拼成一段回注游戏（保留原文，不再删方括号）
+    return sink.join('\n').trim();
 }
 
 /** 游戏内玩家提问（公聊关键词触发 / /xn 私聊）走本机 AI，返回回复文本 */
