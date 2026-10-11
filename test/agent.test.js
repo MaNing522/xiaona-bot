@@ -1,6 +1,6 @@
 // agent.js 的单测：工具按身份过滤（对应身份对应调用）+ 工具调用循环 + 越权拒绝。
 import { describe, it, expect } from 'vitest';
-import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop } from '../agent.js';
+import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, decideSkip } from '../agent.js';
 
 const names = (role) => toolsForRole(role).map((t) => t.function.name);
 
@@ -96,5 +96,24 @@ describe('runAgentLoop（工具调用循环）', () => {
     const ctx = { mcStatus: async () => 'ok' };
     const out = await runAgentLoop({ messages: [], tools: toolsForRole('guest'), chat, ctx, maxSteps: 3 });
     expect(out).toBe('');
+  });
+});
+
+describe('decideSkip（是否跳过回复）', () => {
+  it('不允许跳过时永不跳过', () => {
+    expect(decideSkip('随便说点', false, false)).toBe(false);
+  });
+
+  it('允许跳过 + 没写【REPLY:是】→ 跳过', () => {
+    expect(decideSkip('嗯嗯', true, false)).toBe(true);
+    expect(decideSkip('【REPLY:否】', true, false)).toBe(true);
+  });
+
+  it('允许跳过 + 明确写了【REPLY:是】→ 不跳过', () => {
+    expect(decideSkip('【REPLY:是】在呢～', true, false)).toBe(false);
+  });
+
+  it('关键：调过工具即使没写标记也不跳过（查服务器被吞的回归）', () => {
+    expect(decideSkip('play.xxx 在线 3 人', true, true)).toBe(false);
   });
 });

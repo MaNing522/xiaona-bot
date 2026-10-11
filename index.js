@@ -12,7 +12,7 @@ import { getSearchContext } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
 import { chatCompletionRaw, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
-import { toolsForRole, runAgentLoop } from './agent.js';
+import { toolsForRole, runAgentLoop, decideSkip } from './agent.js';
 import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
@@ -354,6 +354,7 @@ function buildDecisionPrompt(userInput, memory, allowSkip) {
 - 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
 - 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
 - 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
+- **只查本条消息要查的东西**：历史【最近对话】里提过的服务器/玩家不要顺手重复再查一遍，也别一条里塞多个查询。
 
 ${tagRule}
 `;
@@ -417,21 +418,19 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         toolChoice: 'auto',
     });
 
+    // 记录本轮是否调用过工具：调了工具 = 明确在回应，绝不能再被"是否接话"判成跳过
+    let usedTool = false;
     let reply = await runAgentLoop({
         messages,
         tools,
         chat,
         ctx,
-        onTool: (name, args) => logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`),
+        onTool: (name, args) => { usedTool = true; logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
     });
 
     // 解析格式标记（容忍全角冒号、空格等写法）
-    let skip = false;
-    if (allowSkip) {
-        // 从严：只有明确写了【REPLY:是】才回复，其余（否/畸形/漏写）一律不接
-        const yes = reply.match(/【\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*】/);
-        skip = !yes;
-    }
+    // 调过工具=明确在办事，即使没写【REPLY:是】也不能跳过（见 decideSkip）
+    const skip = decideSkip(reply, allowSkip, usedTool);
     reply = reply.replace(/【\s*REPLY\s*[:：][^】]*】/g, '');
 
     let wantVoice = false;
@@ -474,11 +473,16 @@ function buildAgentCtx(key) {
 async function agentMcStatus(address) {
     const addr = String(address || '').trim();
     if (addr) {
-        try {
-            return formatServer(await queryServer(addr));
-        } catch (e) {
-            return '查询该服务器失败：' + e.message;
+        // 公共 API 偶尔抖一下，重试一次再报错（fetch 失败才重试，查不到人会正常返回）
+        let lastErr = null;
+        for (let i = 0; i < 2; i += 1) {
+            try {
+                return formatServer(await queryServer(addr));
+            } catch (e) {
+                lastErr = e;
+            }
         }
+        return `查询服务器 ${addr} 失败（网络不通或地址无效）：${lastErr ? lastErr.message : '未知错误'}`;
     }
     const connected = isMcConnected();
     let players = [];
