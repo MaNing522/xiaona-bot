@@ -139,7 +139,7 @@ gradlew.bat build
 | AI | `AI_PROVIDER` / `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 服务商（`deepseek`/`openai`/`custom`，默认 deepseek）；URL 与模型留空则用所选服务商的默认值 |
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
 | 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
-| 余额基数 | `AI_BALANCE_RECHARGE_BASE` / `AI_BALANCE_GRANT_BASE` / `AI_BALANCE_USED_BASE` | `#余额` 的累计充值/已使用基数（元）；留空则自首次查询起记账 |
+| 余额统计 | `#余额矫正 <充值总金额> <已使用> [币种]` | `#余额` 的累计充值/已使用直接用命令设定（元），之后充值在该基数上累加；不设则自首次查询起记账 |
 | 记忆 | `MEMORY_MAX_RECENT` / `MEMORY_MAX_LONGTERM` / `MEMORY_MAX_AGE_DAYS` | 记忆保留上限与超时清理 |
 | 上下文 | `MEMORY_CONTEXT_RECENT` | 每次对话注入给 AI 的「最近对话」条数（默认 20，建议 20~30） |
 | 唤起会话 | `ENGAGE_DEBUG` | 置 `true` 打印唤起判断的额度消耗，便于排查 |
@@ -198,7 +198,7 @@ gradlew.bat build
 | 记忆 | `#记住 <内容>` `#记忆 [关键词]` `#忘记 <序号>` `#清除记忆` |
 | 群管 | `#禁言` `#解禁` `#踢出` `#拉黑` `#全体禁言` `#群公告` |
 | 定时 | `#定时提醒` `#定时禁言` `#定时解禁` `#定时列表` `#取消定时` |
-| 主人 | `#授权` `#拒绝授权` `#取消授权` `#余额` `#换名` `#换头像` `#接管` `#恢复AI` `#同意` `#拒绝` |
+| 主人 | `#授权` `#拒绝授权` `#取消授权` `#余额` `#余额矫正` `#换名` `#换头像` `#接管` `#恢复AI` `#同意` `#拒绝` |
 | 工具 | `#截图` `#shot <网址>` `#聊天记录 <QQ号 或 @某人> <文案>` |
 
 完整说明见群内 `#帮助 <分类>`。

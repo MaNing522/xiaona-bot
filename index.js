@@ -877,6 +877,10 @@ async function handleCommand(event, text) {
         case '/balance':
             return doBalance(event, r);
 
+        case '/余额矫正':
+        case '/balancefix':
+            return doCorrectBalance(event, r, arg);
+
         case '/同意':
         case '/拒绝':
             return handleManualApproval(event, cmd, arg);
@@ -1157,9 +1161,9 @@ async function doMc(event, server) {
 /**
  * 余额统计：服务商只给"当前余额"，没有账单/用量接口，所以"累计充值""已使用"只能本地采样累积。
  * 每次查询时和上次快照比 —— 充值/赠送只会让账上余额上升，把上升量累加即累计充值/赠送；
- * 已使用 = 累计充值 + 累计赠送 - 当前余额。
+ * 已使用 = 已使用基数 + 矫正时的余额 + 之后的入账 - 当前余额。
  * 只能统计**首次查询之后**的变化，更早的消费服务商不提供、无从追溯；
- * 想覆盖更早的历史，用 .env 的 AI_BALANCE_*_BASE 填基数。
+ * 想覆盖更早的历史，用主人命令 `#余额矫正 <充值总金额> <已使用>` 直接设定这两个变量。
  * 按币种分别累计，落盘到 data/balance.json。
  */
 function initBalance() {
@@ -1182,17 +1186,14 @@ function trackBalance(info) {
     const nowTotal = balanceCents(info.total_balance);
     let st = balanceStat.currencies[cur];
     if (!st) {
-        // 首次：账上现有的钱当作"累计充值/赠送"的起点。
-        // .env 里若显式给了基数（补齐服务商不提供的更早历史），用配置值覆盖。
-        const envRecharge = balanceCents(process.env.AI_BALANCE_RECHARGE_BASE);
-        const envGrant = balanceCents(process.env.AI_BALANCE_GRANT_BASE);
-        const envUsed = balanceCents(process.env.AI_BALANCE_USED_BASE);
+        // 首次：账上现有的钱当作"累计充值/赠送"的起点；已使用从 0 起算。
+        // （更早的历史用 #余额矫正 设定）
         st = {
-            rechargeCents: envRecharge > 0 ? envRecharge : nowTop,
-            grantedCents: envGrant > 0 ? envGrant : nowGrant,
-            usedBaseCents: envUsed,
-            firstTotalCents: nowTotal,
-            inflowCents: 0,     // 统计开始后累计"入账"增量（充值+赠送）
+            rechargeCents: nowTop,      // 累计充值总金额（含矫正设定值，之后随充值递增）
+            grantedCents: nowGrant,     // 累计赠送
+            usedBaseCents: 0,           // 矫正设定的"已使用"基数
+            firstTotalCents: nowTotal,  // 设立基数那一刻的总余额（推算消费用）
+            inflowCents: 0,             // 设立基数之后累计的入账（充值+赠送）
             last: null,
         };
     } else if (st.last) {
@@ -1209,6 +1210,53 @@ function trackBalance(info) {
 }
 
 /**
+ * 余额矫正：直接把某个币种的"累计充值总金额"和"已使用"设成给定值，并以当前余额作为新起点。
+ * 这样矫正后立刻显示的就是设定值，且**之后每笔充值都会在这个设定值基础上继续累加**。
+ * @param {object} info 一次余额快照（含 currency / topped_up_balance / granted_balance / total_balance）
+ * @param {number} rechargeCents 充值总金额（分）
+ * @param {number} usedCents 已使用（分）
+ */
+function correctBalance(info, rechargeCents, usedCents) {
+    const cur = String(info.currency || 'CNY');
+    const nowTop = balanceCents(info.topped_up_balance);
+    const nowGrant = balanceCents(info.granted_balance);
+    const nowTotal = balanceCents(info.total_balance);
+    const prev = balanceStat.currencies[cur];
+    const st = {
+        rechargeCents,
+        // 赠送不参与矫正：已有累计则沿用，否则以当前赠金余额为起点
+        grantedCents: prev ? prev.grantedCents : nowGrant,
+        usedBaseCents: usedCents,
+        firstTotalCents: nowTotal,
+        inflowCents: 0,
+        last: { top: nowTop, grant: nowGrant, total: nowTotal, at: Date.now() },
+    };
+    balanceStat.currencies[cur] = st;
+    saveBalance();
+    return st;
+}
+
+/**
+ * 拉取服务商余额，返回 balance_infos 数组。
+ * 没配 key / 服务商没有余额接口 / 请求失败都抛错（带说明），由调用方转成友好提示。
+ */
+async function fetchBalanceInfos() {
+    const apiKey = process.env.AI_API_KEY;
+    if (!apiKey) throw new Error('没有配置 AI_API_KEY');
+    const endpoint = balanceEndpoint();
+    if (!endpoint) throw new Error(`当前服务商（${getProviderInfo().name}）没有余额接口，无法查询`);
+    const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`余额查询失败（HTTP ${res.status}）：该服务商可能没有余额接口`);
+    const data = await res.json();
+    const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+    if (!infos.length) throw new Error('响应里没有余额信息（当前服务商可能不支持）');
+    return { infos, available: data.is_available !== false };
+}
+
+/**
  * 查 AI 服务商账户余额（DeepSeek：GET /user/balance）。
  * 接口地址由 aiService 按服务商推导；该服务商没有余额接口时给友好提示而不是报错崩掉。
  */
@@ -1216,43 +1264,71 @@ async function doBalance(event, role) {
     if (role !== 'owner' && role !== 'admin') {
         return sendReply(event, '❌ 只有主人/管理员可以查看余额');
     }
-    const apiKey = process.env.AI_API_KEY;
-    if (!apiKey) return sendReply(event, '❌ 没有配置 AI_API_KEY');
-    const endpoint = balanceEndpoint();
-    if (!endpoint) {
-        return sendReply(event, `❌ 当前服务商（${getProviderInfo().name}）没有余额接口，无法查询`);
-    }
+    let fetched;
     try {
-        const res = await fetch(endpoint, {
-            headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-            signal: AbortSignal.timeout(15000),
-        });
-        if (!res.ok) {
-            return sendReply(event, `❌ 余额查询失败（HTTP ${res.status}）：该服务商可能没有余额接口`);
-        }
-        const data = await res.json();
-        const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
-        if (!infos.length) return sendReply(event, '💰 查到了响应，但里面没有余额信息（当前服务商可能不支持）');
-
-        const multi = infos.length > 1;
-        const blocks = infos.map((b) => {
-            const st = trackBalance(b);
-            const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
-            const tag = sym || ` ${b.currency || ''} `;           // 没有符号的币种直接用代码
-            const total = balanceCents(b.total_balance);
-            // 已使用 = 统计开始前已用 + （起始余额 + 之后的入账 - 当前余额）
-            const used = Math.max(0, st.usedBaseCents + st.firstTotalCents + st.inflowCents - total);
-            const head = multi ? `【${b.currency || '?'}】\n` : '';
-            return head
-                + `· 当前余额：${tag}${balanceStr(total)}（充值余 ${tag}${balanceStr(balanceCents(b.topped_up_balance))} + 赠金余 ${tag}${balanceStr(balanceCents(b.granted_balance))}）\n`
-                + `· 累计充值：${tag}${balanceStr(st.rechargeCents)}　累计赠送：${tag}${balanceStr(st.grantedCents)}\n`
-                + `· 已使用（累计）：${tag}${balanceStr(used)}`;
-        });
-        const head = data.is_available ? '💰 AI 账户余额：' : '⚠️ AI 账户余额（当前不可用）：';
-        return sendReply(event, head + '\n' + blocks.join('\n'));
+        fetched = await fetchBalanceInfos();
     } catch (e) {
-        return sendReply(event, '❌ 余额查询出错：' + String(e.message).slice(0, 120));
+        return sendReply(event, '❌ ' + String(e.message).slice(0, 120));
     }
+    const { infos, available } = fetched;
+    const multi = infos.length > 1;
+    const blocks = infos.map((b) => {
+        const st = trackBalance(b);
+        const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
+        const tag = sym || ` ${b.currency || ''} `;           // 没有符号的币种直接用代码
+        const total = balanceCents(b.total_balance);
+        // 已使用 = 已使用基数（矫正设定）+ 矫正时余额 + 之后的入账 - 当前余额
+        const used = Math.max(0, st.usedBaseCents + st.firstTotalCents + st.inflowCents - total);
+        const head = multi ? `【${b.currency || '?'}】\n` : '';
+        return head
+            + `· 当前余额：${tag}${balanceStr(total)}（充值余 ${tag}${balanceStr(balanceCents(b.topped_up_balance))} + 赠金余 ${tag}${balanceStr(balanceCents(b.granted_balance))}）\n`
+            + `· 累计充值：${tag}${balanceStr(st.rechargeCents)}　累计赠送：${tag}${balanceStr(st.grantedCents)}\n`
+            + `· 已使用（累计）：${tag}${balanceStr(used)}`;
+    });
+    const head = available ? '💰 AI 账户余额：' : '⚠️ AI 账户余额（当前不可用）：';
+    return sendReply(event, head + '\n' + blocks.join('\n'));
+}
+
+/**
+ * #余额矫正 <充值总金额> <已使用> [币种]
+ * 直接把"累计充值总金额"和"已使用"两个变量设成给定值（单位：元），并以当前余额为新起点。
+ * 之后每笔充值都会在这个设定值的基础上继续累加。
+ */
+async function doCorrectBalance(event, role, arg) {
+    if (role !== 'owner') return sendReply(event, '❌ 只有主人可以矫正余额');
+    const parts = arg.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+        return sendReply(event, '❌ 用法：#余额矫正 <充值总金额> <已使用> [币种]\n'
+            + '两个数分别设定"累计充值总金额"和"已使用"（单位：元），之后充值会在该基数上继续累加。\n'
+            + '例：#余额矫正 100 30');
+    }
+    const recharge = Number(parts[0]);
+    const used = Number(parts[1]);
+    const cur = (parts[2] || '').toUpperCase();
+    if (!Number.isFinite(recharge) || recharge < 0 || !Number.isFinite(used) || used < 0) {
+        return sendReply(event, '❌ 金额要填非负数字（元），例如：#余额矫正 100 30');
+    }
+    if (cur && !/^[A-Z]{3}$/.test(cur)) {
+        return sendReply(event, '❌ 币种要填 3 位代码，如 CNY / USD');
+    }
+    let infos;
+    try {
+        ({ infos } = await fetchBalanceInfos());
+    } catch (e) {
+        return sendReply(event, '❌ 矫正失败（需要能查到当前余额才能设定起点）：' + String(e.message).slice(0, 100));
+    }
+    const targets = cur ? infos.filter((b) => String(b.currency || '').toUpperCase() === cur) : infos;
+    if (!targets.length) return sendReply(event, cur ? `❌ 余额里没有 ${cur} 币种` : '❌ 响应里没有余额信息');
+    if (!cur && targets.length > 1) {
+        return sendReply(event, '❌ 该账户有多个币种，请指定：#余额矫正 <充值总金额> <已使用> <币种>');
+    }
+    const lines = targets.map((b) => {
+        const st = correctBalance(b, balanceCents(recharge), balanceCents(used));
+        const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
+        const tag = sym || ` ${b.currency || ''} `;
+        return `【${b.currency || '?'}】累计充值 ${tag}${balanceStr(st.rechargeCents)}　已使用 ${tag}${balanceStr(st.usedBaseCents)}`;
+    });
+    return sendReply(event, '✅ 余额已矫正，之后充值时会在设定值基础上继续累加：\n' + lines.join('\n'));
 }
 
 async function doScreen(event) {
