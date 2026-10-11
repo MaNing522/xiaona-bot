@@ -1,6 +1,6 @@
 // ============================================================
 // index.js - 小钠 QQ机器人（真实QQ账号 · NapCat OneBot11）
-// AI 决策(联网搜索 + 语音) + 截图指令
+// AI Agent（工具调用：联网搜索 / MC状态 / 玩家查询 / 余额 / 记忆，按身份开放） + 语音 + 截图指令
 // ============================================================
 import WebSocket from 'ws';
 import fs from 'fs';
@@ -11,7 +11,8 @@ import { textToSpeech, cleanVoiceCache } from './tts.js';
 import { getSearchContext } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
-import { chatCompletion, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
+import { chatCompletionRaw, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
+import { toolsForRole, runAgentLoop } from './agent.js';
 import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
@@ -312,48 +313,36 @@ function stripToolTags(text) {
 }
 
 /**
- * @param allowSearch 是否让 AI 判断要不要联网搜索（第二轮已搜完就不需要了）
- * @param allowSkip   是否让 AI 判断"这条其实不是在叫小钠"从而不回复。
- *                    只在"群里只命中了关键词"或"唤起会话的跟进消息"这类模糊触发时开启；
- *                    @了机器人、引用了机器人、私聊，都是明确在跟它说话，不允许跳过。
- *                    开启时**从严**：只有明确输出【REPLY:是】才回复，其余（否/畸形/漏写）一律不接。
- * @param userId      提问者 QQ，作为 user 传给 AI 服务商（KV 缓存隔离，提高同人连续对话的命中率）
+ * 拼本轮给模型的决策提示词（工具调用之外，还需它自己给出的格式标记）。
+ * 搜索/查数据这类"做事"已交给工具（function calling），这里只管：
+ *   是否接话（可选）、要不要发语音、怎么分条。
  */
-async function callAIWithDecision(userInput, searchResults = null, memory = '', allowSearch = true, allowSkip = false, userId = '') {
+function buildDecisionPrompt(userInput, memory, allowSkip) {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
-    // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
-    const tagRule = '【SEARCH:…】【VOICE:…】【REPLY:…】和“单独一行的三个连字符”都是合法的“工具标记”，'
+    // 结果就是该发语音时不发 —— 这里必须显式豁免。
+    const tagRule = '【VOICE:…】【REPLY:…】和“单独一行的三个连字符”都是合法的“格式标记”，'
         + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释；'
         + '标记必须写完整、带上结尾的“】”，且标记里只放取值，不要把正文写进标记里面。';
 
-    let decisionPrompt = `你是小钠，一个智能QQ机器人助手。
+    let p = `你是小钠，一个智能QQ机器人助手。
 
-【重要】你需要同时完成以下判断，并在回复中通过特殊标记告知框架。
+【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要外部实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
+
 ${tagRule}
 `;
-
     let step = 1;
     if (allowSkip) {
-        decisionPrompt += `
+        p += `
 ${step++}. **是否需要接话（默认不接，一律从严）**：小钠刚被人叫过，现在判断这条消息要不要接。
    - 只有**明确是在跟小钠说话**才接：直接问它、让它做事、接着它的话追问或补充、明确 @ 它或叫它名字。
-   - 以下**一律不接**：说给别人听的、别人之间的对话、把小钠当话题聊（评论它、拿它打比方）、转述或复述别人的话、没有文字内容（纯表情/图片/符号）、另一个机器人的寒暄，以及**明确让它别说话的要求**（“别说了”“闭嘴”“不用回”“安静点”）。
+   - 以下**一律不接**：说给别人听的、别人之间的对话、把小钠当话题聊、转述或复述别人的话、没有文字内容（纯表情/图片/符号）、另一个机器人的寒暄，以及**明确让它别说话的要求**（“别说了”“闭嘴”“不用回”“安静点”）。
    - **判断标准从严**：只要需要靠猜、或者有半分犹豫，就算不接。
    - 你必须先输出【REPLY:是】或【REPLY:否】：**只有写【REPLY:是】才会真的发出去**；写【REPLY:否】、写成别的、或者忘了写，都会当作不接。
-   - 判【REPLY:否】时不要再生成任何回复内容。
+   - 判【REPLY:否】时不要再生成任何回复内容，也不要调用任何工具。
 `;
     }
-    if (allowSearch) {
-        decisionPrompt += `
-${step++}. **联网搜索判断**（默认不搜，拿不准就别搜）：
-   - 只有"答案必须依赖此刻的外部信息、你凭自己不可能知道"时才搜：天气、新闻、赛事比分、股价汇率、票价、软件最新版本/价格、某人的近况等。
-   - 以下一律不搜：闲聊寒暄、情绪吐槽、玩笑调侃、常识、算数、翻译、写代码/写文案、能靠上下文答的、以及问小钠自己的事。
-   - 需要搜索 → 输出【SEARCH:需要|关键词:搜索词】；不需要 → 输出【SEARCH:不需要】
-   - 关键词要短、能直接喂给搜索引擎（如“武汉今天天气”），别带“请问”“帮我查”这类口语。
-`;
-    }
-    decisionPrompt += `
+    p += `
 ${step++}. **语音发送判断**：
    - 如果回复内容适合语音朗读（简短、自然、口语化），且用户有语音意图，标记：【VOICE:YES】
    - **重要**：当【VOICE:YES】时，回复文本必须是纯语音内容，不要添加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
@@ -364,48 +353,126 @@ ${step}. **生成回复**：
    - 一条内容太长、或本来就想分几口气说时，可以拆成多条发：**单独占一行写三个连字符 ---** 当作分隔，最多 3 条；不需要拆就别写分隔线。
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
-${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以上搜索结果回答用户的问题。\n` : ''}
 
 现在请回复用户：${userInput}`;
+    return p;
+}
+
+/**
+ * 生成一条 AI 回复：走**工具调用 agent 循环**（模型自主决定调工具 → 拿结果 → 再决定 → 最终回话）。
+ * 工具按提问者身份过滤（对应身份对应调用），执行时再校验一次。
+ *
+ * @param {object}  o
+ * @param {string}  o.metaLine   注入的元数据 + 消息内容
+ * @param {string} [o.memory]    已知记忆
+ * @param {string} [o.role]      提问者身份 guest|authorized|admin|owner
+ * @param {boolean}[o.allowSkip] 是否判断"这条不是叫我"从而不回复（从严）
+ * @param {boolean}[o.allowSearch] 是否开放联网搜索工具
+ * @param {string} [o.userId]    KV 缓存隔离
+ * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
+ * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
+ */
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, userId = '', ctx = {} }) {
+    let tools = toolsForRole(role);
+    if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
 
     const sys = getSystemPrompt();
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
-        { role: 'user', content: decisionPrompt },
+        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip) },
     ];
 
-    let reply = await chatCompletion({ messages, temperature: 0.7, maxTokens: pickMaxTokens(userInput), userId });
+    const chat = (body) => chatCompletionRaw({
+        messages: body.messages,
+        temperature: 0.7,
+        maxTokens: pickMaxTokens(metaLine),
+        userId,
+        tools: body.tools,
+        toolChoice: 'auto',
+    });
 
-    // 解析标记：容忍全角冒号、空格、缺失关键词等写法
+    let reply = await runAgentLoop({
+        messages,
+        tools,
+        chat,
+        ctx,
+        onTool: (name, args) => logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`),
+    });
+
+    // 解析格式标记（容忍全角冒号、空格等写法）
     let skip = false;
     if (allowSkip) {
-        // 从严：**只有明确写了【REPLY:是】才回复**。写成"否"、写成别的、或干脆忘了写，
-        // 一律当作不接 —— 拿不准时宁可漏回，真在叫小钠的人会再叫一次。
+        // 从严：只有明确写了【REPLY:是】才回复，其余（否/畸形/漏写）一律不接
         const yes = reply.match(/【\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*】/);
         skip = !yes;
     }
     reply = reply.replace(/【\s*REPLY\s*[:：][^】]*】/g, '');
-
-    let needSearch = false, searchKeyword = '';
-    if (allowSearch) {
-        const sm = reply.match(/【\s*SEARCH\s*[:：]\s*需要(?:\s*[|｜]\s*关键词\s*[:：]\s*([^】]+))?\s*】/);
-        if (sm) {
-            needSearch = true;
-            searchKeyword = String(sm[1] || '').trim();
-        }
-    }
-    // 无论是否解析出关键词，都把标记整体清掉 —— 否则畸形写法会漏到用户看到的消息里
-    reply = reply.replace(/【\s*SEARCH\s*[:：][^】]*】/g, '');
 
     let wantVoice = false;
     const voiceMatch = reply.match(/【\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*】/i);
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
     reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
 
-    // 兜底：清掉漏写 】 的畸形工具标记，避免 【REPLY:… 直接漏给用户
+    // 兜底：清掉漏写 】 的畸形标记，避免 【REPLY:… 直接漏给用户
     reply = stripToolTags(reply);
 
-    return { reply: reply.trim(), needSearch, searchKeyword, wantVoice, skip };
+    return { reply: reply.trim(), wantVoice, skip };
+}
+
+// ---------- agent 工具的执行上下文（把真实能力注入给 agent.js 的工具） ----------
+/** 组装当前会话的工具上下文；key 为记忆/会话键 */
+function buildAgentCtx(key) {
+    return {
+        search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
+        mcStatus: () => agentMcStatus(),
+        playerQuery: (name) => agentPlayerQuery(name),
+        balance: () => agentBalance(),
+        remember: (text) => {
+            if (!text) return '要记住的内容为空。';
+            addMemory(key, text);
+            return `已记住：${text}`;
+        },
+        recall: (kw) => {
+            if (!kw) return '没有提供检索关键词。';
+            const r = searchMemory(key, kw);
+            return r ? r : '没找到相关记忆。';
+        },
+    };
+}
+
+/** 工具：MC 服务器状态（是否连接 + 在线玩家） */
+async function agentMcStatus() {
+    const connected = isMcConnected();
+    let players = [];
+    if (connected) {
+        try { players = await getPlayers(true); } catch { players = []; }
+    }
+    const names = players.map((p) => p && p.name).filter(Boolean);
+    return `MC 服务器：${connected ? '已连接' : '未连接'}；在线玩家 ${names.length} 人`
+        + (names.length ? `（${names.join('、')}）` : '');
+}
+
+/** 工具：Plan 玩家数据 */
+async function agentPlayerQuery(name) {
+    if (!name) return '请提供玩家游戏ID。';
+    try {
+        return formatPlanPlayer(name, await getPlanPlayer(name));
+    } catch (e) {
+        return '查询玩家失败：' + e.message;
+    }
+}
+
+/** 工具：AI 账户余额（只读，不改动累计统计） */
+async function agentBalance() {
+    try {
+        const { infos } = await fetchBalanceInfos();
+        return infos.map((b) => {
+            const tag = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : `${b.currency || ''} `;
+            return `${tag}${b.total_balance}（充值余 ${tag}${b.topped_up_balance} + 赠金余 ${tag}${b.granted_balance}）`;
+        }).join('；') || '没有余额信息。';
+    } catch (e) {
+        return '查询余额失败：' + e.message;
+    }
 }
 
 /**
@@ -2100,8 +2167,16 @@ async function runAI(event, userInput, allowSkip = false) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        const result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, allowSkip, String(event.user_id));
-        let { reply, needSearch, searchKeyword, wantVoice } = result;
+        const result = await aiReply({
+            metaLine,
+            memory: mem,
+            role: perm.role(String(event.user_id)),
+            allowSkip,
+            allowSearch: SEARCH_ENABLED,
+            userId: String(event.user_id),
+            ctx: buildAgentCtx(convKey(event)),
+        });
+        let { reply, wantVoice } = result;
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
         if (result.skip) {
@@ -2109,18 +2184,6 @@ async function runAI(event, userInput, allowSkip = false) {
             return;
         }
 
-        if (needSearch) {
-            // AI 判定了要搜；万一它没给出关键词，就退回用用户原话当搜索词（清掉 @ 等噪音）
-            const q = (searchKeyword || userInput || '').replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
-            if (q) {
-                logger.info(`🔍 AI 决定搜索: "${q}"`);
-                const searchResults = await getSearchContext(q, 5);
-                // 第二轮不再让它判断要不要搜（已经搜完了），只让它据此作答
-                const finalResult = await callAIWithDecision(metaLine, searchResults, mem, false, false, String(event.user_id));
-                reply = finalResult.reply;
-                wantVoice = finalResult.wantVoice;
-            }
-        }
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
@@ -2228,18 +2291,18 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     const mem = memoryContext(key);
 
     // 游戏玩家没有 QQ 号，用玩家名当 user（同样是稳定的"同一个人"标识，照样能吃到缓存隔离）
-    let result = await callAIWithDecision(metaLine, null, mem, SEARCH_ENABLED, false, player);
-    if (result.needSearch) {
-        // 没给关键词就退回用玩家原话
-        const q = (result.searchKeyword || text || '').replace(/\s+/g, ' ').trim();
-        if (q) {
-            logger.info(`🔍 游戏内 AI 决定搜索: "${q}"`);
-            const searchResults = await getSearchContext(q, 5);
-            result = await callAIWithDecision(metaLine, searchResults, mem, false, false, player);
-        }
-    }
+    const mcRole = perm.role(mcQq || '');
+    const result = await aiReply({
+        metaLine,
+        memory: mem,
+        role: mcRole,
+        allowSkip: false,
+        allowSearch: SEARCH_ENABLED,
+        userId: player,
+        ctx: buildAgentCtx(key),
+    });
 
-    // 工具标记已在 callAIWithDecision 里剥离；这里只兜底再清一次，不再按方括号拦内容
+    // 标记已在 aiReply 里剥离；这里只兜底再清一次
     let reply = stripToolTags(String(result.reply || '')).trim();
     if (!reply) reply = '嗯？我没听懂，能再说一遍吗？';
     recordMessage(key, 'ai', reply);

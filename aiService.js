@@ -99,11 +99,11 @@ function intEnv(name, dflt) {
 }
 
 /**
- * 发一次对话补全请求，返回助手回复文本。
- * @param {{messages:Array, temperature?:number, maxTokens?:number, timeoutMs?:number, userId?:string}} opts
- * @returns {Promise<string>}
+ * 发一次对话补全请求，返回**完整的助手消息**（含 tool_calls），供 agent 工具循环使用。
+ * tools 传入 OpenAI 兼容的工具定义数组时，模型可自主返回 tool_calls。
+ * @returns {Promise<{content:string, tool_calls:Array|null}>}
  */
-export async function chatCompletion({ messages, temperature = 0.7, maxTokens, timeoutMs = 60000, userId }) {
+export async function chatCompletionRaw({ messages, temperature = 0.7, maxTokens, timeoutMs = 60000, userId, tools, toolChoice }) {
   const c = getProviderInfo();
   if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
   if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
@@ -116,6 +116,10 @@ export async function chatCompletion({ messages, temperature = 0.7, maxTokens, t
   };
   // 传 user：服务商据此做 KVCache 隔离，同一个人的连续对话更容易命中前缀缓存（命中价差极大）
   if (userId) body.user = String(userId);
+  if (Array.isArray(tools) && tools.length) {
+    body.tools = tools;
+    body.tool_choice = toolChoice || 'auto';
+  }
 
   const res = await fetch(c.url, {
     method: 'POST',
@@ -127,7 +131,18 @@ export async function chatCompletion({ messages, temperature = 0.7, maxTokens, t
 
   const data = await res.json();
   if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');
-  return data.choices[0].message.content || '';
+  const m = data.choices[0].message || {};
+  return { content: m.content || '', tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : null };
+}
+
+/**
+ * 发一次对话补全请求，返回助手回复文本。
+ * @param {{messages:Array, temperature?:number, maxTokens?:number, timeoutMs?:number, userId?:string}} opts
+ * @returns {Promise<string>}
+ */
+export async function chatCompletion(opts) {
+  const { content } = await chatCompletionRaw(opts);
+  return content;
 }
 
 /** 启动时打印一行，便于确认当前接的是哪家 */
