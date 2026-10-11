@@ -915,16 +915,30 @@ async function handleCommand(event, text) {
 
         case '/授权': {
             if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行授权操作。');
-            const t = resolveTarget(event, arg);
-            if (!t) {
+            if (!arg) {
                 const list = perm.listAuthorized();
                 const pend = perm.listPending();
-                return sendReply(event, `👑 主人: ${perm.getOwner()}\n🟢 已授权(${list.length}): ${list.length ? list.join('、') : '无'}\n⏳ 待审批(${pend.length}): ${pend.length ? pend.join('、') : '无'}`);
+                const bl = perm.listBlacklist();
+                const exOwners = perm.listExtraOwners();
+                const exAdmins = perm.listExtraAdmins();
+                const owners = [perm.getOwner(), ...exOwners].filter(Boolean);
+                return sendReply(event,
+                    `👑 主人(${owners.length}): ${owners.join('、') || '无'}\n`
+                    + `🛡️ 管理员(${exAdmins.length}): ${exAdmins.join('、') || '无'}\n`
+                    + `✅ 授权用户(${list.length}): ${list.join('、') || '无'}\n`
+                    + `🚫 黑名单(${bl.length}): ${bl.join('、') || '无'}\n`
+                    + `⏳ 待审批(${pend.length}): ${pend.join('、') || '无'}\n`
+                    + '用法：#授权 <@或QQ号> [等级]（0主人/1管理员/2授权用户/3普通/4黑名单，默认2）');
             }
-            if (perm.role(t) === 'admin') return sendReply(event, `ℹ️ QQ ${t} 本就是管理员。`);
-            const g = perm.grant(t);
-            if (g.added) inviteSendOwner(t, '已授权');
-            return sendReply(event, g.msg);
+            // 末位若是单个 0-4，视为等级；否则默认 2
+            const parts = arg.split(/\s+/).filter(Boolean);
+            const last = parts[parts.length - 1];
+            const level = (parts.length >= 2 && /^[0-4]$/.test(last)) ? Number(last) : 2;
+            const t = resolveTarget(event, arg);
+            if (!t) return sendReply(event, '❌ 请 @对方 或提供 QQ 号。');
+            const res = perm.setLevel(t, level);
+            if (res.ok && level === 2) inviteSendOwner(t, '已授权');
+            return sendReply(event, res.msg);
         }
 
         case '/拒绝授权': {
@@ -1131,7 +1145,7 @@ setInterval(() => {
 // 提交授权申请（本人）
 async function doApplyAuth(event, uid) {
     const r = perm.requestAuth(uid);
-    if (r.ok) notifyOwner(`🔔 收到授权申请：QQ ${uid}\n主人请回复：\n#授权 ${uid}   同意\n#拒绝授权 ${uid}   拒绝`).catch(() => {});
+    if (r.ok) notifyOwner(`🔔 收到授权申请：QQ ${uid}\n主人请回复：\n#授权 ${uid} 2   同意（设为授权用户）\n#拒绝授权 ${uid}   拒绝`).catch(() => {});
     return sendReply(event, r.ok ? `⏳ ${r.msg}` : `ℹ️ ${r.msg}`);
 }
 
@@ -1932,6 +1946,16 @@ async function onMessage(event) {
     let userInput = cleanMessage(raw);
     // 纯 @ 的消息没有文字，但它仍然是要转发的内容，不能在这里被丢掉
     if (!userInput && !(isBridgeGroup && hasForwardable(segments))) return;
+
+    // 黑名单用户：不再响应（命令、AI、验证码一律不理），但在桥接群里照常转发进游戏
+    if (perm.isBlacklisted(uid)) {
+        if (isBridgeGroup && hasForwardable(segments)) {
+            const who = (event.sender && (event.sender.card || event.sender.nickname)) || event.user_id;
+            forwardGroupToMc(event, who);
+        }
+        logger.info(`🚫 黑名单，忽略: ${uid}`);
+        return;
+    }
 
     // #绑定 的图形验证码答案：先于命令/转发/AI 处理，
     // 否则验证码会被当成普通聊天转发进游戏、或交给 AI 回复
