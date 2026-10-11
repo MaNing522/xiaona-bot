@@ -531,9 +531,9 @@ function splitReplies(text, max = 3) {
 }
 
 // ---------- 消息净化 ----------
+/** 输入不做任何过滤：原样（仅去首尾空白）交给 AI。防注入一律由提示词负责。 */
 function cleanMessage(content) {
-    // 只剥掉对机器人的 @，不再删方括号内容：用户正常输入里的方括号照原样交给 AI
-    return String(content ?? '').replace(/@小钠/g, '').trim();
+    return String(content ?? '').trim();
 }
 
 // ---------- 发送前体检：真实脏字 → 谐音 ----------
