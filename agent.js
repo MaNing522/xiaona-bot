@@ -25,7 +25,7 @@ export const AGENT_TOOLS = [
     minRole: 'guest',
     function: {
       name: 'web_search',
-      description: '联网搜索实时信息。只在答案依赖此刻的外部信息、你凭自己不可能知道时才用：天气、新闻、赛事比分、股价汇率、票价、软件最新版本等。闲聊、常识、算数、翻译、写代码不要用。',
+      description: '联网搜索**外部**实时信息。只在答案依赖此刻的外部公开信息、你凭自己不可能知道时才用：天气、新闻、赛事比分、股价汇率、票价、软件最新版本等。**查小钠自己连的 Minecraft 服务器（在线人数/玩家/状态）不要用本工具，改用 mc_status / player_query。** 闲聊、常识、算数、翻译、写代码不要用。',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: '搜索关键词，简短、可直接喂给搜索引擎' } },
@@ -38,7 +38,7 @@ export const AGENT_TOOLS = [
     minRole: 'guest',
     function: {
       name: 'mc_status',
-      description: '查询 Minecraft 服务器的运行状态：是否在线、在线人数与玩家列表。',
+      description: '查询**小钠自己连着的那个 Minecraft 服务器**：是否在线、在线人数与玩家列表。问"服务器/服里/在线玩家"相关一律用本工具（不是 web_search）。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (_args, ctx) => ctx.mcStatus(),

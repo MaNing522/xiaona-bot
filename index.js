@@ -347,7 +347,12 @@ function buildDecisionPrompt(userInput, memory, allowSkip) {
 
     let p = `你是小钠，一个智能QQ机器人助手。
 
-【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要外部实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
+【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
+
+**工具怎么选（别搞混，尤其别拿 web_search 乱搜）**：
+- 问"你自己连的 MC 服务器"（在线人数、玩家列表、服务器状态）→ \`mc_status\`；问某个玩家数据 → \`player_query\`。**这两个跟服务器有关，绝不要用 web_search 去搜。**
+- 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
+- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
 
 ${tagRule}
 `;
@@ -508,20 +513,10 @@ function splitReplies(text, max = 3) {
     return parts;
 }
 
-// ---------- 消息净化 / 攻击识别 ----------
+// ---------- 消息净化 ----------
 function cleanMessage(content) {
     // 只剥掉对机器人的 @，不再删方括号内容：用户正常输入里的方括号照原样交给 AI
     return String(content ?? '').replace(/@小钠/g, '').trim();
-}
-
-function isSuspicious(text) {
-    const patterns = [
-        /忽略.*指令/, /覆盖.*规则/, /扮演.*角色/,
-        /提示词/, /系统指令/, /一步步思考/, /展示推理/,
-        /检索.*文档/, /原始消息/, /你收到了什么/,
-        /每次输出一个字/, /调用工具/, /执行代码/
-    ];
-    return patterns.some((p) => p.test(text));
 }
 
 // ---------- 发送前体检：真实脏字 → 谐音 ----------
@@ -2137,11 +2132,6 @@ async function onMessage(event) {
     if (isShutUpDirective(userInput)) {
         engageSessions.delete(convKey(event));
         logger.info('🤐 对方明确要求别说话，跳过回复');
-        return;
-    }
-
-    if (isSuspicious(userInput)) {
-        await sendReply(event, '哈哈，我的小秘密就不告诉你啦～');
         return;
     }
 
