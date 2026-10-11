@@ -276,6 +276,18 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
 
 // ---------- AI 决策（含搜索/语音/跳过/多条回复标记解析） ----------
 /**
+ * 剥掉 AI 输出的工具标记（【REPLY:…】【SEARCH:…】【VOICE:…】）。
+ * 容忍模型漏写结尾 】 的畸形写法：只吃掉标记本身和紧跟的取值，
+ * 不吞掉标记后面的正文，也不让标记漏到用户面前。
+ */
+function stripToolTags(text) {
+    let s = String(text ?? '');
+    s = s.replace(/【\s*(?:REPLY|SEARCH|VOICE)\s*[:：][^】]*】/gi, '');   // 正常闭合
+    s = s.replace(/【\s*(?:REPLY|SEARCH|VOICE)\s*[:：]\s*(?:是|否|YES|NO|yes|no|true|false|1|0|需要|不需要)?/gi, ''); // 漏写 】 的裸露前缀
+    return s;
+}
+
+/**
  * @param allowSearch 是否让 AI 判断要不要联网搜索（第二轮已搜完就不需要了）
  * @param allowSkip   是否让 AI 判断"这条其实不是在叫小钠"从而不回复。
  *                    只在"群里只命中了关键词"或"唤起会话的跟进消息"这类模糊触发时开启；
@@ -288,7 +300,8 @@ async function callAIWithDecision(userInput, searchResults = null, memory = '', 
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该搜的时候不搜、该发语音时不发 —— 这里必须显式豁免。
     const tagRule = '【SEARCH:…】【VOICE:…】【REPLY:…】和“单独一行的三个连字符”都是合法的“工具标记”，'
-        + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释。';
+        + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释；'
+        + '标记必须写完整、带上结尾的“】”，且标记里只放取值，不要把正文写进标记里面。';
 
     let decisionPrompt = `你是小钠，一个智能QQ机器人助手。
 
@@ -364,6 +377,9 @@ ${searchResults ? `\n【搜索结果已获取】\n${searchResults}\n请根据以
     const voiceMatch = reply.match(/【\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*】/i);
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
     reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
+
+    // 兜底：清掉漏写 】 的畸形工具标记，避免 【REPLY:… 直接漏给用户
+    reply = stripToolTags(reply);
 
     return { reply: reply.trim(), needSearch, searchKeyword, wantVoice, skip };
 }
@@ -2099,9 +2115,9 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         }
     }
 
-    let reply = String(result.reply || '').replace(/\[[^\]]+\]/g, '').trim();
+    // 工具标记已在 callAIWithDecision 里剥离；这里只兜底再清一次，不再按方括号拦内容
+    let reply = stripToolTags(String(result.reply || '')).trim();
     if (!reply) reply = '嗯？我没听懂，能再说一遍吗？';
-    if (reply.includes('[') || reply.includes(']')) reply = '这个我发不了，重新说一遍？';
     recordMessage(key, 'ai', reply);
     return reply;
 }
