@@ -7,7 +7,9 @@
 // 两者互相独立：这里**不读 process.env**（只有 BOT_CONFIG 例外，用于指定配置文件路径）。
 //
 // config.json 支持 // 行注释与 /* */ 块注释；缺字段用 DEFAULTS 兜底；
-// 数值必须是 ≥ 0 的数字，非法值忽略并回退默认。改完重启生效。
+// 数值必须是 ≥ 0 的数字，非法值忽略并回退默认。
+// 运行时由 index.js 用 watchConfig() 监听，改完 **1 秒内自动热加载生效，无需重启**；
+// 写坏 / 删除文件的瞬间不会生效（reloadConfig 会保留上一份配置）。
 // ============================================================
 import fs from 'fs';
 import path from 'path';
@@ -123,8 +125,44 @@ export function config() {
     return current;
 }
 
-/** 重新从磁盘读取（供将来做热加载用） */
-export function reloadConfig() {
-    current = loadConfig();
+/**
+ * 重新从磁盘读取并**原地更新** current。
+ * 原地更新的意义：已经持有 config() 引用的调用方（如 index.js 的 cfg）无需重新获取，
+ * 热加载后能直接读到新值。解析失败 / 文件被删时保留旧配置，绝不因为一次写坏就重置成默认值。
+ * @param {string} [filePath] 配置文件路径（默认 CONFIG_PATH，便于测试直接给路径）
+ */
+export function reloadConfig(filePath = CONFIG_PATH) {
+    if (!fs.existsSync(filePath)) {
+        logger.warn(`[配置] 热重载跳过：${filePath} 不存在，保留当前配置。`);
+        return current;
+    }
+    let over;
+    try {
+        over = JSON.parse(stripComments(fs.readFileSync(filePath, 'utf8')));
+    } catch (e) {
+        logger.error(`[配置] 热重载失败，保留当前配置：${e.message}`);
+        return current;
+    }
+    const next = applyOverrides(structuredClone(DEFAULTS), over);
+    // 原地替换：删掉已移除的键，再覆盖新值（保持 current 引用不变）
+    for (const k of Object.keys(current)) if (!(k in next)) delete current[k];
+    Object.assign(current, next);
     return current;
+}
+
+/**
+ * 监听配置文件变化并触发热重载（轮询方式，跨编辑器 / 系统更稳）。
+ * @param {() => void} onReload 文件变化时的回调
+ * @param {number} [intervalMs] 轮询间隔
+ * @param {string} [filePath] 监听的文件（默认 CONFIG_PATH）
+ * @returns {() => void} 停止监听的函数
+ */
+export function watchConfig(onReload, intervalMs = 1000, filePath = CONFIG_PATH) {
+    const listener = (curr, prev) => {
+        // 内容没变（只有访问时间变）不触发
+        if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return;
+        onReload();
+    };
+    fs.watchFile(filePath, { interval: intervalMs }, listener);
+    return () => fs.unwatchFile(filePath, listener);
 }
