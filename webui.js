@@ -195,7 +195,8 @@ const PANEL_USER = process.env.WEBUI_USER || 'admin';
 const PANEL_PASS = process.env.WEBUI_PASSWORD || '';
 const SESSION_TTL = 12 * 60 * 60 * 1000;   // 登录有效期 12 小时
 const CAPTCHA_TTL = 3 * 60 * 1000;         // 验证码 3 分钟
-const LOGIN_MAX_FAIL = 5;                  // 连续失败上限
+const CAPTCHA_AFTER_FAILS = 5;             // 连续输错密码达到这个次数后，才要求人机验证
+const LOGIN_MAX_FAIL = 10;                 // 连续失败上限（含验证码错误），超过则封 5 分钟
 const LOGIN_BLOCK_MS = 5 * 60 * 1000;      // 超过上限封 5 分钟
 
 const sessions = new Map();    // token → 过期时间
@@ -252,7 +253,13 @@ function sendHtml(res, code, html) {
   res.end(html);
 }
 
-function loginPage(msg = '') {
+/** 该 IP 是否已连续输错到需要人机验证（达到阈值才要求） */
+function captchaNeeded(ip) {
+  const f = failLog.get(ip);
+  return !!f && (f.n || 0) >= CAPTCHA_AFTER_FAILS;
+}
+
+function loginPage(msg = '', needCaptcha = false) {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -293,15 +300,17 @@ button:disabled{opacity:.6;cursor:default}
     <div class="logo">🤖</div>
     <div>
       <h1>小钠控制面板</h1>
-      <div class="sub">需要登录后使用（点验证码可换一张）</div>
+      <div class="sub">需要登录后使用</div>
     </div>
   </div>
   <label>账号</label><input id="u" value="${PANEL_USER}" autocomplete="username">
   <label>密码</label><input id="p" type="password" autocomplete="current-password">
-  <label>人机验证</label>
-  <div class="row">
-    <input id="c" inputmode="numeric" maxlength="4" placeholder="4 位数字" autocomplete="off">
-    <img id="cap" src="/api/captcha" alt="验证码" title="点一下换一张">
+  <div id="capBox" style="display:${needCaptcha ? 'block' : 'none'}">
+    <label>人机验证</label>
+    <div class="row">
+      <input id="c" inputmode="numeric" maxlength="4" placeholder="4 位数字" autocomplete="off">
+      <img id="cap" alt="验证码" title="点一下换一张">
+    </div>
   </div>
   <button id="b">登录</button>
   <div class="err" id="e">${msg}</div>
@@ -310,6 +319,12 @@ button:disabled{opacity:.6;cursor:default}
 var $ = function (i) { return document.getElementById(i); };
 function fresh() { $('cap').src = '/api/captcha?t=' + Date.now(); }
 $('cap').onclick = fresh;
+// 默认不显示验证码；只有连续输错达到阈值（服务端返回 captchaRequired）才露出来
+function showCaptcha(show) {
+  $('capBox').style.display = show ? 'block' : 'none';
+  if (show && !$('cap').getAttribute('src')) fresh();
+}
+if (${needCaptcha ? 'true' : 'false'}) fresh();
 $('f').onsubmit = async function (ev) {
   ev.preventDefault();
   $('b').disabled = true; $('e').textContent = '';
@@ -321,8 +336,10 @@ $('f').onsubmit = async function (ev) {
     var j = await r.json().catch(function () { return {}; });
     if (r.ok && j.ok) { location.reload(); return; }
     $('e').textContent = j.error || '登录失败';
+    if (j.captchaRequired) showCaptcha(true);
   } catch (e) { $('e').textContent = '网络错误'; }
-  $('b').disabled = false; $('c').value = ''; $('p').value = ''; fresh();
+  $('b').disabled = false; $('c').value = ''; $('p').value = '';
+  if ($('capBox').style.display !== 'none') fresh();
 };
 </script></body></html>`;
 }
@@ -381,7 +398,7 @@ async function route(req, res, url) {
 
   if (url.pathname === '/' || url.pathname === '/index.html') {
     // 未登录只给登录页，真实面板不落给未认证的人
-    if (!authed(req)) return sendHtml(res, 200, loginPage());
+    if (!authed(req)) return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
     if (!fs.existsSync(WEB_DIR)) return sendJSON(res, 500, { error: '缺少 web/index.html' });
     const html = fs.readFileSync(WEB_DIR);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -411,14 +428,20 @@ async function route(req, res, url) {
       return sendJSON(res, 429, { ok: false, error: `尝试次数过多，请 ${min} 分钟后再试` });
     }
     const body = await readBody(req);
-    const pid = parseCookies(req).xn_pre || '';
-    const p = preAuth.get(pid);
-    preAuth.delete(pid);      // 验证码一次性，无论对错都用掉
+
+    // 人机验证「按需」要求：只有当这个 IP 已连续输错到阈值时才校验验证码；
+    // 平时只需账号密码，不给正常登录加负担。
+    const requiresCaptcha = (f && f.n ? f.n : 0) >= CAPTCHA_AFTER_FAILS;
 
     let bad = '';
-    if (!p || Date.now() > p.exp) bad = '验证码已过期，请重新输入';
-    else if (String(body.captcha || '').trim() !== p.answer) bad = '验证码不对';
-    else if (!(safeEq(body.user, PANEL_USER) && safeEq(body.pass, PANEL_PASS))) bad = '账号或密码不对';
+    if (requiresCaptcha) {
+      const pid = parseCookies(req).xn_pre || '';
+      const p = preAuth.get(pid);
+      preAuth.delete(pid);      // 验证码一次性，无论对错都用掉
+      if (!p || Date.now() > p.exp) bad = '验证码已过期，请重新输入';
+      else if (String(body.captcha || '').trim() !== p.answer) bad = '验证码不对';
+    }
+    if (!bad && !(safeEq(body.user, PANEL_USER) && safeEq(body.pass, PANEL_PASS))) bad = '账号或密码不对';
 
     if (bad) {
       const n = ((f && f.n) || 0) + 1;
@@ -426,6 +449,8 @@ async function route(req, res, url) {
       logger.info(`🔒 面板登录失败（${ip}）: ${bad}（连续第 ${n} 次）`);
       return sendJSON(res, 401, {
         ok: false,
+        // 达到阈值后让前端把验证码框露出来，用户下一次提交就得带上验证码
+        captchaRequired: n >= CAPTCHA_AFTER_FAILS,
         error: bad + (n >= LOGIN_MAX_FAIL ? `，已锁定 ${LOGIN_BLOCK_MS / 60000} 分钟` : ''),
       });
     }
