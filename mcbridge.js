@@ -449,6 +449,17 @@ export function getPlayerHistory(name) {
     return joinHistory.get(String(name || '').toLowerCase()) || null;
 }
 
+/**
+ * Carpet 假人（/player 生成的假玩家）名字前缀。假人的上下线/发言一律不往群里转发，
+ * 免得一批假人进进出出把桥接群刷屏。要加别的前缀往数组里塞就行。
+ */
+const FAKE_PLAYER_PREFIXES = ['假的_'];
+/** 是不是假人（按名字前缀判断） */
+export function isFakePlayer(name) {
+    const n = String(name || '');
+    return FAKE_PLAYER_PREFIXES.some((p) => n.startsWith(p));
+}
+
 async function onEvent(ev) {
     const who = ev.player || '?';
 
@@ -470,13 +481,21 @@ async function onEvent(ev) {
         return;
     }
 
+    // Carpet 假人：不管进/退/说话/死亡，一律不转发（白名单询问在上面已处理，不受影响）
+    if (ev.player && isFakePlayer(ev.player)) {
+        logger.info(`[MC桥] 忽略假人事件：${who} ${ev.type}`);
+        return;
+    }
+
     if (ev.type === 'join' || ev.type === 'leave') {
-        if (ev.player) recordPresence(ev.type, ev.player, ev.ip);
+        // 先把上下线消息发到群里——这是用户最需要看到的结果。
+        // 后面的记录/计分板是附带动作，**失败也不能把这条消息吞掉**（否则退太快时容易"少一条"）。
+        await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`);
+        try { if (ev.player) recordPresence(ev.type, ev.player, ev.ip); } catch (e) { logger.warn(`[MC桥] 记录上下线失败（${who}）：${e.message}`); }
         // 端口复用下 MC 只看到 127.0.0.1，mod 已用端口映射还原出真实客户端 IP，这里只记到控制台
         if (ev.type === 'join' && ev.ip) logger.info(`[MC桥] ${who} 真实客户端 IP: ${ev.ip}`);
         // 上线才查一次绑定，把答案单独回给 mod（mod 只为这名玩家渲染计分板）
         if (ev.type === 'join' && ev.player) await bindCheck(ev.player);
-        await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`);
         return;
     }
 
