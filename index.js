@@ -2483,7 +2483,10 @@ function sendToBoundPlayers(text, qq, name) {
         .then((r) => {
             if (!r) return;
             if (!r.ok) {
-                logger.error('[MC桥] 投递失败:', r.error || '未知原因');
+                const err = String(r.error || '未知原因');
+                // "没人在线 / 服务器未就绪"是常态（群里说话但游戏里没人），降为 info，别当错误刷屏
+                if (/没有在线玩家|服务器未就绪/.test(err)) logger.info('[MC桥] 未投递：' + err);
+                else logger.error('[MC桥] 投递失败:', err);
                 return;
             }
             // 投递成功但一个都没送到：绑定的游戏ID 不在线，或名字对不上（大写/改名）
