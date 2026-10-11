@@ -461,7 +461,7 @@ async function route(req, res, url) {
     const ls = await loginStatus();
     return sendJSON(res, 200, {
       serviceUp: true,
-      model: process.env.AI_MODEL || 'deepseek-chat',
+      model: process.env.AI_MODEL || 'deepseek-flash',
       wsUrl: process.env.NAPCAT_WS || 'ws://127.0.0.1:3001',
       webuiPort,
       botConnected: bot.connected,

@@ -17,7 +17,7 @@ const PROVIDERS = {
   deepseek: {
     name: 'DeepSeek',
     url: 'https://api.deepseek.com/chat/completions',
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
     balancePath: '/user/balance', // 有余额接口
   },
   openai: {
