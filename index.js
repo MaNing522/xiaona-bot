@@ -350,7 +350,8 @@ function buildDecisionPrompt(userInput, memory, allowSkip) {
 【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
 
 **工具怎么选（别搞混，尤其别拿 web_search 乱搜）**：
-- 问"你自己连的 MC 服务器"（在线人数、玩家列表、服务器状态）→ \`mc_status\`；问某个玩家数据 → \`player_query\`。**这两个跟服务器有关，绝不要用 web_search 去搜。**
+- **任何** Minecraft 服务器查询都用 \`mc_status\`：问"你自己连的服"→不填 address；问某个具体服务器（给了地址，比如 xxx.com、ip:端口）→填 address。**自己的服、别人的服，一律走 mc_status，绝不要用 web_search 去搜。**
+- 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
 - 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
 - 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
 
@@ -449,7 +450,7 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
 function buildAgentCtx(key) {
     return {
         search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
-        mcStatus: () => agentMcStatus(),
+        mcStatus: (address) => agentMcStatus(address),
         playerQuery: (name) => agentPlayerQuery(name),
         balance: () => agentBalance(),
         remember: (text) => {
@@ -465,8 +466,20 @@ function buildAgentCtx(key) {
     };
 }
 
-/** 工具：MC 服务器状态（哪台服 + 是否连接 + 在线玩家） */
-async function agentMcStatus() {
+/**
+ * 工具：MC 服务器状态。
+ * - 不填 address：查小钠自己连着的那个服（桥）——是否连接 + 在线玩家。
+ * - 填 address：查任意指定服务器（走 mcsrvstat.us 公共 API，同 #mc 指令）。
+ */
+async function agentMcStatus(address) {
+    const addr = String(address || '').trim();
+    if (addr) {
+        try {
+            return formatServer(await queryServer(addr));
+        } catch (e) {
+            return '查询该服务器失败：' + e.message;
+        }
+    }
     const connected = isMcConnected();
     let players = [];
     if (connected) {
