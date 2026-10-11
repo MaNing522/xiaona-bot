@@ -229,6 +229,21 @@ const mutedGroups = new Set();
 const PROMPT_PATH = path.join(__dirname, 'prompt.txt');
 let promptCache = { mtimeMs: 0, text: '' };
 
+/**
+ * 拼一行"小钠连的是哪台服务器"，用来喂给 AI（让她知道自己在哪个服）。
+ * 名字取自 .env 的 MC_SERVER_NAME，地址自动取自 MC_BRIDGE_URL（不另存，避免重复填写 / 误入库）。
+ * 这些值只放 .env（不入库），提交到 GitHub 不会泄露地址。没配桥时返回 ''。
+ */
+function mcServerInfoLine() {
+    if (!MC_ENABLED) return '';
+    const name = String(process.env.MC_SERVER_NAME || '').trim();
+    const host = String(process.env.MC_BRIDGE_URL || '').trim()
+        .replace(/^https?:\/\//i, '')
+        .replace(/\/+$/, '');
+    if (name && host) return `${name}（${host}）`;
+    return name || host;
+}
+
 function getSystemPrompt() {
     try {
         const st = fs.statSync(PROMPT_PATH);
@@ -244,7 +259,12 @@ function getSystemPrompt() {
     } catch (e) {
         if (!promptCache.text) logger.error('❌ 读取提示词失败（prompt.txt 在不在？）:', e.message);
     }
-    return promptCache.text;
+    // 运行时信息（服务器身份）从 .env 动态拼接，不写进 prompt.txt，避免地址被提交入库
+    const info = mcServerInfoLine();
+    const extra = info
+        ? `\n\n【你应该知道的事】\n- 你连着的 Minecraft 服务器：${info}。玩家用这个地址进服；有人问"你在哪个服"就照实说。\n`
+        : '';
+    return promptCache.text + extra;
 }
 
 // ---------- OneBot 状态 ----------
@@ -440,7 +460,7 @@ function buildAgentCtx(key) {
     };
 }
 
-/** 工具：MC 服务器状态（是否连接 + 在线玩家） */
+/** 工具：MC 服务器状态（哪台服 + 是否连接 + 在线玩家） */
 async function agentMcStatus() {
     const connected = isMcConnected();
     let players = [];
@@ -448,7 +468,8 @@ async function agentMcStatus() {
         try { players = await getPlayers(true); } catch { players = []; }
     }
     const names = players.map((p) => p && p.name).filter(Boolean);
-    return `MC 服务器：${connected ? '已连接' : '未连接'}；在线玩家 ${names.length} 人`
+    const who = mcServerInfoLine();
+    return `MC 服务器${who ? `：${who}` : ''}；${connected ? '已连接' : '未连接'}；在线玩家 ${names.length} 人`
         + (names.length ? `（${names.join('、')}）` : '');
 }
 

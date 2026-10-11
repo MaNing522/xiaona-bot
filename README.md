@@ -145,6 +145,7 @@ gradlew.bat build
 | 唤起会话 | `ENGAGE_DEBUG` | 置 `true` 打印唤起判断的额度消耗，便于排查 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
+| MC 桥 | `MC_SERVER_NAME` | 喂给 AI 的服务器名字（可留空）。地址自动取自 `MC_BRIDGE_URL`；这些值只在 `.env`，不入库 |
 | MC 桥开关 | `MC_BRIDGE_MC_TO_QQ` / `MC_BRIDGE_QQ_TO_MC` / `MC_BRIDGE_OP_RELAY` / `MC_BRIDGE_GAME_IMAGE` | 各方向开关 |
 | MC 桥限流 | `MC_BRIDGE_CHAT_RATE_MAX` / `MC_BRIDGE_CHAT_RATE_WINDOW_SEC` / `MC_BRIDGE_DUP_MAX` / `MC_BRIDGE_DUP_TTL_SEC` | 公聊限速与重复屏蔽 |
 | 行为 | `BOT_REPLY` / `QQ_GROUP_NOTICE` / `POKE_REPLY` / `QQ_REQUEST_APPROVE` | 机器人消息、进出群提示、戳一戳、申请审批 |
