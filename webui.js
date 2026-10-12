@@ -300,6 +300,10 @@ button:hover{filter:brightness(1.06)}
 button:active{transform:scale(.98)}
 button:disabled{opacity:.6;cursor:default}
 .err{margin-top:12px;color:var(--danger);font-size:12px;min-height:16px}
+@keyframes xnUp{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.card{animation:xnUp .38s cubic-bezier(.2,.8,.25,1) both}
+.err:not(:empty){animation:xnUp .25s ease both}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <form class="card" id="f">
   <div class="brand">
@@ -377,8 +381,16 @@ body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-app
 .foot{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
 textarea{flex:1;resize:none;height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;outline:none}
 textarea:focus{border-color:var(--accent)}
-button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer}
+button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer;transition:.15s}
+button:hover{filter:brightness(1.06);box-shadow:0 4px 12px rgba(22,119,255,.22)}
+button:active{transform:scale(.97)}
 button:disabled{opacity:.6;cursor:default}
+@keyframes xnPop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes xnBlink{0%,100%{opacity:1}50%{opacity:.45}}
+.card{animation:xnPop .34s ease both}
+.row{animation:xnPop .22s ease both}
+.bub.typing{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="card">
   <div class="head">
@@ -395,18 +407,19 @@ button:disabled{opacity:.6;cursor:default}
 <script>
 var $=function(i){return document.getElementById(i);};
 var busy=false;
-function add(cls,text){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub';b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
+function add(cls,text,typing){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub'+(typing?' typing':'');b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
 async function send(){
   if(busy)return;
   var t=$('t').value.trim(); if(!t)return;
   busy=true;$('s').disabled=true;$('t').value='';
   add('me',t);
-  var holding=add('na','小钠正在输入…');
+  var holding=add('na','小钠正在输入…',true);
   try{
     var r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
     var j=await r.json().catch(function(){return {};});
+    holding.classList.remove('typing');
     holding.textContent=(r.ok&&j.ok)?j.reply:('⚠️ '+(j.error||('HTTP '+r.status)));
-  }catch(e){holding.textContent='⚠️ 网络错误';}
+  }catch(e){holding.classList.remove('typing');holding.textContent='⚠️ 网络错误';}
   busy=false;$('s').disabled=false;$('t').focus();
 }
 $('s').onclick=send;

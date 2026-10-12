@@ -93,6 +93,26 @@ label{font-size:13.5px;color:var(--sub)}
   font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#a7e0a7;
   height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
 footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
+
+/* ---------- 动效（只用 opacity/transform，尊重"减少动效"设置） ---------- */
+@keyframes xnFadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes xnPop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.side{animation:xnPop .3s ease both}
+.topbar{animation:xnFadeUp .32s ease both}
+.panel.active{animation:xnFadeUp .3s ease both}
+.panel.active>.card{animation:xnFadeUp .36s ease both}
+.panel.active>.card:nth-child(2){animation-delay:.06s}
+.panel.active>.card:nth-child(3){animation-delay:.12s}
+.panel.active>.card:nth-child(4){animation-delay:.18s}
+.panel.active>.card:nth-child(5){animation-delay:.22s}
+.qr img{animation:xnPop .35s ease both}
+.nav-item.active .ico{animation:xnPop .25s ease both}
+.card{transition:box-shadow .2s ease,border-color .2s ease}
+.card:hover{box-shadow:0 6px 18px rgba(0,0,0,.07)}
+.btn:hover{box-shadow:0 4px 12px rgba(22,119,255,.22)}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
 </style>
 </head>
 <body>
