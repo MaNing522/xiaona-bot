@@ -47,8 +47,13 @@ export function setOwnerNotifier(cb) {
 
 // 试用页聊天回调（由 index.js 注入：以「小锂 · 普通用户」身份跑一轮私聊 AI）
 let trialChat = null;
+let trialReset = null;
 export function setTrialChat(cb) {
   trialChat = cb;
+}
+// 试用会话不落盘：浏览器关闭（断开连接）时清空内存历史
+export function setTrialReset(cb) {
+  trialReset = cb;
 }
 
 // ---------- 登录子进程管理 ----------
@@ -425,6 +430,8 @@ async function send(){
 $('s').onclick=send;
 $('t').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 $('t').focus();
+// 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
+window.addEventListener('pagehide',function(){try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
 </script></body></html>`;
 }
 
@@ -556,6 +563,7 @@ async function route(req, res, url) {
   if (url.pathname === '/api/logout') {
     const token = parseCookies(req).xn_sess;
     if (token) sessions.delete(token);
+    if (trialReset) trialReset();   // 退出登录也丢弃试用会话（不落盘）
     res.setHeader('Set-Cookie', 'xn_sess=; Path=/; HttpOnly; Max-Age=0');
     return sendJSON(res, 200, { ok: true });
   }
@@ -637,6 +645,12 @@ async function route(req, res, url) {
     } catch (e) {
       return sendJSON(res, 500, { ok: false, error: e.message });
     }
+  }
+
+  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃内存历史
+  if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
+    if (trialReset) trialReset();
+    return sendJSON(res, 200, { ok: true });
   }
 
   // ---------- 人工接管（三态：auto 自动 / manual 人工 / hybrid 混合） ----------

@@ -539,6 +539,8 @@ async function trSend(){
 }
 $('trSend').onclick=trSend;
 $('trInput').addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();trSend();}});
+// 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
+window.addEventListener('pagehide',()=>{try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
 
 load();perms();refresh();logs();takeoverUI();load();perms();
 setInterval(load,5000);setInterval(perms,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(takeoverUI,2000);

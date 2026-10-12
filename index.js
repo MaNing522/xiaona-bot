@@ -17,7 +17,7 @@ import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
-import { startWebUI, setOwnerNotifier, setTrialChat } from './webui.js';
+import { startWebUI, setOwnerNotifier, setTrialChat, setTrialReset } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
 import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
@@ -2340,26 +2340,45 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
 // ---------- 网页试用：以「小锂 · 普通用户」身份跑一轮私聊 AI ----------
 /**
  * 供网页试用页调用：把小锂的话喂给和小钠同一套 AI 流程，返回小钠的回复。
- * 不走 QQ、不真发消息；会话键独立（trial:小锂），记忆与真实会话隔离。
+ * 不走 QQ、不真发消息；**不落盘**——历史只留在内存里，
+ * 浏览器关闭（前端用 beacon 通知）即丢弃；上限 50 条，超出丢最老的。
  */
+const TRIAL_KEY = 'trial:小锂';
+const TRIAL_MAX = 50;          // 对话历史上限（同时也是上下文注入上限）
+let trialHistory = [];         // [{ role:'user'|'ai', text }]
+
+/** 清空试用会话（断开连接时由 WebUI 调用） */
+export function resetTrialChat() {
+    trialHistory = [];
+}
+
+/** 把内存历史拼成注入 AI 的上下文（最多 50 条，全量） */
+function trialMemoryContext() {
+    if (!trialHistory.length) return '';
+    return '【最近对话】（下面每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
+        + trialHistory.map((m) => `${m.role === 'ai' ? '小钠' : '小锂'}: ${m.text}`).join('\n');
+}
+
 async function runTrialChat(text) {
-    const key = 'trial:小锂';
     const input = String(text || '').trim();
     if (!input) return '';
-    recordMessage(key, 'user', input, { name: '小锂', qq: '' });
-    const metaLine = `[当前对话:私信|对话ID:${key}][名称:小锂| QQ:-|身份:普通用户|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+    // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
+    const memory = trialMemoryContext();
+    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ 小锂: ${input} ]`;
     const result = await aiReply({
         metaLine,
-        memory: memoryContext(key),
+        memory,
         role: 'guest',          // 固定普通用户
         allowSkip: false,
         allowSearch: SEARCH_ENABLED,
-        userId: key,
-        ctx: buildAgentCtx(key),
+        userId: TRIAL_KEY,
+        ctx: buildAgentCtx(TRIAL_KEY),
     });
     const reply = stripToolTags(String(result.reply || '')).trim() || '（小钠没有回复）';
-    recordMessage(key, 'ai', reply);
+    // 记录本轮（含小锂与小钠），只留最近 50 条
+    trialHistory.push({ role: 'user', text: input }, { role: 'ai', text: reply });
+    if (trialHistory.length > TRIAL_MAX) trialHistory.splice(0, trialHistory.length - TRIAL_MAX);
     return reply;
 }
 
@@ -2892,6 +2911,8 @@ connect();
 setOwnerNotifier(notifyOwner);
 // 供 WebUI「试用页」以小锂（普通用户）身份测试私聊
 setTrialChat(runTrialChat);
+// 浏览器关闭（断开连接）时丢弃试用会话，不落盘
+setTrialReset(resetTrialChat);
 // 供 WebUI 人工接管发送消息
 setSendMsg((action, params) => callApi(action, params));
 if (WEBUI_ENABLED) {
