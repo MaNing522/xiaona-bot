@@ -1774,9 +1774,9 @@ async function onNotice(event) {
 // ---------- 进群申请 / 好友申请：转给主人，主人引用通知来同意或拒绝 ----------
 /** 机器人私聊通知的 message_id → 待处理的申请（主人引用那条通知回复即可） */
 const pendingReqs = new Map();
-const PENDING_REQ_MAX = 100;
+const PENDING_REQ_MAX = 300;
 /** 通知过期时间：过期后引用它就不再被当成审批（避免很久以后误触） */
-const PENDING_REQ_TTL = 30 * 60 * 1000;
+const PENDING_REQ_TTL = 3 * 24 * 60 * 60 * 1000;   // 3 天
 
 /** 陌生人的昵称（不是群成员也能查） */
 async function strangerName(qq) {
@@ -1868,11 +1868,13 @@ async function onRequest(event) {
     const uid = String(event.user_id || '');
 
     if (kind === 'group' && sub !== 'add' && sub !== 'invite') return;
-    if (kind === 'friend' && sub !== 'add') return;
+    // NapCat 的好友申请事件**没有 sub_type**（只有 request_type=friend），不能要求 sub==='add'
+    if (kind === 'friend' && sub && sub !== 'add') return;
     if (kind !== 'group' && kind !== 'friend') return;
     if (!uid || uid === String(botId)) return;
     if (IGNORED_BOTS.has(uid)) return;
 
+    logger.info(`📨 收到${kind === 'friend' ? '好友' : '进群'}申请（sub=${sub || '-'}）：${uid}`);
     try {
         const nick = await strangerName(uid);
         const who = nick ? `${nick}（${uid}）` : uid;
@@ -2000,7 +2002,7 @@ async function handleManualApproval(event, cmd, arg) {
         .filter(([, r]) => r.uid === qq && Date.now() - r.at <= PENDING_REQ_TTL);
 
     if (!hits.length) {
-        await sendReply(event, `❌ 没有 ${qq} 的待处理申请。\n可能已经过期（30 分钟）或已被处理，让对方重新申请；刚收到的申请请稍等几秒再试。`);
+        await sendReply(event, `❌ 没有 ${qq} 的待处理申请。\n可能已经过期（3 天）或已被处理，让对方重新申请；刚收到的申请请稍等几秒再试。`);
         return true;
     }
     const receipts = [];
@@ -2016,6 +2018,18 @@ async function handleManualApproval(event, cmd, arg) {
     }
     await sendReply(event, receipts.join('\n'));
     return true;
+}
+
+/** 申请过期提醒：把超过 3 天仍未处理的申请通知主人一次，并从待处理里移除 */
+async function sweepExpiredReqs() {
+    if (!QQ_REQUEST_APPROVE || !OWNER_ENABLED) return;
+    const now = Date.now();
+    for (const [id, req] of [...pendingReqs]) {
+        if (now - req.at <= PENDING_REQ_TTL) continue;
+        pendingReqs.delete(id);
+        await notifyOwnerWithId(`⌛ 一条申请已过期（超过 3 天未处理）：${req.label}\n已自动移除；如需处理，请让对方重新申请。`);
+        logger.info(`⌛ 申请已过期自动移除：${req.label}`);
+    }
 }
 
 async function onMessage(event) {
@@ -2952,5 +2966,9 @@ startIdleMaintenance(
         kickOffMs: numEnv('IDLE_KICKOFF_MS', 60000),
     },
 );
+
+// 申请过期提醒：每 30 分钟扫一次，超过 3 天仍未处理的申请提醒主人并移除
+const reqSweeptimer = setInterval(() => { sweepExpiredReqs().catch(() => {}); }, 30 * 60 * 1000);
+reqSweeptimer.unref?.();
 
 process.on('SIGINT', () => { logger.info('\n退出。'); process.exit(0); });
