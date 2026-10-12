@@ -17,7 +17,7 @@ import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
-import { startWebUI, setOwnerNotifier } from './webui.js';
+import { startWebUI, setOwnerNotifier, setTrialChat } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
 import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
@@ -2337,6 +2337,32 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     return reply;
 }
 
+// ---------- 网页试用：以「小锂 · 普通用户」身份跑一轮私聊 AI ----------
+/**
+ * 供网页试用页调用：把小锂的话喂给和小钠同一套 AI 流程，返回小钠的回复。
+ * 不走 QQ、不真发消息；会话键独立（trial:小锂），记忆与真实会话隔离。
+ */
+async function runTrialChat(text) {
+    const key = 'trial:小锂';
+    const input = String(text || '').trim();
+    if (!input) return '';
+    recordMessage(key, 'user', input, { name: '小锂', qq: '' });
+    const metaLine = `[当前对话:私信|对话ID:${key}][名称:小锂| QQ:-|身份:普通用户|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+        + `消息内容:[ 小锂: ${input} ]`;
+    const result = await aiReply({
+        metaLine,
+        memory: memoryContext(key),
+        role: 'guest',          // 固定普通用户
+        allowSkip: false,
+        allowSearch: SEARCH_ENABLED,
+        userId: key,
+        ctx: buildAgentCtx(key),
+    });
+    const reply = stripToolTags(String(result.reply || '')).trim() || '（小钠没有回复）';
+    recordMessage(key, 'ai', reply);
+    return reply;
+}
+
 // ---------- 桥接群消息 → 游戏（只投给已绑定游戏ID的账号） ----------
 let bindHintAt = 0;
 /** @ 昵称缓存：groupId:qq -> {name, exp}（有过期时间，也要封顶） */
@@ -2864,6 +2890,8 @@ connect();
 
 // 启动网页控制面板（非阻塞）；授权由主人管理，面板通知走主人回调
 setOwnerNotifier(notifyOwner);
+// 供 WebUI「试用页」以小锂（普通用户）身份测试私聊
+setTrialChat(runTrialChat);
 // 供 WebUI 人工接管发送消息
 setSendMsg((action, params) => callApi(action, params));
 if (WEBUI_ENABLED) {

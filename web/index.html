@@ -126,6 +126,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item" data-tab="group"><span class="ico">🛡️</span>群管</button>
       <button class="nav-item" data-tab="takeover"><span class="ico">🤝</span>接管</button>
       <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
+      <a class="nav-item" href="/trial" style="text-decoration:none"><span class="ico">🧪</span>私聊试用</a>
     </nav>
     <div class="side-foot">
       <div class="live">
@@ -286,7 +287,7 @@ function showTab(name){
   if(tb)tb.textContent=(item.textContent||'').replace(/^[^\u4e00-\u9fa5A-Za-z]+/,'').trim();
   if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
 }
-document.querySelectorAll('.nav-item').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 showTab((location.hash||'').replace('#','')||'login');
 
 // 登录

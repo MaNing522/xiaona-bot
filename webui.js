@@ -45,6 +45,12 @@ export function setOwnerNotifier(cb) {
   notifyOwner = cb;
 }
 
+// 试用页聊天回调（由 index.js 注入：以「小锂 · 普通用户」身份跑一轮私聊 AI）
+let trialChat = null;
+export function setTrialChat(cb) {
+  trialChat = cb;
+}
+
 // ---------- 登录子进程管理 ----------
 const login = {
   proc: null,
@@ -344,6 +350,71 @@ $('f').onsubmit = async function (ev) {
 </script></body></html>`;
 }
 
+/** 试用页：以「小锂 · 普通用户」身份跟小钠私聊（不经过 QQ，仅本地跑一轮 AI） */
+function trialPage() {
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f0f2f5">
+<title>小钠 · 私聊试用</title>
+<style>
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--radius:10px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px}
+.card{width:100%;max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:min(78vh,720px);overflow:hidden}
+.head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.head .logo{font-size:22px}
+.head h1{margin:0;font-size:15px}
+.head .sub{font-size:12px;color:var(--sub)}
+.head .who{margin-left:auto;font-size:12px;color:var(--sub);white-space:nowrap}
+.msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#fafbfc}
+.row{display:flex}
+.row.me{justify-content:flex-end}
+.bub{max-width:78%;padding:8px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
+.me .bub{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.na .bub{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+.tip{color:var(--sub);font-size:12px;text-align:center;margin:6px 0}
+.foot{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;outline:none}
+textarea:focus{border-color:var(--accent)}
+button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+</style></head><body>
+<div class="card">
+  <div class="head">
+    <div class="logo">🤖</div>
+    <div><h1>小钠 · 私聊试用</h1><div class="sub">发消息看看小钠怎么回</div></div>
+    <div class="who">你是 小锂 · 普通用户</div>
+  </div>
+  <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。</div></div>
+  <div class="foot">
+    <textarea id="t" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="s">发送</button>
+  </div>
+</div>
+<script>
+var $=function(i){return document.getElementById(i);};
+var busy=false;
+function add(cls,text){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub';b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
+async function send(){
+  if(busy)return;
+  var t=$('t').value.trim(); if(!t)return;
+  busy=true;$('s').disabled=true;$('t').value='';
+  add('me',t);
+  var holding=add('na','小钠正在输入…');
+  try{
+    var r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
+    var j=await r.json().catch(function(){return {};});
+    holding.textContent=(r.ok&&j.ok)?j.reply:('⚠️ '+(j.error||('HTTP '+r.status)));
+  }catch(e){holding.textContent='⚠️ 网络错误';}
+  busy=false;$('s').disabled=false;$('t').focus();
+}
+$('s').onclick=send;
+$('t').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+$('t').focus();
+</script></body></html>`;
+}
+
 // ---------- 健康检查（免鉴权） ----------
 // 只暴露「能不能用」的布尔量与版本无关的计数，**不含**密钥 / URL / QQ 号 / 群号。
 const HEALTH_AI_TTL = 60 * 1000; // AI 可达性探测结果缓存 60 秒，避免每次探活都打真实请求
@@ -403,6 +474,12 @@ async function route(req, res, url) {
     const html = fs.readFileSync(WEB_DIR);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(html);
+  }
+
+  // 试用页：以「小锂 · 普通用户」身份跟小钠私聊（需登录，避免白嫖 AI 额度）
+  if (url.pathname === '/trial' || url.pathname === '/trial.html') {
+    if (!authed(req)) return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
+    return sendHtml(res, 200, trialPage());
   }
 
   // 人机验证：发图 + 记下答案（按预登录 id 绑定，换一张即作废旧的）
@@ -533,6 +610,20 @@ async function route(req, res, url) {
 
   if (url.pathname === '/api/login/status') {
     return sendJSON(res, 200, await loginStatus());
+  }
+
+  // 试用页聊天：以「小锂 · 普通用户」身份跑一轮私聊 AI，返回小钠的回复
+  if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
+    if (!trialChat) return sendJSON(res, 503, { ok: false, error: '试用聊天未就绪（机器人还没起来）' });
+    const { text } = await readBody(req);
+    const t = String(text || '').trim();
+    if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
+    if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
+    try {
+      return sendJSON(res, 200, { ok: true, reply: await trialChat(t) });
+    } catch (e) {
+      return sendJSON(res, 500, { ok: false, error: e.message });
+    }
   }
 
   // ---------- 人工接管（三态：auto 自动 / manual 人工 / hybrid 混合） ----------
