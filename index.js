@@ -565,12 +565,12 @@ function sanitizeOutgoing(text) {
 }
 
 // ---------- 发送 ----------
-async function sendReply(event, message, wantVoice = false, withAt = false) {
+async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false) {
     // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
     if (Array.isArray(event.__replySink)) {
         const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
         if (t) event.__replySink.push(t);
-        return;
+        return [];
     }
     const target = event.message_type === 'private'
         ? { action: 'send_private_msg', id: event.user_id }
@@ -580,27 +580,31 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
     // 已判定被禁言的群：直接静默跳过，不再尝试发送（避免连环报错）
     if (gidKey && mutedGroups.has(gidKey)) {
         logger.info(`🔇 群 ${gidKey} 处于禁言中，已跳过发送。`);
-        return;
+        return [];
     }
 
     async function doSend(segments) {
         // 发送途中若已被标记禁言，直接放弃本条
-        if (gidKey && mutedGroups.has(gidKey)) return;
+        if (gidKey && mutedGroups.has(gidKey)) return '';
         try {
             const res = await callApi(target.action, {
                 [event.message_type === 'private' ? 'user_id' : 'group_id']: target.id,
                 message: segments,
             });
+            const mid = res && res.message_id;
             // 记下这条是我自己发的，供 #撤回 定位（只撤自己的，不碰别人的消息）
-            recordBotMsg(convKey(event), res && res.message_id);
+            recordBotMsg(convKey(event), mid);
+            // AI 主流程发出的：标一下，自身消息回执到来时跳过，避免同一句记两遍
+            if (markSelf) markSelfRecorded(mid);
             // 发送成功说明未被禁言，解除标记
             if (gidKey) mutedGroups.delete(gidKey);
+            return mid === undefined || mid === null ? '' : mid;
         } catch (e) {
             // 被禁言/无权限等：标记该群，避免后续消息反复报错
             if (gidKey && /禁言|muted|ban|不可发送|没权限|群已冻结/i.test(e.message)) {
                 mutedGroups.add(gidKey);
                 logger.info(`🔇 群 ${gidKey} 被禁言或不可发言，已停止发送:`, e.message.slice(0, 100));
-                return;
+                return '';
             }
             throw e;
         }
@@ -610,10 +614,10 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
     if (wantVoice && typeof message === 'string' && message.length <= 300) {
         try {
             const voicePath = await textToSpeech(message);
-            await doSend([segRecord(voicePath)]);
+            const vid = await doSend([segRecord(voicePath)]);
             cleanVoiceCache(50);
             logger.info('🎵 语音已发送');
-            return;
+            return vid ? [vid] : [];
         } catch (err) {
             logger.error('语音发送失败，降级为文本:', err.message);
             message = '⚠️ 语音生成失败，转为文字：\n' + message;
@@ -633,18 +637,21 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
     if (Array.isArray(message) && message.length && message.every((s) => s && typeof s === 'object' && s.type)) {
         // 回复里已经 @ 了别人，就别再额外 @ 提问者，免得一串 @
         const needAt = withAt && !message.some((s) => s.type === 'at');
-        await doSend(needAt ? [segAt(event.user_id), ...message] : message);
-        return;
+        const sid = await doSend(needAt ? [segAt(event.user_id), ...message] : message);
+        return sid ? [sid] : [];
     }
 
     // 文本：整条发出去。
     // 「多条消息」只属于 AI 的文字/语音回复（由 runAI 按 AI 输出的分隔符决定），
     // 帮助菜单、查询结果这类内容必须保持**一条完整消息**，不能按句拆开发。
     const texts = typeof message === 'string' ? [message] : message;
+    const ids = [];
     for (const t of texts) {
         if (!String(t ?? '').trim()) continue;
-        await doSend(withAt ? [segAt(event.user_id), segText(t)] : [segText(t)]);
+        const tid = await doSend(withAt ? [segAt(event.user_id), segText(t)] : [segText(t)]);
+        if (tid !== undefined && tid !== null && tid !== '') ids.push(tid);
     }
+    return ids;
 }
 
 // ---------- #撤回：主人/管理员撤回机器人自己发的消息 ----------
@@ -660,6 +667,55 @@ function recordBotMsg(key, id) {
     arr.push({ id, ts: now });
     while (arr.length > BOT_SENT_MAX) arr.shift();
     botSentMsgs.set(key, arr);
+}
+
+// 已被 AI 主流程记入记忆的"自己发的消息"id：自身消息回执到来时据此跳过，避免重复记录
+const selfRecordedIds = new Map();      // message_id -> 过期时间
+const SELF_RECORDED_MAX = 500;
+const SELF_RECORDED_TTL = 10 * 60 * 1000;
+function markSelfRecorded(id) {
+    if (id === undefined || id === null || id === '') return;
+    if (selfRecordedIds.size >= SELF_RECORDED_MAX) {
+        const now = Date.now();
+        for (const [k, exp] of selfRecordedIds) if (now > exp) selfRecordedIds.delete(k);
+        while (selfRecordedIds.size >= SELF_RECORDED_MAX) selfRecordedIds.delete(selfRecordedIds.keys().next().value);
+    }
+    selfRecordedIds.set(String(id), Date.now() + SELF_RECORDED_TTL);
+}
+function isSelfRecorded(id) {
+    const k = String(id);
+    const exp = selfRecordedIds.get(k);
+    if (exp === undefined) return false;
+    if (Date.now() > exp) { selfRecordedIds.delete(k); return false; }
+    return true;
+}
+
+/**
+ * 机器人自己发的消息（NapCat 上报自身消息时的 message_sent / 自身 message 事件）：
+ * 只把它记进会话记忆，让 AI「知道自己说了什么」，**绝不触发命令、回复或转发**。
+ * 已经由 AI 主流程记录过的（按 message_id 判定）跳过，避免重复。
+ */
+function recordSelfMessage(event) {
+    const mid = String(event.message_id ?? '');
+    if (mid && isSelfRecorded(mid)) return false;
+    const segs = event.message;
+    if (!segs) return false;
+    const isGroup = event.message_type === 'group';
+    const gid = String(event.group_id ?? event.target_id ?? '');
+    const key = isGroup ? 'g:' + gid : 'p:' + String(event.target_id ?? event.user_id ?? '');
+    const text = inlineTextOf(segs, isGroup ? gid : '');
+    if (!text) return false;
+    recordMessage(key, 'ai', text);
+    return true;
+}
+
+/** WS 分发：NapCat 上报的自身消息 → 记记忆，不触发任何逻辑 */
+async function onSelfMessage(event) {
+    try {
+        recordSelfMessage(event);
+    } catch (e) {
+        logger.debug('[自身消息] 记录失败:', e.message);
+    }
 }
 
 /**
@@ -1558,7 +1614,7 @@ async function inlineTextOfForAi(segments, groupId) {
         else if (seg.type === 'at') {
             const qq = String(seg.data.qq || '');
             out += qq === 'all' ? '@全体成员' : '@' + await atDisplayName(groupId, qq, seg.data.name);
-        } else if (seg.type === 'reply') out += '[引用]';
+        } else if (seg.type === 'reply') out += await replyPreviewForAi(seg.data, groupId);
         else if (SEG_PLACEHOLDER[seg.type]) out += SEG_PLACEHOLDER[seg.type];
     }
     return out.replace(/[ \t]{2,}/g, ' ').trim();
@@ -2053,6 +2109,14 @@ async function onMessage(event) {
     // 桥接群消息（机器人自己的消息不转发；只转发群聊，私聊不转发）
     // 自己发的判定用 self_id 兜底：botId 在收到第一条事件前还是 0，那时会把机器人自己的消息也转发进游戏
     const me = String(event.self_id || botId || '');
+
+    // 机器人自己发的消息（NapCat 打开了"上报自身消息"时）：只记进记忆让 AI 知道自己说了什么，
+    // 绝不触发命令/回复/转发（否则会自己接自己）
+    if (me && String(event.user_id) === me) {
+        recordSelfMessage(event);
+        return;
+    }
+
     const isBridgeGroup = MC_BRIDGE_QQ_TO_MC && event.message_type === 'group'
         && MC_BRIDGE_GROUP && String(event.group_id) === MC_BRIDGE_GROUP
         && !(me && String(event.user_id) === me);
@@ -2236,7 +2300,8 @@ async function runAI(event, userInput, allowSkip = false) {
         // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
         const withAt = event.message_type === 'group';
         for (let i = 0; i < parts.length; i++) {
-            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0);
+            // 最后一位 true：这些是我(AI)发的，自身消息回执按 id 跳过，避免同一句记两遍
+            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0, true);
             if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 700));
         }
         // 写入记忆（滑动窗口，角色 ai）
@@ -2490,6 +2555,32 @@ async function replyPreview(data, groupId, depth = 0) {
         logger.debug('[MC桥] 引用原文查询失败:', e.message);
     }
     cacheSet(replyCache, id, REPLY_CACHE_MAX, { text, exp: Date.now() + 5 * 60 * 1000 });
+    return text;
+}
+
+// 给 AI 看的引用原文缓存（与游戏转发那份分开：这份**带被引用消息的 id**）
+const aiReplyCache = new Map();
+
+/**
+ * 给 AI 看的引用段渲染：「[引用#<消息id> 谁: 原文] 」
+ * 带上被引用消息的 id，AI 才能对上"引用的是哪一条"（比如对上自己刚发的那条，见 metaLine 的 msgId）；
+ * 原文用 get_msg 反查，查不到就退化成 [引用#<id>]，绝不把整条消息弄丢。
+ */
+async function replyPreviewForAi(data, groupId) {
+    const id = String((data && (data.id || data.message_id)) || '').trim();
+    if (!id) return '[引用] ';
+    const hit = aiReplyCache.get(id);
+    if (hit && Date.now() < hit.exp) return hit.text;
+    let text = `[引用#${id}] `;
+    try {
+        const m = await callApi('get_msg', { message_id: /^\d+$/.test(id) ? Number(id) : id });
+        const who = (m && m.sender && (m.sender.card || m.sender.nickname)) || '';
+        const body = await buildForwardText(m && m.message, groupId, 1);
+        text = `[引用#${id} ${who ? who + ': ' : ''}${clip(body)}] `;
+    } catch (e) {
+        logger.debug('引用原文查询失败:', e.message);
+    }
+    cacheSet(aiReplyCache, id, REPLY_CACHE_MAX, { text, exp: Date.now() + 5 * 60 * 1000 });
     return text;
 }
 
@@ -2901,6 +2992,7 @@ function connect() {
             if (!botId && data.self_id) botId = data.self_id;
             const handler = data.post_type === 'notice' ? onNotice
                 : data.post_type === 'request' ? onRequest
+                : data.post_type === 'message_sent' ? onSelfMessage
                 : onMessage;
             handler(data).catch((e) => logger.error('[处理]', e));
         }
