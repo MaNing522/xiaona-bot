@@ -60,6 +60,20 @@ public class Config {
         public int queueSize = 200;           // 事件回放缓冲条数（断线重连可补）
         public int maxStreamClients = 4;      // 同时允许的 SSE 连接数
         public int rateLimitPerMinute = 120;  // 注入文本每分钟上限，0 = 不限
+        /**
+         * 本机（管理员/主人）经 AI 执行游戏命令：见 /bridge/command。
+         * allowCommands 是命令"根"白名单（不含前导 /）；为空 = 全部拒绝（fail-closed）；填 "*" = 不限。
+         * 只放行这里列出的命令，避免 AI 误执行 /stop、/op 这类高危操作。
+         */
+        public boolean commandsEnabled = true;
+        public List<String> allowCommands = new java.util.ArrayList<>(List.of(
+                "tp", "give", "gamemode", "gm", "time", "weather", "say", "tell", "msg", "w",
+                "kill", "clear", "effect", "xp", "experience", "summon", "difficulty",
+                "spawnpoint", "setworldspawn", "setblock", "fill", "clone", "day", "night",
+                "ban", "pardon", "kick", "whitelist", "banlist", "enchant", "damage", "heal",
+                "title", "bossbar", "particle", "playsound", "stopsound", "spectate", "tag",
+                "team", "scoreboard", "recipe", "advancement", "place", "random", "seed", "list"));
+        public int commandRateLimitPerMinute = 30; // 命令每分钟上限，0 = 不限
     }
 
     /** 桥的监听方式：优先与 MC 共用一个端口（端口复用） */
@@ -135,6 +149,14 @@ public class Config {
         if (bridge.queueSize < 16) bridge.queueSize = 200;
         if (bridge.maxStreamClients < 1) bridge.maxStreamClients = 4;
         if (bridge.rateLimitPerMinute < 0) bridge.rateLimitPerMinute = 120;
+        if (bridge.allowCommands == null) bridge.allowCommands = new ArrayList<>();
+        // 归一化命令白名单：去空、去首尾空白、转小写（保留 "*"）
+        for (int i = 0; i < bridge.allowCommands.size(); i++) {
+            String c = bridge.allowCommands.get(i);
+            bridge.allowCommands.set(i, c == null ? "" : c.trim().toLowerCase());
+        }
+        bridge.allowCommands.removeIf(s -> s.isBlank());
+        if (bridge.commandRateLimitPerMinute < 0) bridge.commandRateLimitPerMinute = 30;
 
         if (http == null) http = new Http();
         if (http.host == null || http.host.isBlank()) http.host = "0.0.0.0";

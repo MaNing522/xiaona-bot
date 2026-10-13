@@ -245,6 +245,63 @@ function warnNoWhitelist(e) {
     warnedNoWhitelist = true;
 }
 
+// ---------- 游戏命令执行（管理员/主人经 AI） ----------
+let warnedNoCommand = false;
+
+/**
+ * 让服务端执行一条游戏命令（受 mod 侧 bridge.allowCommands 白名单约束）。
+ * @returns {Promise<string>} 给 AI 看的结果文本（成功/失败都已成文，调用方直接透传）
+ */
+export async function runMcCommand(command) {
+    const cmd = String(command || '').trim();
+    if (!cmd) return '没有提供命令。';
+    if (!cfg || !cfg.base) return 'MC 桥未配置，无法执行游戏命令。';
+    try {
+        const r = await api('/bridge/command', { method: 'POST', body: { command: cmd }, timeoutMs: 8000 });
+        if (r && r.result) return `命令「${cmd}」已执行；服务器返回：${r.result}`;
+        return `命令「${cmd}」已执行（无返回内容）。`;
+    } catch (e) {
+        if (!warnedNoCommand && /\b40[34]\b/.test(e.message)) {
+            logger.error(`[MC桥] 执行游戏命令失败：${e.message}。需要 mod ≥ 2.6.0 的 /bridge/command，且 config.json 的 bridge.commandsEnabled=true、命令在 allowCommands 里。`);
+            warnedNoCommand = true;
+        }
+        return `执行命令「${cmd}」失败：${e.message}`;
+    }
+}
+
+/**
+ * 把一批玩家加入/移出服务器封禁名单（黑名单同步用）。
+ * @param {string[]} names 游戏ID
+ * @param {boolean} banned true=封禁(/ban)，false=解封(/pardon)
+ * @param {string} [reason] 封禁原因
+ * @returns {Promise<{ok:boolean, done:string[], failed:string[]}|null>}
+ */
+export async function banPlayers(names, banned, reason = '') {
+    const list = (Array.isArray(names) ? names : []).map(String).filter(Boolean);
+    if (!list.length || !cfg || !cfg.base) return null;
+    try {
+        return await api('/bridge/ban', {
+            method: 'POST',
+            body: { players: list, banned: !!banned, reason: String(reason || '') },
+            timeoutMs: 8000,
+        });
+    } catch (e) {
+        if (!warnedNoCommand && /\b40[34]\b/.test(e.message)) {
+            logger.error(`[MC桥] 同步封禁名单失败：${e.message}。需要 mod ≥ 2.6.0 的 /bridge/ban。`);
+            warnedNoCommand = true;
+        }
+        return null;
+    }
+}
+
+/** 连上桥时把整张 QQ 黑名单对应的游戏ID 推给服务端封禁（断线期间落在服务端之外的补上） */
+export async function pushBlacklistAll() {
+    if (!cfg || !cfg.base) return;
+    const ids = (deps && typeof deps.getBlacklistedIds === 'function') ? (deps.getBlacklistedIds() || []) : [];
+    if (!ids.length) return;
+    await banPlayers(ids, true, 'QQ黑名单同步').catch(() => {});
+}
+
 /** 在线玩家（带 10 秒缓存） */
 export async function getPlayers(force = false) {
     if (!force && Date.now() - playersCache.at < 10000) return playersCache.list;
@@ -295,6 +352,8 @@ function handleSseBlock(block) {
         }
         // 连上后推整张绑定名单：白名单模式靠它把门（计分板仍由玩家上线时逐人回 bindCheck 驱动）
         pushWhitelistAll().catch(() => {});
+        // 再把 QQ 黑名单对应的游戏ID 推给服务端封禁，补上断线期间服务端没同步到的
+        pushBlacklistAll().catch(() => {});
         return;
     }
     if (event === 'gap') {

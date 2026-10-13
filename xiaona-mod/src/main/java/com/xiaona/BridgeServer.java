@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.server.MinecraftServer;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,9 +42,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   POST /bridge/bindcheck 本机回"某个玩家是否已绑定"（决定这名玩家显不显示计分板）
  *   POST /bridge/whitelist 本机推"谁绑定了游戏ID"（白名单模式：单人变更 / 整张名单）
  *   POST /bridge/whitelist_response 本机回答"某玩家在不在绑定名单里"（白名单模式进服时的实时询问）
+ *   POST /bridge/command  本机（管理员/主人）经 AI 执行一条游戏命令（受 bridge.allowCommands 白名单约束）
+ *   POST /bridge/ban      本机把 QQ 黑名单同步到服务器封禁名单（/ban、/pardon）
  *   GET  /bridge/status   版本、玩家数、开关状态
  *
- * 注意：这里**不提供**任意服务器命令执行接口 —— 桥只能往聊天里发文本。
+ * 注意：命令执行只走 /bridge/command 的**受控白名单**（见 {@link Config.Bridge#allowCommands}），
+ * 桥本身仍不提供"任意命令"的注入口；给游戏发文本请走 /bridge/send。
  */
 public class BridgeServer {
     /**
@@ -91,6 +95,9 @@ public class BridgeServer {
     private volatile int sharePort = 0;      // 复用端口（0 = 未启用复用）
     private final AtomicInteger windowCount = new AtomicInteger();
     private volatile long windowStart = System.currentTimeMillis();
+    /** 命令执行的每分钟计数（与"注入文本"分开计，见 bridge.commandRateLimitPerMinute） */
+    private final AtomicInteger cmdCount = new AtomicInteger();
+    private volatile long cmdWindowStart = System.currentTimeMillis();
 
     public BridgeServer(Config cfg, McEvents events, RuntimeToggles toggles, BindBoard board,
                         WhitelistGate whitelistGate) {
@@ -158,6 +165,8 @@ public class BridgeServer {
         hs.createContext("/bridge/bindcheck", ex -> route(ex, this::handleBindCheck));
         hs.createContext("/bridge/whitelist", ex -> route(ex, this::handleWhitelist));
         hs.createContext("/bridge/whitelist_response", ex -> route(ex, this::handleWhitelistResponse));
+        hs.createContext("/bridge/command", ex -> route(ex, this::handleCommand));
+        hs.createContext("/bridge/ban", ex -> route(ex, this::handleBan));
         hs.createContext("/bridge/status", ex -> route(ex, this::handleStatus));
         hs.createContext("/", ex -> route(ex, this::handleNotFound));
         hs.setExecutor(new ThreadPoolExecutor(4, 32, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(),
@@ -221,6 +230,7 @@ public class BridgeServer {
         m.put("bridgeToChat", toggles.bridgeToChat);
         m.put("privateCommand", bcfg.privateCommand);
         m.put("chatPrefix", bcfg.chatPrefix);
+        m.put("commandsEnabled", bcfg.commandsEnabled);
         if (sharePort > 0) m.put("sharePort", sharePort);
         m.put("localPort", boundPort());
         sendJson(ex, 200, m);
@@ -334,6 +344,110 @@ public class BridgeServer {
         m.put("ok", true);
         m.put("player", player);
         m.put("bound", bound);
+        sendJson(ex, 200, m);
+    }
+
+    /** 命令根是否在放行白名单里（空名单 = 全拒；"*" = 不限） */
+    private boolean commandAllowed(String root) {
+        List<String> allow = bcfg.allowCommands;
+        if (allow == null || allow.isEmpty()) return false;
+        for (String a : allow) {
+            if ("*".equals(a) || a.equalsIgnoreCase(root)) return true;
+        }
+        return false;
+    }
+
+    /** 命令执行的分钟限流（独立于文本注入限流；0 = 不限） */
+    private boolean allowCommandRate() {
+        int limit = bcfg.commandRateLimitPerMinute;
+        if (limit <= 0) return true;
+        long now = System.currentTimeMillis();
+        if (now - cmdWindowStart >= 60_000L) {
+            cmdWindowStart = now;
+            cmdCount.set(0);
+        }
+        return cmdCount.incrementAndGet() <= limit;
+    }
+
+    /**
+     * 本机（管理员/主人）经 AI 执行一条游戏命令。参数：{@code {"command":"time set day"}}（前导 / 可带可不带）。
+     * 只放行 {@link Config.Bridge#allowCommands} 里列出的命令根，其余一律 403。
+     */
+    private void handleCommand(HttpExchange ex, String body) throws IOException {
+        if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
+        if (!bcfg.commandsEnabled) {
+            sendJson(ex, 403, Map.of("ok", false, "error", "游戏命令执行未启用（config.json 的 bridge.commandsEnabled=false）"));
+            return;
+        }
+        JsonObject o;
+        try {
+            o = JsonParser.parseString(body == null || body.isBlank() ? "{}" : body).getAsJsonObject();
+        } catch (Exception e) {
+            sendJson(ex, 400, Map.of("ok", false, "error", "请求体不是合法 JSON"));
+            return;
+        }
+        String command = opt(o, "command").trim();
+        if (command.isBlank()) { sendJson(ex, 400, Map.of("ok", false, "error", "command 不能为空")); return; }
+        if (command.startsWith("/")) command = command.substring(1);
+        if (command.length() > MAX_TEXT) command = command.substring(0, MAX_TEXT);
+        String root = command.split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if (!commandAllowed(root)) {
+            sendJson(ex, 403, Map.of("ok", false, "error", "命令不在允许列表：" + root));
+            return;
+        }
+        if (!allowCommandRate()) { sendJson(ex, 429, Map.of("ok", false, "error", "超过每分钟命令上限")); return; }
+        MinecraftServer s = events.getServer();
+        if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
+
+        String out = GameCommands.run(s, command);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", true);
+        m.put("command", command);
+        if (!out.isBlank()) m.put("result", out.length() > MAX_TEXT ? out.substring(0, MAX_TEXT) : out);
+        sendJson(ex, 200, m);
+    }
+
+    /**
+     * 本机把 QQ 黑名单同步到服务器封禁名单。
+     * 参数：{@code {"players":["Steve"],"banned":true,"reason":"QQ黑名单同步"}}。
+     * banned=true → /ban，false → /pardon；不受 allowCommands 约束（这是管理动作，不是 AI 命令）。
+     */
+    private void handleBan(HttpExchange ex, String body) throws IOException {
+        if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
+        JsonObject o;
+        try {
+            o = JsonParser.parseString(body == null || body.isBlank() ? "{}" : body).getAsJsonObject();
+        } catch (Exception e) {
+            sendJson(ex, 400, Map.of("ok", false, "error", "请求体不是合法 JSON"));
+            return;
+        }
+        List<String> names = strList(o, "players", MAX_TARGETS);
+        if (names.isEmpty()) { sendJson(ex, 400, Map.of("ok", false, "error", "players 不能为空")); return; }
+        boolean banned = !o.has("banned") || o.get("banned").isJsonNull() || o.get("banned").getAsBoolean();
+        // 原因只保留一行、限长，避免拼进命令时把命令结构撑坏
+        String reason = opt(o, "reason").replaceAll("[\\r\\n\\t]+", " ").trim();
+        if (reason.length() > 100) reason = reason.substring(0, 100);
+
+        MinecraftServer s = events.getServer();
+        if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
+        if (!allowCommandRate()) { sendJson(ex, 429, Map.of("ok", false, "error", "超过每分钟命令上限")); return; }
+
+        List<String> done = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (String name : names) {
+            if (!name.matches("[A-Za-z0-9_]{3,16}")) { failed.add(name); continue; }
+            String cmd = banned
+                    ? ("ban " + name + (reason.isBlank() ? "" : " " + reason))
+                    : ("pardon " + name);
+            String out = GameCommands.run(s, cmd);
+            if (out.startsWith("执行出错") || out.startsWith("调度失败")) failed.add(name);
+            else done.add(name);
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", true);
+        m.put("banned", banned);
+        m.put("done", done);
+        m.put("failed", failed);
         sendJson(ex, 200, m);
     }
 

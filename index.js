@@ -24,10 +24,11 @@ import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryCon
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, banUser, unbanUser, humanDuration } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
+import { detectLanguage } from './lang.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -170,6 +171,31 @@ initBindings(SAVE_DIR, {
 
 // 上下线记录（主人私聊 #查询 用）落盘，重启不丢
 initPresence(SAVE_DIR);
+
+// ---------- 黑名单 → 服务器封禁名单同步 ----------
+/** QQ 黑名单对应的全部游戏ID（去重），供连上桥时整张同步 */
+function getBlacklistedGameIds() {
+  const out = new Set();
+  for (const qq of perm.listBlacklist()) {
+    for (const id of getGameIdsOf(qq)) out.add(String(id));
+  }
+  return [...out];
+}
+
+// #授权 把某人设为黑名单(等级 4) → 封禁其名下已绑定的游戏ID；改成其它等级 → 解封。
+// 断线期间落下的差异，连上桥时由 mcbridge 的 pushBlacklistAll 补齐。
+perm.setLevelListener((qq, level) => {
+  const ids = getGameIdsOf(qq);
+  if (!ids.length) return;
+  const banned = Number(level) === 4;
+  banPlayersOnMc(ids, banned, banned ? 'QQ黑名单同步' : '')
+    .then((r) => {
+      if (r && Array.isArray(r.failed) && r.failed.length) {
+        logger.warn(`[黑名单同步] 部分游戏ID 未同步：${r.failed.join('、')}`);
+      }
+    })
+    .catch((e) => logger.warn('[黑名单同步] 失败:', e.message));
+});
 
 // 限速初始化（宽松：正常聊天几乎无感，只对刷屏动手）。数值见 config.json 的 rateLimit
 initRateLimit(cfg.rateLimit);
@@ -462,6 +488,8 @@ function buildAgentCtx(key) {
             const r = searchMemory(key, kw);
             return r ? r : '没找到相关记忆。';
         },
+        // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
+        runCommand: (cmd) => runMcCommandBridge(cmd),
     };
 }
 
@@ -830,19 +858,23 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
     const role = perm.role(uid);
     const tier = perm.TIER_META[role] || perm.TIER_META.guest;
     let ident = tier.name;
+    // 好感度按档位收敛：主人固定 100%、管理员/授权用户 90%、普通用户 80%（不再让群角色越级抬价）
     let favor = tier.favor;
     if (event.message_type === 'group' && role !== 'owner') {
-        if (meta.groupRole === 'owner') { ident = '群主'; favor = 95; }
-        else if (meta.groupRole === 'admin') { ident = '管理员'; favor = 80; }
+        if (meta.groupRole === 'owner') ident = '群主';
+        else if (meta.groupRole === 'admin') ident = '管理员';
     }
     // 机器人单独打标签：它不是人，别按真人的话去理解，也别跟它客气
     if (meta.isRobot || isKnownBot(uid)) { ident = '机器人'; favor = 30; }
+
+    // 语言识别：告诉 AI 对方在说什么语言（走本地启发式，外部 API 留空）
+    const lang = detectLanguage(userInput);
 
     const atPrefix = atBot ? '[艾特你] ' : '';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const timeStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    return `[当前对话:${dialog}${where ? '|来源:' + where : ''}|对话ID:${dialogId}][名称:${meta.name}| QQ:${uid}|身份:${ident}|好感度:${favor}%|群头衔:${meta.title}|msgId:${event.message_id ?? ''}|时间:${timeStr}]消息内容:[ ${atPrefix}${userInput}]`;
+    return `[当前对话:${dialog}${where ? '|来源:' + where : ''}|对话ID:${dialogId}][名称:${meta.name}| QQ:${uid}|身份:${ident}|好感度:${favor}%|群头衔:${meta.title}|语言:${lang}|msgId:${event.message_id ?? ''}|时间:${timeStr}]消息内容:[ ${atPrefix}${userInput}]`;
 }
 
 // ---------- #帮助 动态菜单（独立模块 help.js） ----------
@@ -1253,7 +1285,17 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
         const op = ops[cmd]();
         try {
             await callApi(op.action, op.params);
-            await sendReply(event, `✅ ${op.ok}`);
+            // #拉黑 同时把对方名下的游戏ID 同步到服务器封禁名单（见 perm 的黑名单同步）
+            let extra = '';
+            if (cmd === '/拉黑') {
+                const ids = getGameIdsOf(target);
+                if (ids.length) {
+                    const r = await banPlayersOnMc(ids, true, 'QQ群拉黑同步');
+                    const done = r && Array.isArray(r.done) ? r.done : [];
+                    if (done.length) extra = `\n已同步封禁其游戏ID：${done.join('、')}`;
+                }
+            }
+            await sendReply(event, `✅ ${op.ok}${extra}`);
         } catch (e) {
             await sendReply(event, `❌ 操作失败：${e.message}`.slice(0, 200));
         }
@@ -2391,7 +2433,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     const mcQq = getQqOf(player);
     const mcTier = perm.TIER_META[perm.role(mcQq || '')] || perm.TIER_META.guest;
     const metaLine = `[当前对话:${isPrivate ? '游戏私聊' : '游戏公聊'}|对话ID:${key}]`
-        + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${mcTier.favor}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+        + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${mcTier.favor}%|群头衔:-|语言:${detectLanguage(text)}|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ ${player}: ${text} ]`;
 
     recordMessage(key, 'user', text, { name: player, qq: '' });
@@ -2443,7 +2485,7 @@ async function runTrialChat(text) {
     if (!input) return '';
     // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
     const memory = trialMemoryContext();
-    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:50%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:80%|群头衔:-|语言:${detectLanguage(input)}|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ 小锂: ${input} ]`;
     const result = await aiReply({
         metaLine,
@@ -3030,7 +3072,7 @@ if (WEBUI_ENABLED) {
 // 启动与 Minecraft 服务器侧 mod 的桥：接收游戏聊天/进出服事件，并把回复注入游戏
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
 if (MC_ENABLED) {
-    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, runGameCommand });
+    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, getBlacklistedIds: getBlacklistedGameIds, runGameCommand });
 } else {
     logger.info('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
 }

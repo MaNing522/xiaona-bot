@@ -74,13 +74,19 @@ export function role(userId) {
 /**
  * 四档的显示名与好感度（从高到低，供元数据/日志统一引用，避免各处各写一套）：
  *   owner 主人 > admin 管理员 > authorized 授权用户 > guest 普通用户
+ *
+ * 好感度上限按档位收敛（喂给 AI 的元数据里用的就是这个值）：
+ *   主人固定 100%；管理员 / 授权用户 90%；普通用户最高 80%（普通用户是"最大"值，不越级）。
  */
 export const TIER_META = {
   owner: { name: '主人', favor: 100 },
   admin: { name: '管理员', favor: 90 },
-  authorized: { name: '授权用户', favor: 75 },
-  guest: { name: '普通用户', favor: 50 },
+  authorized: { name: '授权用户', favor: 90 },
+  guest: { name: '普通用户', favor: 80 },
 };
+
+/** 各档好感度上限（供需要区分"上限"的调用方使用，普通用户上限即 80） */
+export const FAVOR_MAX = { owner: 100, admin: 90, authorized: 90, guest: 80 };
 
 /** 是否有使用受限指令的权限 */
 export function hasPermission(userId) {
@@ -158,12 +164,27 @@ export function setLevel(userId, level) {
 
   savePending();
   save();
+  emitLevel(id, lv);
   return { ok: true, msg: `✅ 已设置 QQ ${id} 为「${LEVEL_NAMES[lv]}」`, level: lv };
 }
 
 export function listBlacklist() { return blacklist.slice(); }
 export function listExtraOwners() { return extraOwners.slice(); }
 export function listExtraAdmins() { return extraAdmins.slice(); }
+
+// ---------- 等级变更监听（供黑名单→服务器封禁名单同步用） ----------
+let levelListener = null;
+/**
+ * 注册"某 QQ 等级变了"的回调（index.js 用它把黑名单同步到服务器）。
+ * 只保留一个监听者；传 null 可注销。回调异常不影响等级设置本身。
+ */
+export function setLevelListener(fn) {
+  levelListener = typeof fn === 'function' ? fn : null;
+}
+function emitLevel(id, level) {
+  if (!levelListener) return;
+  try { levelListener(id, level); } catch { /* 同步失败不影响授权结果 */ }
+}
 
 // ---------- 申请 / 审批 ----------
 export function requestAuth(userId) {

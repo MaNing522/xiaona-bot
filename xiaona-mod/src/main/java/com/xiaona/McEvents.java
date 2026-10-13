@@ -73,6 +73,9 @@ public class McEvents {
 
     public void setServer(MinecraftServer s) { this.server = s; }
 
+    /** 当前服务器实例（供 /bridge/command、/bridge/ban 执行命令用；未就绪时为 null） */
+    public MinecraftServer getServer() { return server; }
+
     public void setTagColor(String spec) { this.tagColor = parseColor(spec); }
 
     // ---------- SSE 连接数控制 ----------

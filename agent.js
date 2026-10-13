@@ -69,6 +69,19 @@ export const AGENT_TOOLS = [
     run: async (_args, ctx) => ctx.balance(),
   },
   {
+    minRole: 'admin',
+    function: {
+      name: 'mc_command',
+      description: '在 Minecraft 服务器上执行一条命令（如 tp、give、gamemode、time、weather、kill、ban…）。**仅管理员/主人可用**。对方明确要求你改游戏状态时才用（如"把时间调成白天""给某人加个权限"）；只是好奇地问"能不能"不要执行。命令不要带前导斜杠。',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string', description: '要执行的服务器命令，不含前导 /，例如 "time set day" 或 "give Steve diamond 1"' } },
+        required: ['command'],
+      },
+    },
+    run: async (args, ctx) => ctx.runCommand(String(args.command || '').trim()),
+  },
+  {
     minRole: 'guest',
     function: {
       name: 'remember',
