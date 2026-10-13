@@ -30,12 +30,13 @@ let extraAdmins = [];   // 命令授予的管理员（持久化）
 let authorized = [];    // 已授权（持久化）
 let blacklist = [];     // 黑名单：不响应其消息（转发除外，持久化）
 let pending = [];       // 待主人审批的申请（持久化）
+let favors = {};        // 好感度：QQ(或游戏ID) -> 0-100 的数值（持久化，默认 FAVOR_DEFAULT）
 
 /** 等级 -> 中文名（#授权 命令用；也是显示名） */
 export const LEVEL_NAMES = { 0: '主人', 1: '管理员', 2: '授权用户', 3: '普通用户', 4: '黑名单' };
 
 function save() {
-  writeJsonAtomic(AUTH_FILE, { authorized, extraOwners, extraAdmins, blacklist });
+  writeJsonAtomic(AUTH_FILE, { authorized, extraOwners, extraAdmins, blacklist, favors });
 }
 function savePending() {
   writeJsonAtomic(PENDING_FILE, { pending });
@@ -56,6 +57,7 @@ export function init(dir) {
   extraOwners = Array.isArray(a.extraOwners) ? a.extraOwners.map(String) : [];
   extraAdmins = Array.isArray(a.extraAdmins) ? a.extraAdmins.map(String) : [];
   blacklist = Array.isArray(a.blacklist) ? a.blacklist.map(String) : [];
+  favors = (a.favors && typeof a.favors === 'object' && !Array.isArray(a.favors)) ? { ...a.favors } : {};
   const p = readJsonSafe(PENDING_FILE, {}, 'pending.json');
   pending = Array.isArray(p.pending) ? p.pending.map(String) : [];
 }
@@ -72,21 +74,80 @@ export function role(userId) {
 }
 
 /**
- * 四档的显示名与好感度（从高到低，供元数据/日志统一引用，避免各处各写一套）：
+ * 四档的显示名（从高到低，供元数据/日志统一引用，避免各处各写一套）：
  *   owner 主人 > admin 管理员 > authorized 授权用户 > guest 普通用户
  *
- * 好感度上限按档位收敛（喂给 AI 的元数据里用的就是这个值）：
- *   主人固定 100%；管理员 / 授权用户 90%；普通用户最高 80%（普通用户是"最大"值，不越级）。
+ * 好感度是**动态值**（见 getFavor/adjustFavor）：所有人默认 FAVOR_DEFAULT(50)，
+ * 由 AI 在交谈中按表现增减，但受档位上限约束（FAVOR_MAX）：
+ *   主人固定 100%；管理员 / 授权用户 上限 90%；普通用户上限 80%。
  */
 export const TIER_META = {
-  owner: { name: '主人', favor: 100 },
-  admin: { name: '管理员', favor: 90 },
-  authorized: { name: '授权用户', favor: 90 },
-  guest: { name: '普通用户', favor: 80 },
+  owner: { name: '主人' },
+  admin: { name: '管理员' },
+  authorized: { name: '授权用户' },
+  guest: { name: '普通用户' },
 };
 
-/** 各档好感度上限（供需要区分"上限"的调用方使用，普通用户上限即 80） */
+/** 好感度默认值（所有新用户从这里起步，由 AI 累积调整） */
+export const FAVOR_DEFAULT = 50;
+
+/** 各档好感度上限（主人固定即上限=下限=100） */
 export const FAVOR_MAX = { owner: 100, admin: 90, authorized: 90, guest: 80 };
+
+/** 把某档的好感度夹到 [0, 上限]；非法值回落默认值 */
+function clampFavor(roleName, value) {
+  const max = FAVOR_MAX[roleName] ?? FAVOR_MAX.guest;
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return FAVOR_DEFAULT;
+  return Math.max(0, Math.min(max, n));
+}
+
+/**
+ * 取某人当前好感度（喂给 AI 的元数据用）。
+ * 主人固定 100%；其余取持久化值（无则默认 50），并按档位上限夹一次。
+ */
+export function getFavor(userId) {
+  const id = String(userId || '');
+  if (!id) return FAVOR_DEFAULT;
+  const r = role(id);
+  if (r === 'owner') return 100;
+  const stored = Object.prototype.hasOwnProperty.call(favors, id) ? favors[id] : FAVOR_DEFAULT;
+  return clampFavor(r, stored);
+}
+
+/**
+ * 直接设定某人好感度（夹到档位上限后持久化）；主人不接受改动，恒为 100。
+ * @returns {{ok:boolean, favor:number, msg:string}}
+ */
+export function setFavor(userId, value) {
+  const id = String(userId || '');
+  if (!id) return { ok: false, favor: FAVOR_DEFAULT, msg: '缺少目标用户。' };
+  const r = role(id);
+  if (r === 'owner') return { ok: true, favor: 100, msg: '主人好感度固定 100%，无需调整。' };
+  const nv = clampFavor(r, value);
+  favors[id] = nv;
+  save();
+  return { ok: true, favor: nv, msg: `好感度已设为 ${nv}%（上限 ${FAVOR_MAX[r]}%）。` };
+}
+
+/**
+ * 按增量调整好感度（AI 工具用）：正数加、负数减，夹到 [0, 档位上限]。
+ * @returns {{ok:boolean, favor:number, max:number, msg:string}}
+ */
+export function adjustFavor(userId, delta) {
+  const id = String(userId || '');
+  const d = Math.round(Number(delta));
+  if (!id) return { ok: false, favor: FAVOR_DEFAULT, max: FAVOR_MAX.guest, msg: '缺少目标用户。' };
+  if (!Number.isFinite(d) || d === 0) return { ok: false, favor: getFavor(id), max: FAVOR_MAX[role(id)] ?? 80, msg: '请给出非零的好感度增减量。' };
+  const r = role(id);
+  if (r === 'owner') return { ok: true, favor: 100, max: 100, msg: '主人好感度固定 100%，无需调整。' };
+  const cur = getFavor(id);
+  const next = clampFavor(r, cur + d);
+  if (next === cur) return { ok: true, favor: cur, max: FAVOR_MAX[r], msg: `好感度已是 ${cur}%（上限 ${FAVOR_MAX[r]}%），不变。` };
+  favors[id] = next;
+  save();
+  return { ok: true, favor: next, max: FAVOR_MAX[r], msg: `好感度 ${cur}% → ${next}%（上限 ${FAVOR_MAX[r]}%）。` };
+}
 
 /** 是否有使用受限指令的权限 */
 export function hasPermission(userId) {
@@ -161,6 +222,12 @@ export function setLevel(userId, level) {
   else if (lv === 2) authorized.push(id);
   else if (lv === 4) blacklist.push(id);
   // lv === 3 不加任何名单 = 普通用户
+
+  // 档位变了，好感度要按新档位的上限重新夹一次（例如从授权降到普通，88% 会被压到 80%）
+  if (Object.prototype.hasOwnProperty.call(favors, id)) {
+    const nr = role(id);
+    favors[id] = nr === 'owner' ? 100 : clampFavor(nr, favors[id]);
+  }
 
   savePending();
   save();

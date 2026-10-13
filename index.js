@@ -28,7 +28,7 @@ import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, ge
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
-import { detectLanguage } from './lang.js';
+import { transcribe } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -471,8 +471,12 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
 }
 
 // ---------- agent 工具的执行上下文（把真实能力注入给 agent.js 的工具） ----------
-/** 组装当前会话的工具上下文；key 为记忆/会话键 */
-function buildAgentCtx(key) {
+/**
+ * 组装当前会话的工具上下文。
+ * @param {string} key  记忆/会话键
+ * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
+ */
+function buildAgentCtx(key, uid = '') {
     return {
         search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
         mcStatus: (address) => agentMcStatus(address),
@@ -490,6 +494,13 @@ function buildAgentCtx(key) {
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
+        // AI 累积好感度：默认 50%，按表现增减，受档位上限约束（主人固定 100%）
+        adjustFavor: (delta, reason) => {
+            if (!uid) return '（当前是试用会话，不记录好感度。）';
+            const r = perm.adjustFavor(uid, delta);
+            if (r && r.ok && reason) logger.info(`[好感度] ${uid} ${Number(delta) > 0 ? '+' : ''}${delta}：${reason} → ${r.favor}%`);
+            return r ? r.msg : '好感度调整失败。';
+        },
     };
 }
 
@@ -858,8 +869,8 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
     const role = perm.role(uid);
     const tier = perm.TIER_META[role] || perm.TIER_META.guest;
     let ident = tier.name;
-    // 好感度按档位收敛：主人固定 100%、管理员/授权用户 90%、普通用户 80%（不再让群角色越级抬价）
-    let favor = tier.favor;
+    // 好感度是动态值：默认 50%，由 AI 在交谈中累积（受档位上限约束，主人固定 100%）
+    let favor = perm.getFavor(uid);
     if (event.message_type === 'group' && role !== 'owner') {
         if (meta.groupRole === 'owner') ident = '群主';
         else if (meta.groupRole === 'admin') ident = '管理员';
@@ -867,14 +878,11 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
     // 机器人单独打标签：它不是人，别按真人的话去理解，也别跟它客气
     if (meta.isRobot || isKnownBot(uid)) { ident = '机器人'; favor = 30; }
 
-    // 语言识别：告诉 AI 对方在说什么语言（走本地启发式，外部 API 留空）
-    const lang = detectLanguage(userInput);
-
     const atPrefix = atBot ? '[艾特你] ' : '';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const timeStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    return `[当前对话:${dialog}${where ? '|来源:' + where : ''}|对话ID:${dialogId}][名称:${meta.name}| QQ:${uid}|身份:${ident}|好感度:${favor}%|群头衔:${meta.title}|语言:${lang}|msgId:${event.message_id ?? ''}|时间:${timeStr}]消息内容:[ ${atPrefix}${userInput}]`;
+    return `[当前对话:${dialog}${where ? '|来源:' + where : ''}|对话ID:${dialogId}][名称:${meta.name}| QQ:${uid}|身份:${ident}|好感度:${favor}%|群头衔:${meta.title}|msgId:${event.message_id ?? ''}|时间:${timeStr}]消息内容:[ ${atPrefix}${userInput}]`;
 }
 
 // ---------- #帮助 动态菜单（独立模块 help.js） ----------
@@ -1657,6 +1665,11 @@ async function inlineTextOfForAi(segments, groupId) {
             const qq = String(seg.data.qq || '');
             out += qq === 'all' ? '@全体成员' : '@' + await atDisplayName(groupId, qq, seg.data.name);
         } else if (seg.type === 'reply') out += await replyPreviewForAi(seg.data, groupId);
+        else if (seg.type === 'record') {
+            // 语音消息：配了 ASR 就转成文字给模型看（转不出/没配置则保留 [语音] 占位）
+            const t = await transcribe(seg.data);
+            out += t ? `[语音]${t}` : SEG_PLACEHOLDER.record;
+        }
         else if (SEG_PLACEHOLDER[seg.type]) out += SEG_PLACEHOLDER[seg.type];
     }
     return out.replace(/[ \t]{2,}/g, ' ').trim();
@@ -2322,7 +2335,7 @@ async function runAI(event, userInput, allowSkip = false) {
             allowSkip,
             allowSearch: SEARCH_ENABLED,
             userId: String(event.user_id),
-            ctx: buildAgentCtx(convKey(event)),
+            ctx: buildAgentCtx(convKey(event), String(event.user_id)),
         });
         let { reply, wantVoice } = result;
 
@@ -2433,7 +2446,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     const mcQq = getQqOf(player);
     const mcTier = perm.TIER_META[perm.role(mcQq || '')] || perm.TIER_META.guest;
     const metaLine = `[当前对话:${isPrivate ? '游戏私聊' : '游戏公聊'}|对话ID:${key}]`
-        + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${mcTier.favor}%|群头衔:-|语言:${detectLanguage(text)}|msgId:0|时间:${mcTimeStr()}]`
+        + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${perm.getFavor(mcQq || player)}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ ${player}: ${text} ]`;
 
     recordMessage(key, 'user', text, { name: player, qq: '' });
@@ -2448,7 +2461,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         allowSkip: false,
         allowSearch: SEARCH_ENABLED,
         userId: player,
-        ctx: buildAgentCtx(key),
+        ctx: buildAgentCtx(key, mcQq || player),
     });
 
     // 标记已在 aiReply 里剥离；这里只兜底再清一次
@@ -2485,7 +2498,7 @@ async function runTrialChat(text) {
     if (!input) return '';
     // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
     const memory = trialMemoryContext();
-    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:80%|群头衔:-|语言:${detectLanguage(input)}|msgId:0|时间:${mcTimeStr()}]`
+    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:${perm.FAVOR_DEFAULT}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ 小锂: ${input} ]`;
     const result = await aiReply({
         metaLine,

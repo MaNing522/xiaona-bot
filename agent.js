@@ -84,6 +84,22 @@ export const AGENT_TOOLS = [
   {
     minRole: 'guest',
     function: {
+      name: 'adjust_favor',
+      description: '调整你对当前说话人的好感度（初始 50%，你按对方的表现累积；系统会按身份封顶，主人固定 100%）。用得克制：对方让你舒服、真诚、帮了你的忙，就小幅加（+1~+5）；对方惹你烦、冒犯、撒谎、无理取闹，可小幅减（-1~-5）。同一轮最多调一次，幅度别夸张，别为了讨好乱加。',
+      parameters: {
+        type: 'object',
+        properties: {
+          delta: { type: 'integer', description: '好感度增减量：正数加、负数减，通常 -5~+5' },
+          reason: { type: 'string', description: '一句话说明为什么增减（可选，仅用于日志）' },
+        },
+        required: ['delta'],
+      },
+    },
+    run: async (args, ctx) => ctx.adjustFavor(args.delta, String(args.reason || '').trim()),
+  },
+  {
+    minRole: 'guest',
+    function: {
       name: 'remember',
       description: '把一条值得长期记住的信息存入记忆（以后对话会用到）。仅当对方明确要求记住、或确实值得长期保存时使用。',
       parameters: {
