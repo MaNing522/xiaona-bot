@@ -70,8 +70,9 @@ cd c:\QQBot; .\push.bat
 
 - 版本号在 [xiaona-mod/build.gradle](file:///c:/QQBot/xiaona-mod/build.gradle)，**每次加功能递增**。
 - 注释、日志、提交信息一律用**中文**（用户偏好）。
-- bot：`index.js` 入口与命令分发、`agent.js`（AI 工具调用 agent：工具注册 + 按身份过滤 + 循环）、`aiService.js`（服务商/模型/请求，含 `chatCompletionRaw`）、`binding.js` 游戏ID绑定、`permission.js` 授权与等级、`mcbridge.js` MC 桥客户端、`help.js` 帮助文案、`prompt.txt` AI 人设、`push.bat` 推送。
-- **配置分工**：`.env` 放密钥/账号/开关等部署项；**数值类可调项（限速、冷却、唤起会话）放 `config.json`**，由 `config.js` 读取（支持 `//` 注释，缺字段自动兜底）。改这些数值请改 config.json，不要再往 .env 加 `RL_*` / `FORWARD_*`。
+- bot：`index.js` 入口与命令分发、`agent.js`（AI 工具调用 agent：工具注册 + 按身份过滤 + 循环）、`aiService.js`（服务商/模型/请求，含 `chatCompletionRaw`）、`binding.js` 游戏ID绑定、`permission.js` 授权与等级、`mcbridge.js` MC 桥客户端、`chatSettings.js`（会话级设置：群/私聊各自覆盖全局，落盘 `data/chat-settings.json`）、`help.js` 帮助文案、`prompt.txt` AI 人设、`push.bat` 推送。
+- **配置分工**：`.env` 放密钥/账号/开关等部署项；**数值类可调项（限速、冷却、唤起会话）与「会话层全局默认（chat：是否回复/关键词/语音/补充提示词）放 `config.json`**，由 `config.js` 读取（支持 `//` 注释，缺字段自动兜底）。改这些数值请改 config.json，不要再往 .env 加 `RL_*` / `FORWARD_*`。
+- **网页「会话管理」**：把 `接管` 页换成会话管理（群聊/单聊两块），每个会话可覆盖全局设置（AI是否回复/触发关键词/语音/补充提示词/限流·冷却·唤起数值），留空即用全局。后端接口 `/api/chat-settings`（GET 列表+全局、POST 存某会话覆盖）与 `/api/global-config`（GET/POST config.json，写后热加载）。会话 key 仍是 `g:群号` / `p:QQ号`。
 - mod：`XiaonaMod`（入口/接线）、`Config`、`BridgeServer`（全部 HTTP 接口）、`McEvents`（事件队列 + SSE + 注入）、`BindBoard`（未绑定玩家计分板）、`WhitelistGate`（白名单模式）、`BotState`（日志）、`mixin/`（`ServerNetworkIoMixin` / `ClientConnectionMixin` / `PlayerManagerMixin`）。
 
 ## 7. 变更前请验证
