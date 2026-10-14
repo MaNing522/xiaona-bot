@@ -82,6 +82,8 @@ const QQ_GROUP_NOTICE = (process.env.QQ_GROUP_NOTICE || 'true') !== 'false';
 const BOT_REPLY = (process.env.BOT_REPLY || 'false') === 'true';
 // 进群申请 / 好友申请：转给主人，由主人引用通知回复"同意 / 拒绝"
 const QQ_REQUEST_APPROVE = (process.env.QQ_REQUEST_APPROVE || 'true') !== 'false';
+// 游戏内消息转发到 QQ 时那条消息的前缀（与 mcbridge.js 的 prefixMc 保持一致）
+const MC_PREFIX = String(process.env.MC_BRIDGE_PREFIX_MC || '[MC]');
 
 // ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
 const AI_ENABLED = isAiEnabled();
@@ -726,6 +728,25 @@ function isSelfRecorded(id) {
 }
 
 /**
+ * 识别"游戏内转发到 QQ"的消息（桥接群里机器人发的 "[MC] 玩家名: 内容"）。
+ * 返回 {name, qq, body}，不是这类消息则返回 null。
+ * 用途：喂给 AI 时特殊标记 —— 署名带上「游戏·」前缀与发言者**绑定的 QQ**，
+ * 免得 AI 把它当成群里的普通人（或误以为是自己说过的话）。
+ */
+function parseGameForward(text) {
+    const s = String(text || '');
+    if (!MC_PREFIX || !s.startsWith(MC_PREFIX)) return null;
+    const rest = s.slice(MC_PREFIX.length).trim();
+    if (!rest) return null;
+    // "谁: 内容" 结构 → 有明确发言人；加入/离开、限速提示等没有，按系统消息处理
+    const m = rest.match(/^([^:：]{1,32})\s*[:：]\s*([\s\S]*)$/);
+    if (!m) return { name: '游戏', qq: '', body: rest };
+    const player = m[1].trim();
+    const qq = getQqOf(player);
+    return { name: `游戏·${player}${qq ? '' : '（未绑定QQ）'}`, qq, body: m[2].trim() };
+}
+
+/**
  * 机器人自己发的消息（NapCat 上报自身消息时的 message_sent / 自身 message 事件）：
  * 只把它记进会话记忆，让 AI「知道自己说了什么」，**绝不触发命令、回复或转发**。
  * 已经由 AI 主流程记录过的（按 message_id 判定）跳过，避免重复。
@@ -740,7 +761,10 @@ function recordSelfMessage(event) {
     const key = isGroup ? 'g:' + gid : 'p:' + String(event.target_id ?? event.user_id ?? '');
     const text = inlineTextOf(segs, isGroup ? gid : '');
     if (!text) return false;
-    recordMessage(key, 'ai', text);
+    // 游戏内转发到 QQ 的：特殊标记（署名「游戏·玩家(绑定QQ)」），让 AI 分得清是谁在游戏里说的
+    const gf = parseGameForward(text);
+    if (gf) recordMessage(key, 'user', gf.body, { name: gf.name, qq: gf.qq });
+    else recordMessage(key, 'ai', text);
     return true;
 }
 
