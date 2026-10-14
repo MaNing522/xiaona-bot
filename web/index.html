@@ -459,7 +459,7 @@ async function logs(){try{const d=await api('/api/logs');
 }catch(e){}}
 
 // ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
-let cvSel='', cvGlobal=null, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true;
+let cvSel='', cvGlobal=null, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true, cvErr='';
 const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起'};
 // 数值项中文名（用于全局设置与会话覆盖表单）
 const NUM_LABELS={
@@ -519,9 +519,10 @@ function cvItem(c){
 function cvRenderList(){
   const grp=cvGroups, pri=cvFriends;
   $('convList').innerHTML =
-    ('<div class="hint" style="margin:10px 0 4px">群聊 ('+grp.length+')</div>'+(grp.length?grp.map(cvItem).join(''):'<span class="hint">暂无（机器人尚未加入任何群）</span>')+
-     '<div class="hint" style="margin:14px 0 4px">好友 ('+pri.length+')</div>'+(pri.length?pri.map(cvItem).join(''):'<span class="hint">暂无好友</span>'))+
-    (cvListOk?'':'<div class="hint" style="margin-top:10px;color:var(--warn)">⚠️ 未能从 NapCat 获取群/好友名单（机器人可能未连接）。</div>');
+    ('<div class="hint" style="margin:10px 0 4px">群聊 ('+grp.length+')</div>'+(grp.length?grp.map(cvItem).join(''):'<span class="hint">暂无</span>')+
+     '<div class="hint" style="margin:14px 0 4px">好友 ('+pri.length+')</div>'+(pri.length?pri.map(cvItem).join(''):'<span class="hint">暂无</span>'))+
+    (cvErr?('<div class="hint" style="margin-top:10px;color:var(--danger)">❌ 会话列表获取失败：'+esc(cvErr)+'（请确认机器人已连接 NapCat）</div>')
+          :(cvListOk?'':'<div class="hint" style="margin-top:10px;color:var(--warn)">⚠️ 未能从 NapCat 获取群/好友名单（机器人可能未连接）。</div>'));
   document.querySelectorAll('#convList [data-sel]').forEach(b=>b.onclick=()=>{cvSel=b.dataset.sel;cvRenderList();cvRenderForm();});
   document.querySelectorAll('#convList [data-pin]').forEach(b=>b.onclick=async()=>{
     const k=b.dataset.pin;
@@ -563,8 +564,16 @@ async function convLoad(full){
     const d=await api('/api/chat-settings');
     cvGlobal=d.global||{}; cvOver=d.conversations||{};
     if(full){
-      const cv=await api('/api/conversations');
-      cvGroups=cv.groups||[]; cvFriends=cv.friends||[]; cvOwner=cv.owner||''; cvListOk=cv.listOk!==false;
+      let cv=null;
+      try{ cv=await api('/api/conversations'); }catch(e){ cvErr=(e&&e.message)||'请求失败'; }
+      if(cv){
+        cvGroups=cv.groups||[]; cvFriends=cv.friends||[]; cvOwner=cv.owner||''; cvListOk=cv.listOk!==false; cvErr='';
+      }else if(!cvGroups.length && !cvFriends.length){
+        // 接口不可用时，用已记录的会话 key 兜底，至少不空白
+        const keys=d.keys||[];
+        cvGroups=keys.filter(k=>k.indexOf('g:')===0).map(k=>({key:k,name:k,pinned:false,overrides:Object.keys(cvOver[k]||{}).length}));
+        cvFriends=keys.filter(k=>k.indexOf('p:')===0).map(k=>({key:k,name:k,pinned:false,overrides:Object.keys(cvOver[k]||{}).length}));
+      }
       gcRender(); cvRenderForm();
     }
     cvRenderList();
