@@ -28,7 +28,7 @@ import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, ge
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
-import { transcribe, asrEnabled } from './asr.js';
+import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
 
@@ -3179,6 +3179,18 @@ setOwnerNotifier(notifyOwner);
 setTrialChat(runTrialChat);
 // 浏览器关闭（断开连接）时丢弃试用会话，不落盘
 setTrialReset(resetTrialChat);
+// 语音识别：QQ 语音多为 amr/silk，FunASR 吃不下，交给 NapCat 自己的 get_record 转成 wav
+// （NapCat 内部带 silk 解码；record 段的 file 是它自己编码的引用，直接回传即可）
+setAudioConverter(async (data) => {
+    const ref = String((data && (data.file || data.file_id)) || '').trim();
+    if (!ref) return null;
+    const r = await callApi('get_record', { file: ref, out_format: 'wav' });
+    if (r && r.base64) return Buffer.from(String(r.base64), 'base64');
+    // 没开 enableLocalFile2Url 时不会带 base64，就按返回的本地路径读（base64 读文件失败同理）
+    const p = String((r && (r.file || r.url)) || '').trim();
+    if (p && !/^https?:\/\//i.test(p) && fs.existsSync(p)) return fs.readFileSync(p);
+    return null;
+});
 // 供 WebUI 人工接管发送消息
 setSendMsg((action, params) => callApi(action, params));
 if (WEBUI_ENABLED) {
