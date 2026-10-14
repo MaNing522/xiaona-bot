@@ -261,6 +261,20 @@ function authed(req) {
   return true;
 }
 
+/** 试用页客户端标识：按浏览器分配（会话级 Cookie，关掉浏览器即失效） */
+const TRIAL_COOKIE = 'xn_tid';
+function trialClientId(req, res) {
+  let id = parseCookies(req)[TRIAL_COOKIE];
+  if (!/^[0-9a-f]{32}$/.test(id || '')) {
+    id = crypto.randomBytes(16).toString('hex');
+    // 不设 Max-Age：会话级 Cookie，浏览器关闭即失效，试用历史随之被丢弃
+    if (res && !res.headersSent) {
+      res.setHeader('Set-Cookie', `${TRIAL_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`);
+    }
+  }
+  return id;
+}
+
 function sendHtml(res, code, html) {
   res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(html);
@@ -372,7 +386,7 @@ function trialPage() {
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--radius:10px}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px}
-.card{width:100%;max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:min(78vh,720px);overflow:hidden}
+.card{width:100%;max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:clamp(420px,86vh,1400px);overflow:hidden}
 .head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .head .logo{font-size:22px}
 .head h1{margin:0;font-size:15px}
@@ -637,8 +651,12 @@ async function route(req, res, url) {
   if (url.pathname === '/api/logout') {
     const token = parseCookies(req).xn_sess;
     if (token) sessions.delete(token);
-    if (trialReset) trialReset();   // 退出登录也丢弃试用会话（不落盘）
-    res.setHeader('Set-Cookie', 'xn_sess=; Path=/; HttpOnly; Max-Age=0');
+    // 退出登录也丢弃**本客户端**的试用会话（不落盘），并清掉试用客户端 Cookie
+    if (trialReset) trialReset(parseCookies(req)[TRIAL_COOKIE]);
+    res.setHeader('Set-Cookie', [
+      'xn_sess=; Path=/; HttpOnly; Max-Age=0',
+      `${TRIAL_COOKIE}=; Path=/; HttpOnly; Max-Age=0`,
+    ]);
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -714,16 +732,17 @@ async function route(req, res, url) {
     const t = String(text || '').trim();
     if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
     if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
+    const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
     try {
-      return sendJSON(res, 200, { ok: true, reply: await trialChat(t) });
+      return sendJSON(res, 200, { ok: true, reply: await trialChat(cid, t) });
     } catch (e) {
       return sendJSON(res, 500, { ok: false, error: e.message });
     }
   }
 
-  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃内存历史
+  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
   if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
-    if (trialReset) trialReset();
+    if (trialReset) trialReset(trialClientId(req, res));
     return sendJSON(res, 200, { ok: true });
   }
 

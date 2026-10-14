@@ -2559,28 +2559,49 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
  * 供网页试用页调用：把小锂的话喂给和小钠同一套 AI 流程，返回小钠的回复。
  * 不走 QQ、不真发消息；**不落盘**——历史只留在内存里，
  * 浏览器关闭（前端用 beacon 通知）即丢弃；上限 50 条，超出丢最老的。
+ *
+ * 历史**按客户端隔离**（WebUI 传进来的 clientId）：不同浏览器 / 不同 IP 各一份，
+ * 互不串记忆。长期不活跃的会话由定时器回收，避免内存无限涨。
  */
 const TRIAL_KEY = 'trial:小锂';
-const TRIAL_MAX = 50;          // 对话历史上限（同时也是上下文注入上限）
-let trialHistory = [];         // [{ role:'user'|'ai', text }]
+const TRIAL_MAX = 50;                          // 对话历史上限（同时也是上下文注入上限）
+const TRIAL_TTL = 2 * 60 * 60 * 1000;          // 2 小时无活动即回收
+const trialSessions = new Map();               // clientId -> { history:[{role,text}], at }
 
-/** 清空试用会话（断开连接时由 WebUI 调用） */
-export function resetTrialChat() {
-    trialHistory = [];
+/** 取（或新建）某客户端的试用会话 */
+function trialSession(clientId) {
+    const k = String(clientId || 'default');
+    let s = trialSessions.get(k);
+    if (!s) { s = { history: [], at: Date.now() }; trialSessions.set(k, s); }
+    s.at = Date.now();
+    return s;
+}
+
+// 定期回收长期不活跃的试用会话（不依赖前端通知，兜底防泄漏）
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, s] of trialSessions) if (now - s.at > TRIAL_TTL) trialSessions.delete(k);
+}, 30 * 60 * 1000).unref?.();
+
+/** 清空试用会话（断开连接时由 WebUI 调用）：给了 clientId 只清该客户端，否则全清 */
+export function resetTrialChat(clientId) {
+    if (clientId) trialSessions.delete(String(clientId));
+    else trialSessions.clear();
 }
 
 /** 把内存历史拼成注入 AI 的上下文（最多 50 条，全量） */
-function trialMemoryContext() {
-    if (!trialHistory.length) return '';
+function trialMemoryContext(history) {
+    if (!history.length) return '';
     return '【最近对话】（下面每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
-        + trialHistory.map((m) => `${m.role === 'ai' ? '小钠' : '小锂'}: ${m.text}`).join('\n');
+        + history.map((m) => `${m.role === 'ai' ? '小钠' : '小锂'}: ${m.text}`).join('\n');
 }
 
-async function runTrialChat(text) {
+async function runTrialChat(clientId, text) {
     const input = String(text || '').trim();
     if (!input) return '';
+    const sess = trialSession(clientId);
     // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
-    const memory = trialMemoryContext();
+    const memory = trialMemoryContext(sess.history);
     const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:${perm.FAVOR_DEFAULT}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ 小锂: ${input} ]`;
     const result = await aiReply({
@@ -2589,13 +2610,13 @@ async function runTrialChat(text) {
         role: 'guest',          // 固定普通用户
         allowSkip: false,
         allowSearch: SEARCH_ENABLED,
-        userId: TRIAL_KEY,
+        userId: TRIAL_KEY + ':' + String(clientId || 'default'),   // KV 缓存按客户端隔离
         ctx: buildAgentCtx(TRIAL_KEY),
     });
     const reply = stripToolTags(String(result.reply || '')).trim() || '（小钠没有回复）';
     // 记录本轮（含小锂与小钠），只留最近 50 条
-    trialHistory.push({ role: 'user', text: input }, { role: 'ai', text: reply });
-    if (trialHistory.length > TRIAL_MAX) trialHistory.splice(0, trialHistory.length - TRIAL_MAX);
+    sess.history.push({ role: 'user', text: input }, { role: 'ai', text: reply });
+    if (sess.history.length > TRIAL_MAX) sess.history.splice(0, sess.history.length - TRIAL_MAX);
     return reply;
 }
 
