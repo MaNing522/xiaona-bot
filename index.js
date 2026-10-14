@@ -28,7 +28,7 @@ import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, ge
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
-import { transcribe } from './asr.js';
+import { transcribe, asrEnabled } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
 
@@ -100,6 +100,7 @@ function logFeatureStates() {
     logger.info(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
     logger.info(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
     logger.info(`   语音合成       [已启用]  kktts 免密钥`);
+    logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 FunASR(SenseVoice) ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
     logger.info(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
     logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
