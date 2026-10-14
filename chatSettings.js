@@ -59,6 +59,25 @@ export function listKeys() {
   return Object.keys(store);
 }
 
+/**
+ * 设置某会话是否置顶（独立于其它覆盖项；置顶只是网页列表排序用）。
+ * @returns {{ok:boolean, error?:string}}
+ */
+export function setPin(key, pinned) {
+  const k = String(key || '');
+  if (!isConvKey(k)) return { ok: false, error: 'key 格式错误（g:群号 或 p:QQ号）' };
+  // 显式记录 true / false：false 表示"主人会话也手动取消置顶"，不再走默认置顶
+  const cur = { ...(store[k] || {}), pin: !!pinned };
+  store[k] = cur;
+  persist();
+  return { ok: true };
+}
+
+/** 全部置顶的会话 key 列表 */
+export function pinnedKeys() {
+  return Object.keys(store).filter((k) => store[k] && store[k].pin === true);
+}
+
 /** 把数值项里合法的键拷出来（≥0 的有限数），非法忽略 */
 function cleanNums(src, allowed) {
   const out = {};

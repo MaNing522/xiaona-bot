@@ -459,7 +459,7 @@ async function logs(){try{const d=await api('/api/logs');
 }catch(e){}}
 
 // ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
-let cvKeys=[], cvSel='', cvGlobal=null, cvOver={};
+let cvSel='', cvGlobal=null, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true;
 const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起'};
 // 数值项中文名（用于全局设置与会话覆盖表单）
 const NUM_LABELS={
@@ -501,22 +501,36 @@ function gcRender(){
   $('gcfgNum').innerHTML=html;
 }
 
-// 会话列表
-function cvRenderList(){
-  const grp=cvKeys.filter(k=>k.indexOf('g:')===0);
-  const pri=cvKeys.filter(k=>k.indexOf('p:')===0);
-  const item=k=>{
-    const n=Object.keys(cvOver[k]||{}).length;
-    return '<div class="cmd" data-sel="'+k+'" style="cursor:pointer;display:flex;align-items:center;gap:8px'+(k===cvSel?';border-color:var(--accent)':'')+'">'+
-      '<b style="min-width:110px">'+k+'</b>'+
+// 会话列表（所有群聊 + 所有好友；主人私聊默认置顶，可手动置顶/取消）
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+function cvItem(c){
+  const n=c.overrides||0;
+  const tip=c.pinned?'📌 ':'';
+  const own=c.key===cvOwner?' <span class="hint" style="margin:0">(主人)</span>':'';
+  return '<div class="cmd" style="display:flex;align-items:center;gap:8px'+(c.key===cvSel?';border-color:var(--accent)':'')+'">'+
+    '<div data-sel="'+esc(c.key)+'" style="cursor:pointer;flex:1;min-width:0;display:flex;align-items:center;gap:8px">'+
+      '<b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+tip+esc(c.name)+own+'</b>'+
+      '<span class="hint" style="margin:0;flex:0 0 auto">'+esc(c.key)+'</span>'+
       '<span class="hint" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0">'+(n?('已覆盖 '+n+' 项'):'使用全局')+'</span>'+
-      '</div>';
-  };
-  $('convList').innerHTML = cvKeys.length
-    ? ('<div class="hint" style="margin:10px 0 4px">群聊</div>'+(grp.length?grp.map(item).join(''):'<span class="hint">暂无</span>')+
-       '<div class="hint" style="margin:14px 0 4px">单聊</div>'+(pri.length?pri.map(item).join(''):'<span class="hint">暂无</span>'))
-    : '<span class="hint">暂无会话（机器人收到消息后会出现在这里）</span>';
+    '</div>'+
+    '<button class="btn '+(c.pinned?'green':'ghost')+'" data-pin="'+esc(c.key)+'" title="'+(c.pinned?'取消置顶':'置顶')+'" style="min-height:30px;width:auto;padding:0 10px;font-size:12px;margin:0">'+(c.pinned?'📌 已置顶':'置顶')+'</button>'+
+    '</div>';
+}
+function cvRenderList(){
+  const grp=cvGroups, pri=cvFriends;
+  $('convList').innerHTML =
+    ('<div class="hint" style="margin:10px 0 4px">群聊 ('+grp.length+')</div>'+(grp.length?grp.map(cvItem).join(''):'<span class="hint">暂无（机器人尚未加入任何群）</span>')+
+     '<div class="hint" style="margin:14px 0 4px">好友 ('+pri.length+')</div>'+(pri.length?pri.map(cvItem).join(''):'<span class="hint">暂无好友</span>'))+
+    (cvListOk?'':'<div class="hint" style="margin-top:10px;color:var(--warn)">⚠️ 未能从 NapCat 获取群/好友名单（机器人可能未连接）。</div>');
   document.querySelectorAll('#convList [data-sel]').forEach(b=>b.onclick=()=>{cvSel=b.dataset.sel;cvRenderList();cvRenderForm();});
+  document.querySelectorAll('#convList [data-pin]').forEach(b=>b.onclick=async()=>{
+    const k=b.dataset.pin;
+    const cur=(cvGroups.concat(cvFriends).find(c=>c.key===k)||{}).pinned;
+    try{
+      const d=await api('/api/conversations/pin',{method:'POST',body:JSON.stringify({key:k,pinned:!cur})});
+      if(d.ok) await convLoad(true);
+    }catch(e){}
+  });
 }
 
 // 某会话的覆盖表单（留空=使用全局，占位符显示全局值）
@@ -547,9 +561,12 @@ function cvRenderForm(){
 async function convLoad(full){
   try{
     const d=await api('/api/chat-settings');
-    cvGlobal=d.global||{}; cvOver=d.conversations||{}; cvKeys=d.keys||[];
-    if(cvSel && !cvKeys.includes(cvSel)) cvSel='';
-    if(full){ gcRender(); cvRenderForm(); }
+    cvGlobal=d.global||{}; cvOver=d.conversations||{};
+    if(full){
+      const cv=await api('/api/conversations');
+      cvGroups=cv.groups||[]; cvFriends=cv.friends||[]; cvOwner=cv.owner||''; cvListOk=cv.listOk!==false;
+      gcRender(); cvRenderForm();
+    }
     cvRenderList();
   }catch(e){}
 }

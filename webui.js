@@ -482,6 +482,78 @@ async function handleHealth(res) {
   sendJSON(res, body.status === 'ok' ? 200 : 503, body);
 }
 
+// ---------- 会话列表：所有群聊 + 所有好友（主人默认置顶） ----------
+// 群/好友名单从 NapCat 拉取（get_group_list / get_friend_list），缓存 60 秒避免频繁请求。
+const convCache = { at: 0, groups: [], friends: [], ok: false };
+const CONV_CACHE_MS = 60 * 1000;
+
+async function fetchGroupsAndFriends() {
+  if (Date.now() - convCache.at < CONV_CACHE_MS) return convCache;
+  const call = getSendMsg(); // 由 index.js 注入：OneBot 的 callApi
+  if (!call) return convCache;
+  try {
+    const [gs, fs] = await Promise.all([
+      call('get_group_list', {}).catch(() => []),
+      call('get_friend_list', {}).catch(() => []),
+    ]);
+    convCache.groups = (Array.isArray(gs) ? gs : []).map((g) => ({
+      key: 'g:' + String(g.group_id),
+      id: String(g.group_id),
+      name: g.group_name || String(g.group_id),
+    }));
+    convCache.friends = (Array.isArray(fs) ? fs : []).map((f) => ({
+      key: 'p:' + String(f.user_id),
+      id: String(f.user_id),
+      name: f.remark || f.nickname || String(f.user_id),
+    }));
+    convCache.at = Date.now();
+    convCache.ok = true;
+  } catch (e) {
+    logger.warn('[面板] 获取群/好友列表失败：' + e.message);
+  }
+  return convCache;
+}
+
+/** 组装会话列表：群聊 + 好友，附加置顶状态与已覆盖项数；主人私聊默认置顶 */
+async function listConversations() {
+  const owner = String(perm.getOwner() || '');
+  const pinnedMap = {};
+  for (const k of chatCfg.pinnedKeys()) pinnedMap[k] = true;
+  // 显式取消置顶（pin === false）也记下，避免主人会话被默认置顶规则又拉上去
+  const over = chatCfg.allOverrides();
+  const explicitOff = {};
+  for (const k of Object.keys(over)) if (over[k] && over[k].pin === false) explicitOff[k] = true;
+
+  const effPinned = (k) => (pinnedMap[k] ? true : (owner && k === 'p:' + owner && !explicitOff[k]));
+  const coverCount = (k) => Object.keys(over[k] || {}).filter((f) => f !== 'pin').length;
+
+  const fx = await fetchGroupsAndFriends();
+  const seen = new Set();
+  const groups = [];
+  const friends = [];
+  for (const g of fx.groups) {
+    if (seen.has(g.key)) continue;
+    seen.add(g.key);
+    groups.push({ ...g, pinned: !!effPinned(g.key), overrides: coverCount(g.key) });
+  }
+  for (const f of fx.friends) {
+    if (seen.has(f.key)) continue;
+    seen.add(f.key);
+    friends.push({ ...f, pinned: !!effPinned(f.key), overrides: coverCount(f.key) });
+  }
+  // 补充"收到过消息但不在名单里"的会话（如已退群/未加好友），避免它们从列表消失
+  for (const k of chatCfg.listKeys()) {
+    if (seen.has(k)) continue;
+    if (k.startsWith('g:')) groups.push({ key: k, id: k.slice(2), name: k.slice(2) + '（不在群列表）', pinned: !!effPinned(k), overrides: coverCount(k) });
+    else friends.push({ key: k, id: k.slice(2), name: k.slice(2) + '（非好友）', pinned: !!effPinned(k), overrides: coverCount(k) });
+  }
+  // 置顶的排最前，其余按名称排序
+  const sortFn = (a, b) => (Number(b.pinned) - Number(a.pinned)) || a.name.localeCompare(b.name, 'zh-CN');
+  groups.sort(sortFn);
+  friends.sort(sortFn);
+  return { owner, listOk: fx.ok, groups, friends, pinned: chatCfg.pinnedKeys() };
+}
+
 // ---------- 路由 ----------
 async function route(req, res, url) {
   sweepAuth();
@@ -675,6 +747,19 @@ async function route(req, res, url) {
     const r = chatCfg.set(key, patch || {});
     if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
     return sendJSON(res, 200, { ok: true, overrides: r.overrides, effective: chatCfg.getEffective(key) });
+  }
+
+  // 会话列表：机器人加入的全部群聊 + 全部好友（主人私聊默认置顶）
+  if (url.pathname === '/api/conversations' && req.method === 'GET') {
+    const list = await listConversations();
+    return sendJSON(res, 200, { ok: true, ...list });
+  }
+  // 置顶 / 取消置顶
+  if (url.pathname === '/api/conversations/pin' && req.method === 'POST') {
+    const { key, pinned } = await readBody(req);
+    const r = chatCfg.setPin(key, !!pinned);
+    if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+    return sendJSON(res, 200, { ok: true, pinned: chatCfg.pinnedKeys() });
   }
 
   // 全局设置 = config.json：查看 / 编辑（写入后热加载生效）
