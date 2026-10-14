@@ -1635,7 +1635,53 @@ const SEG_PLACEHOLDER = {
     record: '[语音]',
     video: '[视频]',
     file: '[文件]',
+    forward: '[聊天记录]',  // 合并转发：同步路径只报类型，给 AI 的版本会展开并标注发言人
 };
+
+/**
+ * 合并转发的节点归一化：不同 OneBot 实现字段不一（sender.user_id / user_id / uin…），
+ * 统一取出「发送者QQ、昵称、内容段」，后面按「昵称(QQ)：内容」标注给 AI。
+ */
+function normalizeForwardNodes(raw) {
+    const arr = Array.isArray(raw) ? raw : [];
+    const out = [];
+    for (const n of arr) {
+        const d = (n && n.data) || n || {};
+        const sender = d.sender || {};
+        const uid = String(sender.user_id || sender.uin || d.user_id || d.uin || '');
+        const name = String(sender.nickname || sender.card || d.nickname || d.name || d.card || '').trim();
+        const segs = d.message || d.content || d.message_content || d.messages || [];
+        out.push({ uid, name, segs: Array.isArray(segs) ? segs : [] });
+    }
+    return out;
+}
+
+/**
+ * 取合并转发（聊天记录）的具体内容。
+ * 事件里带了 content 就直接用；没有就按 id 调 get_forward_msg 拉一次（给 AI 看时可以等）。
+ */
+async function forwardNodesOf(data) {
+    if (data && Array.isArray(data.content) && data.content.length) return normalizeForwardNodes(data.content);
+    const id = data && (data.id || data.resid || data.forward_id);
+    if (!id) return [];
+    try {
+        const res = await callApi('get_forward_msg', { id });
+        const msgs = res && (res.messages || res.message || res.content);
+        return normalizeForwardNodes(msgs);
+    } catch (e) {
+        logger.warn('[合并转发] 拉取聊天记录失败：' + e.message);
+        return [];
+    }
+}
+
+/** 把合并转发的每一条还原成 "昵称(QQ号)：内容"，让 AI 知道每句话是谁说的 */
+function forwardNodesToText(nodes) {
+    return nodes.map((n) => {
+        const who = n.name ? (n.uid ? `${n.name}(${n.uid})` : n.name) : (n.uid ? `QQ${n.uid}` : '未知');
+        const body = inlineTextOf(n.segs, '') || SEG_PLACEHOLDER.forward;
+        return `${who}: ${body}`;
+    }).join('\n');
+}
 
 /** 同步读 @ 昵称缓存；没有返回 '' */
 function atNameCached(groupId, qq) {
@@ -1664,7 +1710,11 @@ async function inlineTextOfForAi(segments, groupId) {
             const qq = String(seg.data.qq || '');
             out += qq === 'all' ? '@全体成员' : '@' + await atDisplayName(groupId, qq, seg.data.name);
         } else if (seg.type === 'reply') out += await replyPreviewForAi(seg.data, groupId);
-        else if (seg.type === 'record') {
+        else if (seg.type === 'forward') {
+            // 合并转发（聊天记录）：展开每条并标注发送者 QQ，让 AI 知道每句话是谁说的
+            const nodes = await forwardNodesOf(seg.data);
+            out += nodes.length ? `[聊天记录]\n${forwardNodesToText(nodes)}` : SEG_PLACEHOLDER.forward;
+        } else if (seg.type === 'record') {
             // 语音消息：配了 ASR 就转成文字给模型看（转不出/没配置则保留 [语音] 占位）
             const t = await transcribe(seg.data);
             out += t ? `[语音]${t}` : SEG_PLACEHOLDER.record;
