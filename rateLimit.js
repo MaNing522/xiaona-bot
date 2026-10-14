@@ -46,6 +46,18 @@ const DEFAULTS = {
 };
 
 let cfg = { ...DEFAULTS };
+
+/** 允许被单个会话覆盖的限额键（用户 / 群维度；全局并发与惩罚项不受会话覆盖影响） */
+const LIMIT_KEYS = ['userCooldownMs', 'userPerMinute', 'userPerHour', 'userPerDay', 'groupPerMinute', 'groupPerHour'];
+/** 从会话覆盖里挑出合法的限额键（≥0 的有限数） */
+function pickLimits(src) {
+  const out = {};
+  for (const k of LIMIT_KEYS) {
+    const n = Number(src[k]);
+    if (Number.isFinite(n) && n >= 0) out[k] = n;
+  }
+  return out;
+}
 /**
  * qq -> {
  *   hits:number[]        已**放行**的时刻（24h 内）—— 计入额度与冷却
@@ -153,13 +165,14 @@ function settle(task, result) {
  * 冷却起点（u.last）已经变了，沿用旧值会让 2 秒冷却失效、几条消息挤在一起发出去。
  */
 function effectiveReadyAt(task, now) {
+  const c = task.limits || cfg; // 该任务自己的限额（会话级覆盖）或全局
   const u = userState(task.userId);
   return Math.max(
     task.enqueuedAt,
-    u.last + cfg.userCooldownMs,
-    windowReadyAt(u.hits, now, cfg.minuteWindowMs, cfg.userPerMinute),
+    u.last + c.userCooldownMs,
+    windowReadyAt(u.hits, now, cfg.minuteWindowMs, c.userPerMinute),
     task.groupId
-      ? windowReadyAt(groupState(task.groupId).hits, now, cfg.minuteWindowMs, cfg.groupPerMinute)
+      ? windowReadyAt(groupState(task.groupId).hits, now, cfg.minuteWindowMs, c.groupPerMinute)
       : 0,
     windowReadyAt(global.hits, now, cfg.minuteWindowMs, cfg.globalPerMinute),
   );
@@ -267,6 +280,10 @@ export function acquire(req = {}) {
   const groupId = req.groupId ? String(req.groupId) : '';
   const convKey = String(req.convKey || (groupId ? 'g:' + groupId : 'p:' + userId));
   const u = userState(userId);
+  // 会话级限额覆盖（可选）：只认这几个用户/群维度的键，其余（全局并发、惩罚等）保持全局
+  const lim = req.limits && typeof req.limits === 'object'
+    ? { ...cfg, ...pickLimits(req.limits) }
+    : cfg;
 
   // 记录"到达"（用于识别恶意刷屏：看的是请求得多快，不是放行得多快）
   u.reqs.push(now);
@@ -288,13 +305,13 @@ export function acquire(req = {}) {
   }
 
   // 3) 小时 / 日额度用满：这两个排队也解决不了（要等很久），只能提示
-  if (countWithin(u.hits, now, cfg.dayWindowMs) >= cfg.userPerDay) {
+  if (countWithin(u.hits, now, cfg.dayWindowMs) >= lim.userPerDay) {
     if (addViolation(u, now))
       logger.warn(`[限速] QQ ${userId} 连续超限，冷却 ${cfg.penaltyCooldownMs / 1000}s`);
     else logThrottled('day:' + userId, `[限速] QQ ${userId} 触发日额度上限`);
     return Promise.resolve({ ok: false, reason: 'day' });
   }
-  if (countWithin(u.hits, now, cfg.hourWindowMs) >= cfg.userPerHour) {
+  if (countWithin(u.hits, now, cfg.hourWindowMs) >= lim.userPerHour) {
     if (addViolation(u, now))
       logger.warn(`[限速] QQ ${userId} 连续超限，冷却 ${cfg.penaltyCooldownMs / 1000}s`);
     else logThrottled('hour:' + userId, `[限速] QQ ${userId} 触发小时额度上限`);
@@ -312,9 +329,9 @@ export function acquire(req = {}) {
   // 5) 冷却 + 三层分钟限额：算出"最早什么时候合规"，到点前静静排队（不拒绝）
   const readyAt = Math.max(
     now,
-    u.last + cfg.userCooldownMs,
-    windowReadyAt(u.hits, now, cfg.minuteWindowMs, cfg.userPerMinute),
-    groupId ? windowReadyAt(groupState(groupId).hits, now, cfg.minuteWindowMs, cfg.groupPerMinute) : 0,
+    u.last + lim.userCooldownMs,
+    windowReadyAt(u.hits, now, cfg.minuteWindowMs, lim.userPerMinute),
+    groupId ? windowReadyAt(groupState(groupId).hits, now, cfg.minuteWindowMs, lim.groupPerMinute) : 0,
     windowReadyAt(global.hits, now, cfg.minuteWindowMs, cfg.globalPerMinute),
   );
   const needsWait = readyAt > now + 50; // 50ms 容差：正常间隔聊天不算"超限"
@@ -330,6 +347,7 @@ export function acquire(req = {}) {
     groupId,
     convKey,
     enqueuedAt: now,
+    limits: lim === cfg ? null : lim, // 会话级限额快照（无覆盖则用全局，跟着热加载变化）
     resolve: null,
     timer: null,
     settled: false,

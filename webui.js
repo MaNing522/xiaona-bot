@@ -17,6 +17,8 @@ import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } fro
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
 import { isMcConnected } from './mcbridge.js';
+import * as chatCfg from './chatSettings.js';
+import { config, reloadConfig, CONFIG_PATH } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
@@ -651,6 +653,52 @@ async function route(req, res, url) {
   if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
     if (trialReset) trialReset();
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // ---------- 会话管理（群聊/单聊各自覆盖全局设置）----------
+  // 会话列表来源：最近消息流里出现过的会话 + 已存有覆盖记录的会话
+  if (url.pathname === '/api/chat-settings' && req.method === 'GET') {
+    const keys = [];
+    for (const k of chatCfg.listKeys()) if (!keys.includes(k)) keys.push(k);
+    for (let i = takeover.msgs.length - 1; i >= 0 && keys.length < 200; i--) {
+      const k = takeover.msgs[i].key;
+      if (k && !keys.includes(k)) keys.push(k);
+    }
+    return sendJSON(res, 200, {
+      global: config(),                       // 全局设置（config.json）
+      conversations: chatCfg.allOverrides(),   // 各会话的覆盖项
+      keys,
+    });
+  }
+  if (url.pathname === '/api/chat-settings' && req.method === 'POST') {
+    const { key, patch } = await readBody(req);
+    const r = chatCfg.set(key, patch || {});
+    if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+    return sendJSON(res, 200, { ok: true, overrides: r.overrides, effective: chatCfg.getEffective(key) });
+  }
+
+  // 全局设置 = config.json：查看 / 编辑（写入后热加载生效）
+  if (url.pathname === '/api/global-config' && req.method === 'GET') {
+    return sendJSON(res, 200, { ok: true, config: config() });
+  }
+  if (url.pathname === '/api/global-config' && req.method === 'POST') {
+    const body = await readBody(req);
+    const base = config();
+    const next = {
+      rateLimit: { ...base.rateLimit },
+      cooldown: { ...base.cooldown },
+      engage: { ...base.engage },
+      chat: { ...base.chat },
+    };
+    // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat']) {
+      const b = body && body[seg];
+      if (!b || typeof b !== 'object') continue;
+      for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
+    }
+    if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
+    reloadConfig(); // 立即热加载生效
+    return sendJSON(res, 200, { ok: true, config: config() });
   }
 
   // ---------- 人工接管（三态：auto 自动 / manual 人工 / hybrid 混合） ----------

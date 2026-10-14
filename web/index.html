@@ -182,7 +182,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item active" data-tab="login"><span class="ico">📊</span>登录状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="group"><span class="ico">🛡️</span>群管</button>
-      <button class="nav-item" data-tab="takeover"><span class="ico">🤝</span>接管</button>
+      <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话管理</button>
       <button class="nav-item" data-tab="trial"><span class="ico">🧪</span>私聊试用</button>
       <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
     </nav>
@@ -282,26 +282,25 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
   </div>
 
-  <!-- 接管 -->
-  <div class="panel" data-panel="takeover">
+  <!-- 会话管理 -->
+  <div class="panel" data-panel="conv">
+    <div class="card span2">
+      <h2>⚙️ 全局设置 <span class="hint" style="margin:0;font-weight:400">来自 config.json，保存后热加载生效</span></h2>
+      <div id="gcfgChat"></div>
+      <div id="gcfgNum"></div>
+      <button class="btn green" id="gcSave" style="width:auto;margin-top:14px">保存全局设置</button>
+      <div class="hint" id="gcMsg"></div>
+    </div>
     <div class="card">
-      <h2>🤝 人工接管</h2>
-      <div class="hint" style="margin-top:0">开启接管后，该会话的消息不再自动回复，由你在面板上手动回复（实时查看 + 手动发送）。</div>
-      <div id="tkConvs"><span class="hint">暂无会话（机器人收到消息后会出现在这里）</span></div>
-      <div class="hint" id="tkAudit" style="margin-top:10px"></div>
+      <h2>💬 会话列表</h2>
+      <div class="hint" style="margin-top:0">机器人收到消息的群/私聊会出现在这里。点选一个会话可单独设置；留空的项都使用全局。</div>
+      <div id="convList"><span class="hint">暂无会话</span></div>
     </div>
-    <div class="card span2">
-      <h2>💬 会话消息</h2>
-      <div class="log" id="tkMsgs" style="height:420px"></div>
-    </div>
-    <div class="card span2">
-      <h2>📝 手动回复</h2>
-      <div class="row" style="margin-top:8px">
-        <input id="tkKey" type="text" placeholder="会话 key，如 g:群号 / p:QQ号">
-        <input id="tkReply" type="text" placeholder="回复内容">
-      </div>
-      <button class="btn green" id="tkSend">发送回复</button>
-      <div class="hint" id="tkSendMsg"></div>
+    <div class="card">
+      <h2 id="convTitle">该会话设置</h2>
+      <div id="convForm"><span class="hint">先在左侧选择一个会话</span></div>
+      <button class="btn green" id="cvSave" style="width:auto;margin-top:14px">保存会话设置</button>
+      <div class="hint" id="cvMsg"></div>
     </div>
   </div>
 
@@ -459,60 +458,138 @@ async function logs(){try{const d=await api('/api/logs');
   renderLog('lgLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
 }catch(e){}}
 
-// ---------- 人工接管（三态：自动/人工/混合） ----------
-let tkSelected = '';
-async function takeoverUI(){
+// ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
+let cvKeys=[], cvSel='', cvGlobal=null, cvOver={};
+const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起'};
+// 数值项中文名（用于全局设置与会话覆盖表单）
+const NUM_LABELS={
+  rateLimit:{userCooldownMs:'用户冷却(ms)',userPerMinute:'用户每分钟',userPerHour:'用户每小时',userPerDay:'用户每日',groupPerMinute:'群每分钟',groupPerHour:'群每小时',globalMaxConcurrent:'全局并发',globalPerMinute:'全局每分钟',queueMax:'队列上限',queueTimeoutMs:'排队超时(ms)',violationsToCooldown:'超限转冷却次数',penaltyCooldownMs:'冷却时长(ms)',floodWindowMs:'刷屏窗口(ms)',floodCount:'刷屏阈值',penaltyMuteMs:'禁言时长(ms)'},
+  cooldown:{pokeMs:'戳一戳冷却(ms)',shakeMs:'摇一摇冷却(ms)',forwardDelayMs:'转发间隔(ms)',forwardMs:'转发冷却(ms)'},
+  engage:{ttlMs:'会话有效期(ms)',initiatorLeft:'唤起人额度',otherLeft:'其他人额度'},
+};
+// 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）
+const CV_NUM_KEYS={
+  rateLimit:['userCooldownMs','userPerMinute','userPerHour','userPerDay','groupPerMinute','groupPerHour'],
+  cooldown:['pokeMs','shakeMs','forwardMs','forwardDelayMs'],
+  engage:['ttlMs','initiatorLeft','otherLeft'],
+};
+const TA_STYLE='width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;color:#1f2329;font:inherit;font-size:15px;resize:vertical';
+
+// 全局设置表单（config.json）
+function gcRender(){
+  const c=cvGlobal||{}; const ch=c.chat||{};
+  $('gcfgChat').innerHTML=
+    '<div class="row">'+
+    '<div><label>AI 是否回复</label><select id="gcReply"><option value="true">回复</option><option value="false">不回复（静音）</option></select></div>'+
+    '<div><label>是否允许语音</label><select id="gcVoice"><option value="true">允许</option><option value="false">禁止</option></select></div>'+
+    '</div>'+
+    '<label>群聊触发关键词</label><input id="gcKw" type="text" placeholder="默认：小钠">'+
+    '<label>补充提示词（追加给 AI）</label><textarea id="gcPrompt" style="'+TA_STYLE+'"></textarea>';
+  $('gcReply').value=String(ch.botReply!==false);
+  $('gcVoice').value=String(ch.voice!==false);
+  $('gcKw').value=ch.keyword||'';
+  $('gcPrompt').value=ch.extraPrompt||'';
+  let html='';
+  for(const seg of ['rateLimit','cooldown','engage']){
+    html+='<h2 style="font-size:14px;margin:18px 0 4px">'+SEGNAME[seg]+'</h2><div class="row" style="grid-template-columns:1fr 1fr 1fr">';
+    for(const k of Object.keys(NUM_LABELS[seg])){
+      if(!NUM_LABELS[seg][k]) continue;
+      html+='<div><label>'+NUM_LABELS[seg][k]+'</label><input data-gc="'+seg+'.'+k+'" type="number" min="0" step="any" value="'+((c[seg]||{})[k]??'')+'"></div>';
+    }
+    html+='</div>';
+  }
+  $('gcfgNum').innerHTML=html;
+}
+
+// 会话列表
+function cvRenderList(){
+  const grp=cvKeys.filter(k=>k.indexOf('g:')===0);
+  const pri=cvKeys.filter(k=>k.indexOf('p:')===0);
+  const item=k=>{
+    const n=Object.keys(cvOver[k]||{}).length;
+    return '<div class="cmd" data-sel="'+k+'" style="cursor:pointer;display:flex;align-items:center;gap:8px'+(k===cvSel?';border-color:var(--accent)':'')+'">'+
+      '<b style="min-width:110px">'+k+'</b>'+
+      '<span class="hint" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0">'+(n?('已覆盖 '+n+' 项'):'使用全局')+'</span>'+
+      '</div>';
+  };
+  $('convList').innerHTML = cvKeys.length
+    ? ('<div class="hint" style="margin:10px 0 4px">群聊</div>'+(grp.length?grp.map(item).join(''):'<span class="hint">暂无</span>')+
+       '<div class="hint" style="margin:14px 0 4px">单聊</div>'+(pri.length?pri.map(item).join(''):'<span class="hint">暂无</span>'))
+    : '<span class="hint">暂无会话（机器人收到消息后会出现在这里）</span>';
+  document.querySelectorAll('#convList [data-sel]').forEach(b=>b.onclick=()=>{cvSel=b.dataset.sel;cvRenderList();cvRenderForm();});
+}
+
+// 某会话的覆盖表单（留空=使用全局，占位符显示全局值）
+function cvRenderForm(){
+  if(!cvSel){ $('convTitle').textContent='该会话设置'; $('convForm').innerHTML='<span class="hint">先在左侧选择一个会话</span>'; return; }
+  const g=cvGlobal||{}; const gc=g.chat||{}; const o=cvOver[cvSel]||{};
+  $('convTitle').textContent='该会话设置 · '+cvSel;
+  const sel=(id,val,defTxt)=>'<select id="'+id+'"><option value="">使用全局（'+defTxt+'）</option>'+
+    '<option value="true"'+(val===true?' selected':'')+'>是</option>'+
+    '<option value="false"'+(val===false?' selected':'')+'>否</option></select>';
+  let html='<div class="row">'+
+    '<div><label>AI 是否回复</label>'+sel('cvReply',o.reply,(gc.botReply!==false?'回复':'不回复'))+'</div>'+
+    '<div><label>是否允许语音</label>'+sel('cvVoice',o.voice,(gc.voice!==false?'允许':'禁止'))+'</div>'+
+    '</div>'+
+    '<label>触发关键词</label><input id="cvKw" type="text" value="'+(o.keyword||'')+'" placeholder="留空则用全局（'+(gc.keyword||'')+'）">'+
+    '<label>补充提示词</label><textarea id="cvPrompt" style="'+TA_STYLE+'" placeholder="留空则用全局">'+(o.extraPrompt||'')+'</textarea>';
+  for(const seg of ['rateLimit','cooldown','engage']){
+    html+='<h2 style="font-size:14px;margin:18px 0 4px">'+SEGNAME[seg]+'</h2><div class="row" style="grid-template-columns:1fr 1fr 1fr">';
+    for(const k of CV_NUM_KEYS[seg]){
+      const ov=(o[seg]||{})[k];
+      html+='<div><label>'+NUM_LABELS[seg][k]+'</label><input data-cv="'+seg+'.'+k+'" type="number" min="0" step="any" value="'+(ov??'')+'" placeholder="'+((g[seg]||{})[k]??'')+'"></div>';
+    }
+    html+='</div>';
+  }
+  $('convForm').innerHTML=html;
+}
+
+async function convLoad(full){
   try{
-    const d = await api('/api/takeover');
-    const modes = d.modes||{};
-    const msgs = d.msgs||[];
-    const keys=[];
-    for(const m of msgs){ if(m.key && !keys.includes(m.key)) keys.push(m.key); }
-    if(keys.length && !tkSelected){ tkSelected = keys[0]; $('tkKey').value = tkSelected; }
-    const mkBtn=(k,val,label,activeCls,bg)=>'<button class="btn '+(modes[k]===val?activeCls:'ghost')+'" style="min-height:30px;width:auto;padding:0 10px;font-size:12px'+(modes[k]===val&&bg?';background:'+bg+';border-color:transparent':'')+'" data-mode="'+val+':'+k+'">'+label+'</button>';
-    $('tkConvs').innerHTML = keys.length ? keys.map(k=>{
-      const last=(msgs.filter(m=>m.key===k).slice(-1)[0]||{}).text||'';
-      return '<div class="cmd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px">'+
-        '<b style="min-width:100px">'+k+'</b>'+
-        '<span class="hint" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(last||'')+'</span>'+
-        mkBtn(k,'auto','自动','green')+
-        mkBtn(k,'manual','人工','red')+
-        mkBtn(k,'hybrid','混合','green','#7c5cff')+
-        '<button class="btn ghost" style="min-height:30px;width:auto;padding:0 10px;font-size:12px" data-sel="'+k+'">查看</button>'+
-        '</div>';
-    }).join('') : '<span class="hint">暂无会话</span>';
-    document.querySelectorAll('[data-mode]').forEach(b=>{
-      b.onclick=async()=>{
-        const i=b.dataset.mode.indexOf(':');
-        const val=b.dataset.mode.slice(0,i), k=b.dataset.mode.slice(i+1);
-        try{ await api('/api/takeover',{method:'POST',body:JSON.stringify({key:k,mode:val})}); }catch(e){}
-        takeoverUI();
-      };
-    });
-    document.querySelectorAll('[data-sel]').forEach(b=>{
-      b.onclick=()=>{ tkSelected=b.dataset.sel; $('tkKey').value=tkSelected; takeoverUI(); };
-    });
-    // 审计日志
-    const audit = d.audit||[];
-    $('tkAudit').textContent = audit.length ? '📋 最近操作：'+audit.slice(-5).map(a=>`${a.key} ${a.from}→${a.to}（${a.by} ${new Date(a.t).toLocaleTimeString('zh-CN',{hour12:false})}）`).join('；') : '';
-    // 消息记录（选中会话）
-    const sel = tkSelected || '';
-    const list = sel ? msgs.filter(m=>m.key===sel) : msgs;
-    const lines = list.length ? list.map(m=>{
-      const tm = new Date(m.t).toLocaleTimeString('zh-CN',{hour12:false});
-      return (m.dir==='out'?'【我】':('【'+m.from+'】'))+' '+tm+' '+m.text;
-    }) : ['(无消息)'];
-    renderLog('tkMsgs', lines);
+    const d=await api('/api/chat-settings');
+    cvGlobal=d.global||{}; cvOver=d.conversations||{}; cvKeys=d.keys||[];
+    if(cvSel && !cvKeys.includes(cvSel)) cvSel='';
+    if(full){ gcRender(); cvRenderForm(); }
+    cvRenderList();
   }catch(e){}
 }
-$('tkSend').onclick = async ()=>{
-  const key=$('tkKey').value.trim(), text=$('tkReply').value.trim();
-  if(!key||!text) return;
+
+$('gcSave').onclick=async()=>{
+  const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},rateLimit:{},cooldown:{},engage:{}};
+  document.querySelectorAll('[data-gc]').forEach(inp=>{
+    const a=inp.dataset.gc.split('.');
+    const v=inp.value.trim();
+    if(v!=='') body[a[0]][a[1]]=Number(v);
+  });
   try{
-    const d = await api('/api/takeover/send',{method:'POST',body:JSON.stringify({key,text})});
-    $('tkSendMsg').textContent = d.ok?('✅ 已发送：'+text):('❌ '+(d.error||'发送失败'));
-    if(d.ok){ $('tkReply').value=''; takeoverUI(); }
-  }catch(e){ $('tkSendMsg').textContent='❌ '+e.message; }
+    const d=await api('/api/global-config',{method:'POST',body:JSON.stringify(body)});
+    if(d&&d.config) cvGlobal=d.config;
+    gcRender(); cvRenderList(); cvRenderForm();
+    $('gcMsg').textContent='✅ 已保存并即时生效';
+    setTimeout(()=>{$('gcMsg').textContent='';},2500);
+  }catch(e){ $('gcMsg').textContent='❌ '+e.message; }
+};
+
+$('cvSave').onclick=async()=>{
+  if(!cvSel) return;
+  const patch={
+    reply:$('cvReply').value===''?null:($('cvReply').value==='true'),
+    voice:$('cvVoice').value===''?null:($('cvVoice').value==='true'),
+    keyword:$('cvKw').value.trim(),
+    extraPrompt:$('cvPrompt').value,
+    rateLimit:{},cooldown:{},engage:{},
+  };
+  document.querySelectorAll('[data-cv]').forEach(inp=>{
+    const a=inp.dataset.cv.split('.');
+    const v=inp.value.trim();
+    patch[a[0]][a[1]]= v===''?'':Number(v);
+  });
+  try{
+    const d=await api('/api/chat-settings',{method:'POST',body:JSON.stringify({key:cvSel,patch})});
+    if(d.ok){ cvOver[cvSel]=d.overrides||{}; cvRenderList(); cvRenderForm(); }
+    $('cvMsg').textContent=d.ok?'✅ 已保存该会话设置':'❌ '+(d.error||'保存失败');
+    setTimeout(()=>{$('cvMsg').textContent='';},2500);
+  }catch(e){ $('cvMsg').textContent='❌ '+e.message; }
 };
 
 // ---------- 私聊试用（以「小锂 · 普通用户」身份本地跑一轮 AI） ----------
@@ -542,8 +619,8 @@ $('trInput').addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e
 // 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
 window.addEventListener('pagehide',()=>{try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
 
-load();perms();refresh();logs();takeoverUI();load();perms();
-setInterval(load,5000);setInterval(perms,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(takeoverUI,2000);
+load();perms();refresh();logs();convLoad(true);load();perms();
+setInterval(load,5000);setInterval(perms,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);
 </script>
 </body>
 </html>

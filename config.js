@@ -50,6 +50,13 @@ export const DEFAULTS = {
         initiatorLeft: 3,
         otherLeft: 1,
     },
+    // 会话层的全局默认（网页「会话管理」里会话可单独覆盖，见 chatSettings.js）
+    chat: {
+        botReply: true,        // AI 是否回复（全局开关；会话可单独静音）
+        keyword: '小钠',       // 群聊里触发回应的关键词（@ 与引用始终触发，不受此影响）
+        voice: true,           // 是否允许发语音
+        extraPrompt: '',       // 追加给 AI 的补充提示词（会话级可覆盖）
+    },
 };
 
 /**
@@ -92,6 +99,10 @@ function applyOverrides(base, over) {
         if (typeof v === 'number') {
             const n = Number(o);
             base[k] = Number.isFinite(n) && n >= 0 ? n : v;
+        } else if (typeof v === 'boolean') {
+            base[k] = typeof o === 'boolean' ? o : v;
+        } else if (typeof v === 'string') {
+            base[k] = typeof o === 'string' ? o : v;
         } else if (isPlainObject(v)) {
             applyOverrides(v, o);
         }

@@ -30,6 +30,7 @@ import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js'
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
 import { transcribe } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
+import * as chatCfg from './chatSettings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,9 +106,7 @@ function logFeatureStates() {
 // ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
 // 被 @/关键词/引用 叫到，就像现实里被叫住一样，接下来对方继续说，也该继续听着；
 // 但也不能被无限占着，所以给额度：首先唤起的人多给几条，别人插嘴只给一条。
-let ENGAGE_TTL = cfg.engage.ttlMs;          // 会话有效期（每次互动都续期，可热加载）
-let ENGAGE_INITIATOR_LEFT = cfg.engage.initiatorLeft; // 首先唤起的人：最多再检查几条
-let ENGAGE_OTHER_LEFT = cfg.engage.otherLeft;         // 其他人插嘴：只检查几条
+// 唤起数值（有效期/额度）改从 chatSettings.getEffective(key).engage 取，支持会话级覆盖
 const ENGAGE_DEBUG = String(process.env.ENGAGE_DEBUG || '') === 'true';
 const engageSessions = new Map();           // convKey -> { initiator, initLeft, otherLeft, exp }
 
@@ -142,6 +141,9 @@ function isShutUpDirective(text) {
 }
 
 if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
+
+// 会话级设置（群聊/单聊各自覆盖全局）：落盘到 data/chat-settings.json
+chatCfg.initChatSettings(SAVE_DIR);
 
 // 记忆模块初始化（配置化：条数/超时来自 .env）
 initMemory(SAVE_DIR, {
@@ -208,13 +210,6 @@ initRateLimit(cfg.rateLimit);
 function applyLiveConfig() {
     reloadConfig();
     const c = config();
-    ENGAGE_TTL = c.engage.ttlMs;
-    ENGAGE_INITIATOR_LEFT = c.engage.initiatorLeft;
-    ENGAGE_OTHER_LEFT = c.engage.otherLeft;
-    FORWARD_DELAY_MS = Math.max(500, c.cooldown.forwardDelayMs);
-    FORWARD_COOLDOWN_MS = c.cooldown.forwardMs;
-    POKE_COOLDOWN_MS = c.cooldown.pokeMs;
-    SHAKE_COOLDOWN = c.cooldown.shakeMs;
     initRateLimit(c.rateLimit);
 }
 
@@ -363,7 +358,7 @@ function stripToolTags(text) {
  * 搜索/查数据这类"做事"已交给工具（function calling），这里只管：
  *   是否接话（可选）、要不要发语音、怎么分条。
  */
-function buildDecisionPrompt(userInput, memory, allowSkip) {
+function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '') {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该发语音时不发 —— 这里必须显式豁免。
@@ -406,6 +401,7 @@ ${step}. **生成回复**：
    - 一条内容太长、或本来就想分几口气说时，可以拆成多条发：**单独占一行写三个连字符 ---** 当作分隔，最多 3 条；不需要拆就别写分隔线。
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
+${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n（以上为该会话的额外要求，在不违背基本人设与安全的前提下遵守。）\n` : ''}
 
 现在请回复用户：${userInput}`;
     return p;
@@ -425,14 +421,14 @@ ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复�
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, userId = '', ctx = {} }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, userId = '', sessionNote = '', ctx = {} }) {
     let tools = toolsForRole(role);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
 
     const sys = getSystemPrompt();
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
-        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip) },
+        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote) },
     ];
 
     const chat = (body) => chatCompletionRaw({
@@ -961,12 +957,14 @@ async function ownerQueryExtra(name) {
 /** 每个群上次发送时间：防止连点刷卡片。内存态，重启即清（不需要持久化） */
 const forwardSentAt = new Map();
 /**
+ * 聊天记录转发的冷却（按群取，支持会话级覆盖）。
  * 发卡片前的间隔（防封）：服务器收到请求会立刻响应，发得太密集容易被判定为机器批量操作。
  * **下限 500ms**，config.json 里只能调大、调不小（调小不会更安全）。
  */
-let FORWARD_DELAY_MS = Math.max(500, cfg.cooldown.forwardDelayMs);
-/** 同一个群两次发送的最小间隔 */
-let FORWARD_COOLDOWN_MS = cfg.cooldown.forwardMs;
+function forwardCooldownOf(gid) {
+    const cd = chatCfg.getEffective('g:' + gid).cooldown;
+    return { delayMs: Math.max(500, cd.forwardDelayMs), cooldownMs: cd.forwardMs };
+}
 const FORWARD_USAGE = '\n用法：每行一条，「QQ号 或 @某人」+ 空格 + 文案\n'
     + '例：\n#聊天记录\n12345678 你好呀\n@张三 在吗';
 
@@ -1184,9 +1182,10 @@ async function handleCommand(event, text) {
             if (!argRaw) return sendReply(event, `❌ 后面要跟内容${FORWARD_USAGE}`);
 
             const now = Date.now();
+            const fcd = forwardCooldownOf(gid);
             const last = forwardSentAt.get(gid) || 0;
-            if (now - last < FORWARD_COOLDOWN_MS) {
-                const left = Math.ceil((FORWARD_COOLDOWN_MS - (now - last)) / 1000);
+            if (now - last < fcd.cooldownMs) {
+                const left = Math.ceil((fcd.cooldownMs - (now - last)) / 1000);
                 return sendReply(event, `⏳ 刚发过一张，${left} 秒后再试`);
             }
 
@@ -1203,7 +1202,7 @@ async function handleCommand(event, text) {
             for (const e of entries) e.name = await atDisplayName(gid, e.uin, '');
 
             // 防封 + 不阻塞事件循环：await 等一会儿再发（别用 sleep 阻塞线程）
-            await new Promise((resolve) => setTimeout(resolve, FORWARD_DELAY_MS));
+            await new Promise((resolve) => setTimeout(resolve, fcd.delayMs));
             try {
                 await callApi('send_group_forward_msg', {
                     group_id: Number(gid),
@@ -1773,8 +1772,7 @@ async function memberName(gid, qq, memberLeft) {
 // ---------- 戳一戳：有人戳小钠就回一句 ----------
 /** 回应开关（.env 的 POKE_REPLY，默认开） */
 const POKE_REPLY = (process.env.POKE_REPLY || 'true') !== 'false';
-/** 每个会话的冷却：连点不刷屏（见 config.json 的 cooldown.pokeMs） */
-let POKE_COOLDOWN_MS = cfg.cooldown.pokeMs;
+/** 每个会话的冷却：连点不刷屏（见 config.json 的 cooldown.pokeMs，支持会话级覆盖） */
 const pokeCooldown = new Map();
 const POKE_LINES = [
     '别戳啦，再戳我可要咬人了',
@@ -1801,7 +1799,8 @@ async function onPoke(event) {
     const gid = event.group_id ? String(event.group_id) : '';
     const key = gid ? 'g:' + gid : 'p:' + uid;
     const now = Date.now();
-    if (now - (pokeCooldown.get(key) || 0) < POKE_COOLDOWN_MS) return;
+    const pokeCd = chatCfg.getEffective(key).cooldown.pokeMs;
+    if (now - (pokeCooldown.get(key) || 0) < pokeCd) return;
     pokeCooldown.set(key, now);
     if (pokeCooldown.size > 500) {
         for (const [k, v] of pokeCooldown) if (now - v > 60_000) pokeCooldown.delete(k);
@@ -2232,14 +2231,19 @@ async function onMessage(event) {
     // 该会话已被人工接管：跳过 AI 自动回复（命令仍可执行，如 #恢复AI）
     if (takeoverOn(convKey(event))) return;
 
+    // 会话级设置：群聊/单聊各自的覆盖，未设置的项回退到全局 config.json
+    const ckey = convKey(event);
+    const cset = chatCfg.getEffective(ckey);
+    if (!cset.reply) return; // 该会话被设为「不回复」：静音，不参与 AI（命令已在上面处理）
+
     // 彩蛋「摇一摇」：群里有人接词，小钠就接下句（不参与 AI）
     if (maybeShakeLine(event, userInput)) return;
 
-    // AI 触发：私聊直接回；群聊需 @机器人、消息包含关键词"小钠"、或引用了机器人自己发的消息
-    // 关键词不剥离，完整消息（含"小钠"）交给 AI，如"所以小钠你是谁啊"；只发"小钠"也回复
+    // AI 触发：私聊直接回；群聊需 @机器人、消息包含关键词（默认"小钠"）、或引用了机器人自己发的消息
+    // 关键词不剥离，完整消息交给 AI；只发关键词也回复。关键词可在 config.json / 会话设置里改。
     let allowSkip = false;
     if (event.message_type === 'group') {
-        const kw = /小钠/.test(raw);
+        const kw = cset.keyword ? raw.includes(cset.keyword) : false;
         // "引用回应"：引用了机器人自己的发言 = 在跟它说话（主人审批的引用在那之前就 return 了，不受影响）
         const quoted = (!atBot && !kw) ? await quotedBot(segments, me) : false;
         const triggered = atBot || kw || quoted;
@@ -2250,9 +2254,9 @@ async function onMessage(event) {
             const k = convKey(event);
             engageSessions.set(k, {
                 initiator: String(event.user_id),
-                initLeft: ENGAGE_INITIATOR_LEFT,   // 首先唤起的人：最多再检查 3 条
-                otherLeft: ENGAGE_OTHER_LEFT,      // 别人插嘴：只检查 1 条
-                exp: Date.now() + ENGAGE_TTL,
+                initLeft: cset.engage.initiatorLeft,   // 首先唤起的人：最多再检查几条
+                otherLeft: cset.engage.otherLeft,      // 别人插嘴：只检查几条
+                exp: Date.now() + cset.engage.ttlMs,
             });
             // 只有"仅凭关键词撞上"的首次触发才需要判断；@/引用是明确在叫它，直接回
             allowSkip = kw && !atBot && !quoted;
@@ -2271,7 +2275,7 @@ async function onMessage(event) {
                 return;
             }
             if (isInitiator) e.initLeft -= 1; else e.otherLeft -= 1;
-            e.exp = Date.now() + ENGAGE_TTL;   // 有来有往就续期
+            e.exp = Date.now() + cset.engage.ttlMs;   // 有来有往就续期
             allowSkip = true;                  // 交给 AI 判断"是不是在跟小钠说话"
             if (ENGAGE_DEBUG) logger.info(`[唤起] ${convKey(event)} 跟进检查（${isInitiator ? '唤起人剩 ' + e.initLeft : '其他人剩 ' + e.otherLeft}）`);
         }
@@ -2290,11 +2294,11 @@ async function onMessage(event) {
 
     // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
     // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
-    const key = convKey(event);
     const ticket = await acquire({
         userId: String(event.user_id),
         groupId: event.message_type === 'group' ? String(event.group_id || '') : '',
-        convKey: key,
+        convKey: ckey,
+        limits: cset.rateLimit, // 会话级限速覆盖（未设置的项回退全局）
     });
     if (!ticket.ok) {
         if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
@@ -2302,9 +2306,9 @@ async function onMessage(event) {
         if (ticket.reason === 'hour') return sendReply(event, '⏳ 说得有点快啦，歇一会儿再来～');
         return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
     }
-    if (ticket.waitMs > 3000) logger.info(`[限速] ${key} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
+    if (ticket.waitMs > 3000) logger.info(`[限速] ${ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
     try {
-        await runAI(event, userInput, allowSkip);
+        await runAI(event, userInput, allowSkip, cset);
     } finally {
         ticket.release();
     }
@@ -2312,9 +2316,11 @@ async function onMessage(event) {
 
 // AI 回复主流程（含搜索/语音/多条回复）
 // allowSkip：只在"群里仅命中关键词"这种模糊触发下为 true，交给 AI 判断是否真的在叫它
-async function runAI(event, userInput, allowSkip = false) {
+async function runAI(event, userInput, allowSkip = false, cset = null) {
     // 没配 AI_API_KEY：AI 对话整体停用（启动时已提示，这里静默跳过，不在群里刷屏）
     if (!AI_ENABLED) return;
+    // 会话设置（语音开关 / 补充提示词）；未传入时回退到该会话的生效值
+    const cs = cset || chatCfg.getEffective(convKey(event));
     try {
         // 注入会话元数据（对话类型/昵称/身份/好感度/群头衔/时间等），格式与参考项目一致
         const meta = await getMemberMeta(event);
@@ -2335,6 +2341,7 @@ async function runAI(event, userInput, allowSkip = false) {
             allowSkip,
             allowSearch: SEARCH_ENABLED,
             userId: String(event.user_id),
+            sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             ctx: buildAgentCtx(convKey(event), String(event.user_id)),
         });
         let { reply, wantVoice } = result;
@@ -2344,6 +2351,8 @@ async function runAI(event, userInput, allowSkip = false) {
             logger.info('🤐 AI 判断这条不是在叫小钠，跳过回复');
             return;
         }
+        // 该会话关闭了语音：不发语音（AI 就算标记了 VOICE:YES 也降级成文字）
+        if (!cs.voice) wantVoice = false;
 
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
@@ -2722,8 +2731,7 @@ function forwardGroupToMc(event, who) {
 }
 
 // ---------- 彩蛋：摇一摇对答 ----------
-/** 同一会话的接话间隔，避免有人刷屏把机器人刷爆（见 config.json 的 cooldown.shakeMs） */
-let SHAKE_COOLDOWN = cfg.cooldown.shakeMs;
+/** 同一会话的接话间隔，避免有人刷屏把机器人刷爆（见 config.json 的 cooldown.shakeMs，支持会话级覆盖） */
 /** 隔太久就当新起一段，不拿旧上下文接话 */
 const SHAKE_CTX_TTL = 5 * 60 * 1000;
 const shakeAt = new Map();    // 会话 → 上次接话时间
@@ -2746,8 +2754,9 @@ function maybeShakeLine(event, text) {
     const hit = nextShakeLine(text, lastSent);
     if (!hit) return false;
 
+    const shakeCd = chatCfg.getEffective(key).cooldown.shakeMs;
     const prev = shakeAt.get(key);
-    if (prev !== undefined && now - prev < SHAKE_COOLDOWN) return true;   // 冷却中：认出来了但先不接
+    if (prev !== undefined && now - prev < shakeCd) return true;   // 冷却中：认出来了但先不接
     shakeAt.set(key, now);
     shakeCtx.set(key, { index: hit.index, at: now });
     logger.info(`🎋 彩蛋接话 [群 ${event.group_id}] → ${hit.line}`);
