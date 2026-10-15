@@ -434,7 +434,7 @@ function add(cls,text,kind){var r=document.createElement('div');r.className='row
 // 逐字显示：把整段回复按「约 60 帧吐完」的节奏打进气泡，末尾跟一个跳动的光标
 function typeInto(b,text){
   var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  if(reduce||text.length<6){b.className='bub';b.textContent=text;return Promise.resolve();}
+  if(reduce){b.className='bub';b.textContent=text;return Promise.resolve();}
   var n=text.length,step=Math.max(1,Math.round(n/60)),i=0;
   return new Promise(function(res){
     (function tick(){

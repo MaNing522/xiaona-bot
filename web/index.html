@@ -141,7 +141,9 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 .tr-bub{max-width:78%;padding:8px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word;font-size:14px}
 .me .tr-bub{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
 .na .tr-bub{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
-.tr-bub.typing{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
+.tr-bub.wait{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
+.tr-bub.caret::after{content:'▍';margin-left:1px;color:var(--sub);animation:xnBlink .9s steps(1) infinite}
+.tr-bub.err{background:#fff5f5;border:1px solid #ffd6d6;color:#c0392b}
 @keyframes xnBlink{0%,100%{opacity:1}50%{opacity:.45}}
 .tr-foot{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px}
 .tr-foot textarea{resize:none;height:44px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;
@@ -621,24 +623,49 @@ $('cvSave').onclick=async()=>{
 
 // ---------- 私聊试用（以「小锂 · 普通用户」身份本地跑一轮 AI） ----------
 let trBusy=false;
-function trAdd(cls,text,typing){
+function trAdd(cls,text,kind){
   const box=$('trMsgs');
   const r=document.createElement('div');r.className='tr-row '+cls;
-  const b=document.createElement('div');b.className='tr-bub'+(typing?' typing':'');b.textContent=text;
+  const b=document.createElement('div');b.className='tr-bub'+(kind?' '+kind:'');b.textContent=text;
   r.appendChild(b);box.appendChild(r);box.scrollTop=box.scrollHeight;return b;
+}
+// 逐字显示：把整段回复按「约 60 帧吐完」的节奏打进气泡，末尾跟一个跳动的光标
+function trType(b,text){
+  const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  if(reduce){b.className='tr-bub';b.textContent=text;return Promise.resolve();}
+  const n=text.length,step=Math.max(1,Math.round(n/60));let i=0;
+  return new Promise((res)=>{
+    (function tick(){
+      i=Math.min(n,i+step);
+      b.textContent=text.slice(0,i);
+      $('trMsgs').scrollTop=$('trMsgs').scrollHeight;
+      if(i<n) setTimeout(tick,26);
+      else {b.className='tr-bub';res();}
+    })();
+  });
 }
 async function trSend(){
   if(trBusy)return;
   const t=$('trInput').value.trim(); if(!t)return;
   trBusy=true;$('trSend').disabled=true;$('trInput').value='';
   trAdd('me',t);
-  const holding=trAdd('na','小钠正在输入…',true);
+  const b=trAdd('na','小钠正在输入…','wait');
   try{
     const r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
     const j=await r.json().catch(()=>({}));
-    holding.classList.remove('typing');
-    holding.textContent=(r.ok&&j.ok)?j.reply:('⚠️ '+(j.error||('HTTP '+r.status)));
-  }catch(e){holding.classList.remove('typing');holding.textContent='⚠️ 网络错误';}
+    if(r.ok&&j.ok){
+      const reply=String(j.reply||'');
+      b.className='tr-bub caret';b.textContent='';
+      if(!reply){b.className='tr-bub err';b.textContent='⚠️ 小钠这次没回成：返回内容为空';}
+      else await trType(b,reply);
+    }else{
+      b.className='tr-bub err';
+      b.textContent='⚠️ 小钠这次没回成：'+(j.error||('HTTP '+r.status));
+    }
+  }catch(e){
+    b.className='tr-bub err';
+    b.textContent='⚠️ 小钠这次没回成：'+(e&&e.message?e.message:'网络错误');
+  }
   trBusy=false;$('trSend').disabled=false;$('trInput').focus();
 }
 $('trSend').onclick=trSend;
