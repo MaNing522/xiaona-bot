@@ -568,12 +568,6 @@ function splitReplies(text, max = 3) {
     return parts;
 }
 
-// ---------- 消息净化 ----------
-/** 输入不做任何过滤：原样（仅去首尾空白）交给 AI。防注入一律由提示词负责。 */
-function cleanMessage(content) {
-    return String(content ?? '').trim();
-}
-
 // ---------- 发送前体检：真实脏字 → 谐音 ----------
 /**
  * QQ 对脏字的风控最狠（轻则拦消息，重则限制账号）。提示词已经要求 AI 不写真实脏字，
@@ -2250,7 +2244,7 @@ async function onMessage(event) {
         && MC_BRIDGE_GROUP && String(event.group_id) === MC_BRIDGE_GROUP
         && !(me && String(event.user_id) === me);
 
-    let userInput = cleanMessage(raw);
+    let userInput = String(raw ?? '').trim();   // 不做任何过滤：原样交给 AI
     // 纯 @ 的消息没有文字，但它仍然是要转发的内容，不能在这里被丢掉
     if (!userInput && !(isBridgeGroup && hasForwardable(segments))) return;
 
@@ -2749,7 +2743,7 @@ async function replyPreviewForAi(data, groupId) {
  * - @ 段不能丢：它承载着"这句话是说给谁听的"，只取文字段等于没转发
  * - 引用段：带出被引用的原文（[引用 谁: 原文]）
  * - 图片 / 表情 / 语音 / 视频 / 文件：只发文字占位（游戏里放不出这些东西）
- * - 文本段原样保留（不做 cleanMessage 的剥离，转发要忠实于原消息）
+ * - 文本段原样保留（不做任何剥离，转发要忠实于原消息）
  */
 async function buildForwardText(segments, groupId, depth = 0) {
     if (!Array.isArray(segments)) return String(segments || '').trim();
