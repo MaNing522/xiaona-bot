@@ -121,13 +121,29 @@ export async function chatCompletionRaw({ messages, temperature = 0.7, maxTokens
     body.tool_choice = toolChoice || 'auto';
   }
 
-  const res = await fetch(c.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw new Error(`AI 请求失败 (${res.status})`);
+  let res;
+  try {
+    res = await fetch(c.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
+    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
+    }
+    throw new Error(`连不上 AI 服务：${e && e.message ? e.message : e}`, { cause: e });
+  }
+  if (!res.ok) {
+    // 带上服务商返回的原文（如"余额不足""model not found"），方便直接看出原因
+    let detail = '';
+    try {
+      detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    } catch { /* 读不出就算了，状态码本身也算原因 */ }
+    throw new Error(`AI 请求失败 (${res.status})${detail ? '：' + detail : ''}`);
+  }
 
   const data = await res.json();
   if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');

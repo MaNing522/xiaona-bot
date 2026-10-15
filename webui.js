@@ -410,7 +410,9 @@ button:disabled{opacity:.6;cursor:default}
 @keyframes xnBlink{0%,100%{opacity:1}50%{opacity:.45}}
 .card{animation:xnPop .34s ease both}
 .row{animation:xnPop .22s ease both}
-.bub.typing{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
+.bub.wait{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
+.bub.caret::after{content:'▍';margin-left:1px;color:var(--sub);animation:xnBlink .9s steps(1) infinite}
+.bub.err{background:#fff5f5;border:1px solid #ffd6d6;color:#c0392b}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="card">
@@ -428,19 +430,44 @@ button:disabled{opacity:.6;cursor:default}
 <script>
 var $=function(i){return document.getElementById(i);};
 var busy=false;
-function add(cls,text,typing){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub'+(typing?' typing':'');b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
+function add(cls,text,kind){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub'+(kind?' '+kind:'');b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
+// 逐字显示：把整段回复按「约 60 帧吐完」的节奏打进气泡，末尾跟一个跳动的光标
+function typeInto(b,text){
+  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  if(reduce||text.length<6){b.className='bub';b.textContent=text;return Promise.resolve();}
+  var n=text.length,step=Math.max(1,Math.round(n/60)),i=0;
+  return new Promise(function(res){
+    (function tick(){
+      i=Math.min(n,i+step);
+      b.textContent=text.slice(0,i);
+      $('m').scrollTop=$('m').scrollHeight;
+      if(i<n) setTimeout(tick,26);
+      else {b.className='bub';res();}
+    })();
+  });
+}
 async function send(){
   if(busy)return;
   var t=$('t').value.trim(); if(!t)return;
   busy=true;$('s').disabled=true;$('t').value='';
   add('me',t);
-  var holding=add('na','小钠正在输入…',true);
+  var b=add('na','小钠正在输入…','wait');
   try{
     var r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
     var j=await r.json().catch(function(){return {};});
-    holding.classList.remove('typing');
-    holding.textContent=(r.ok&&j.ok)?j.reply:('⚠️ '+(j.error||('HTTP '+r.status)));
-  }catch(e){holding.classList.remove('typing');holding.textContent='⚠️ 网络错误';}
+    if(r.ok&&j.ok){
+      var reply=String(j.reply||'');
+      b.className='bub caret';b.textContent='';
+      if(!reply){b.className='bub err';b.textContent='⚠️ 小钠这次没回成：返回内容为空';}
+      else await typeInto(b,reply);
+    }else{
+      b.className='bub err';
+      b.textContent='⚠️ 小钠这次没回成：'+(j.error||('HTTP '+r.status));
+    }
+  }catch(e){
+    b.className='bub err';
+    b.textContent='⚠️ 小钠这次没回成：'+(e&&e.message?e.message:'网络错误');
+  }
   busy=false;$('s').disabled=false;$('t').focus();
 }
 $('s').onclick=send;
@@ -734,9 +761,14 @@ async function route(req, res, url) {
     if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
     const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
     try {
-      return sendJSON(res, 200, { ok: true, reply: await trialChat(cid, t) });
+      const reply = await trialChat(cid, t);
+      if (!reply) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
+      return sendJSON(res, 200, { ok: true, reply });
     } catch (e) {
-      return sendJSON(res, 500, { ok: false, error: e.message });
+      // 把失败原因原样带回前端展示（如「AI 请求失败 (401)：...」「AI 超时」）
+      const reason = String((e && e.message) || e || '未知错误');
+      logger.warn(`[试用] 这轮没回成：${reason}`);
+      return sendJSON(res, 502, { ok: false, error: reason });
     }
   }
 
