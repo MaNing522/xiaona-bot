@@ -99,7 +99,7 @@ function logFeatureStates() {
     logger.info('=== 功能状态（.env 里缺配置的会自动停用）===');
     logger.info(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
     logger.info(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
-    logger.info(`   语音合成       [已启用]  kktts 免密钥`);
+    logger.info(`   语音合成       [已启用]  Edge 免密钥（${process.env.TTS_VOICE || 'zh-CN-XiaoxiaoNeural'} ${process.env.TTS_RATE || '+8%'}）`);
     logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 FunASR(SenseVoice) ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
     logger.info(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
