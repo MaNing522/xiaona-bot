@@ -1889,6 +1889,21 @@ async function onPoke(event) {
 }
 
 /**
+ * 查机器人在某群自己是否被禁言，返回禁言到期时间戳（秒）；没被禁言返回 0。
+ * 群消息被 QQ 拒收最常见的原因就是被禁言（retcode=1200 EventChecker Failed），
+ * 提前查一下能省下必然失败的发送，也能把日志说清楚。
+ */
+async function botMutedUntil(gid) {
+    try {
+        const info = await callApi('get_group_member_info', { group_id: Number(gid), user_id: Number(botId) });
+        const until = Number(info && info.shut_up_timestamp) || 0;
+        return until > Math.floor(Date.now() / 1000) ? until : 0;
+    } catch {
+        return 0;   // 查不到就当作没禁言，照原样尝试发送
+    }
+}
+
+/**
  * 进群 / 退群提示（OneBot 的 notice 事件）。
  * - 机器人自己进/退群不提示（自己退群时群已经发不出消息了）
  * - 已知机器人（Q群管家等）进/出不提示
@@ -1929,14 +1944,22 @@ async function onNotice(event) {
         const msg = joined
             ? [segAt(uid), segText(' 欢迎加入群聊！🎉')]
             : [segText(`👋 ${name} ${kind}${note}`)];
-        try {
-            await callApi('send_group_msg', { group_id: gid, message: msg });
-        } catch (e) {
-            // @ 有时会被 QQ 拒掉（对方刚进群、对方本身是机器人/被风控等），
-            // 退一步改用纯文本再发一次；仍失败就交给外层统一记录。
-            if (!joined) throw e;
-            logger.warn(`⚠️ [群 ${gid}] 迎宾 @ 发送失败，改用纯文本重试：${briefApiErr(e)}`);
-            await callApi('send_group_msg', { group_id: gid, message: [segText('🎉 欢迎加入群聊！')] });
+        // 机器人在该群被禁言时，QQ 会直接拒收群消息（retcode=1200 EventChecker Failed），
+        // 这种发送注定失败，先查一下禁言状态，干脆跳过并把原因写进日志。
+        const mutedUntil = await botMutedUntil(gid);
+        if (mutedUntil) {
+            const t = new Date(mutedUntil * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+            logger.warn(`🚫 [群 ${gid}] 机器人在该群被禁言中（至 ${t}），本次${joined ? '进群' : '退群'}提示没发出去`);
+        } else {
+            try {
+                await callApi('send_group_msg', { group_id: gid, message: msg });
+            } catch (e) {
+                // @ 有时会被 QQ 拒掉（对方刚进群、对方本身是机器人/被风控等），
+                // 退一步改用纯文本再发一次；仍失败就交给外层统一记录。
+                if (!joined) throw e;
+                logger.warn(`⚠️ [群 ${gid}] 迎宾 @ 发送失败，改用纯文本重试：${briefApiErr(e)}`);
+                await callApi('send_group_msg', { group_id: gid, message: [segText('🎉 欢迎加入群聊！')] });
+            }
         }
         logger.info(`🚪 [群 ${gid}] ${joined ? '进群' : '退群'}: ${name}(${uid})`);
 
