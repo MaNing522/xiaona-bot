@@ -1892,15 +1892,24 @@ async function onPoke(event) {
  * 查机器人在某群自己是否被禁言，返回禁言到期时间戳（秒）；没被禁言返回 0。
  * 群消息被 QQ 拒收最常见的原因就是被禁言（retcode=1200 EventChecker Failed），
  * 提前查一下能省下必然失败的发送，也能把日志说清楚。
+ * 结果缓存 cacheMs 毫秒（默认 2 分钟），免得每条群消息都查一次接口。
  */
-async function botMutedUntil(gid) {
+const muteCache = new Map();   // gid -> { until, at }
+async function botMutedUntil(gid, cacheMs = 120000) {
+    const key = String(gid);
+    const now = Date.now();
+    const cached = muteCache.get(key);
+    if (cached && now - cached.at < cacheMs) return cached.until > Math.floor(now / 1000) ? cached.until : 0;
+    let until = 0;
     try {
         const info = await callApi('get_group_member_info', { group_id: Number(gid), user_id: Number(botId) });
-        const until = Number(info && info.shut_up_timestamp) || 0;
-        return until > Math.floor(Date.now() / 1000) ? until : 0;
+        const t = Number(info && info.shut_up_timestamp) || 0;
+        if (t > Math.floor(now / 1000)) until = t;
     } catch {
-        return 0;   // 查不到就当作没禁言，照原样尝试发送
+        // 查不到就当作没禁言，照原样尝试发送
     }
+    muteCache.set(key, { until, at: now });
+    return until;
 }
 
 /**
@@ -2384,6 +2393,17 @@ async function onMessage(event) {
     // AI 未启用：不用占限速额度，也不该因为"额度用满"去回复（那些话只有开 AI 时才该说）
     if (!AI_ENABLED) return;
 
+    // 机器人在该群被禁言：QQ 会直接拒收群消息（retcode=1200 EventChecker Failed），
+    // 回什么都发不出去，索性不烧 AI 额度、不占限速额度，直接跳过
+    if (event.message_type === 'group') {
+        const mutedUntil = await botMutedUntil(event.group_id);
+        if (mutedUntil) {
+            const t = new Date(mutedUntil * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+            logger.warn(`🚫 [群 ${event.group_id}] 机器人在该群被禁言中（至 ${t}），本条不回复`);
+            return;
+        }
+    }
+
     // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
     // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
     const ticket = await acquire({
@@ -2465,8 +2485,11 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         recordMessage(convKey(event), 'ai', finalReply);
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
     } catch (err) {
-        logger.error('❌ 处理异常:', err);
-        await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
+        // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
+        logger.error('❌ 处理异常:', briefApiErr(err));
+        // 群消息发送失败多半是被禁言，这时「稍后再试」也发不出去，就别白试了
+        const muted = event.message_type === 'group' ? await botMutedUntil(event.group_id, 0) : 0;
+        if (!muted) await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
     }
 }
 
