@@ -2291,6 +2291,22 @@ async function onMessage(event) {
     // 纯 @ 的消息没有文字，但它仍然是要转发的内容，不能在这里被丢掉
     if (!userInput && !(isBridgeGroup && hasForwardable(segments))) return;
 
+    // 机器人在该群被禁言时，QQ 会直接拒收群消息（retcode=1200 EventChecker Failed），
+    // 命令/绑定/验证码/AI 等一切"要发 QQ 消息"的功能都白搭，直接在入口忽略整条消息；
+    // 但转发进游戏走的是 MC 桥（不经 QQ），照常进行
+    if (event.message_type === 'group') {
+        const mutedUntil = await botMutedUntil(event.group_id);
+        if (mutedUntil) {
+            if (isBridgeGroup && hasForwardable(segments)) {
+                const who = (event.sender && (event.sender.card || event.sender.nickname)) || event.user_id;
+                forwardGroupToMc(event, who);
+            }
+            const t = new Date(mutedUntil * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+            logger.warn(`🚫 [群 ${event.group_id}] 机器人在该群被禁言中（至 ${t}），本条消息直接忽略`);
+            return;
+        }
+    }
+
     // 黑名单用户：不再响应（命令、AI、验证码一律不理），但在桥接群里照常转发进游戏
     if (perm.isBlacklisted(uid)) {
         if (isBridgeGroup && hasForwardable(segments)) {
@@ -2403,17 +2419,6 @@ async function onMessage(event) {
 
     // AI 未启用：不用占限速额度，也不该因为"额度用满"去回复（那些话只有开 AI 时才该说）
     if (!AI_ENABLED) return;
-
-    // 机器人在该群被禁言：QQ 会直接拒收群消息（retcode=1200 EventChecker Failed），
-    // 回什么都发不出去，索性不烧 AI 额度、不占限速额度，直接跳过
-    if (event.message_type === 'group') {
-        const mutedUntil = await botMutedUntil(event.group_id);
-        if (mutedUntil) {
-            const t = new Date(mutedUntil * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-            logger.warn(`🚫 [群 ${event.group_id}] 机器人在该群被禁言中（至 ${t}），本条不回复`);
-            return;
-        }
-    }
 
     // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
     // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
