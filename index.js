@@ -1950,13 +1950,24 @@ async function onNotice(event) {
                 logger.info(`🚪 [群 ${gid}] 退群自动解绑 QQ ${uid}：${ub.ids.join('、')}`);
             }
         }
+        // 提醒开关与文案：会话级覆盖优先、回退全局（网页「会话管理」可改）
+        const notice = chatCfg.getEffective(`g:${gid}`).notice;
+        // 占位符：{name} 昵称、{kind} 进出群描述、{note} 附加说明；用函数替换免受 $& 之类影响
+        const render = (tpl, fallback, vars) => String(tpl || fallback)
+            .replace(/\{name\}/g, () => vars.name)
+            .replace(/\{kind\}/g, () => vars.kind)
+            .replace(/\{note\}/g, () => vars.note);
+        const vars = { name, kind, note };
+        const joinBody = render(notice.joinText, '欢迎加入群聊！🎉', vars);
         const msg = joined
-            ? [segAt(uid), segText(' 欢迎加入群聊！🎉')]
-            : [segText(`👋 ${name} ${kind}${note}`)];
+            ? [segAt(uid), segText(' ' + joinBody)]
+            : [segText(render(notice.leaveText, '👋 {name} {kind}{note}', vars))];
         // 机器人在该群被禁言时，QQ 会直接拒收群消息（retcode=1200 EventChecker Failed），
         // 这种发送注定失败，先查一下禁言状态，干脆跳过并把原因写进日志。
-        const mutedUntil = await botMutedUntil(gid);
-        if (mutedUntil) {
+        const mutedUntil = notice.enabled ? await botMutedUntil(gid) : 0;
+        if (!notice.enabled) {
+            logger.info(`🔕 [群 ${gid}] 该群已关闭进出群提醒，本条不发送`);
+        } else if (mutedUntil) {
             const t = new Date(mutedUntil * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
             logger.warn(`🚫 [群 ${gid}] 机器人在该群被禁言中（至 ${t}），本次${joined ? '进群' : '退群'}提示没发出去`);
         } else {
@@ -1967,7 +1978,7 @@ async function onNotice(event) {
                 // 退一步改用纯文本再发一次；仍失败就交给外层统一记录。
                 if (!joined) throw e;
                 logger.warn(`⚠️ [群 ${gid}] 迎宾 @ 发送失败，改用纯文本重试：${briefApiErr(e)}`);
-                await callApi('send_group_msg', { group_id: gid, message: [segText('🎉 欢迎加入群聊！')] });
+                await callApi('send_group_msg', { group_id: gid, message: [segText(joinBody)] });
             }
         }
         logger.info(`🚪 [群 ${gid}] ${joined ? '进群' : '退群'}: ${name}(${uid})`);

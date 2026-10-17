@@ -487,11 +487,22 @@ function gcRender(){
     '<div><label>是否允许语音</label><select id="gcVoice"><option value="true">允许</option><option value="false">禁止</option></select></div>'+
     '</div>'+
     '<label>群聊触发关键词</label><input id="gcKw" type="text" placeholder="默认：小钠">'+
-    '<label>补充提示词（追加给 AI）</label><textarea id="gcPrompt" style="'+TA_STYLE+'"></textarea>';
+    '<label>补充提示词（追加给 AI）</label><textarea id="gcPrompt" style="'+TA_STYLE+'"></textarea>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">进出群提醒</h2>'+
+    '<div class="row">'+
+    '<div><label>是否提醒</label><select id="gcNoticeOn"><option value="true">开启</option><option value="false">关闭</option></select></div>'+
+    '<div><label>进群文案</label><input id="gcJoin" type="text" placeholder="欢迎加入群聊！🎉"></div>'+
+    '</div>'+
+    '<label>退群文案</label><input id="gcLeave" type="text" placeholder="👋 {name} {kind}{note}">'+
+    '<div class="hint">可用占位符：{name} 昵称、{kind} 进/退群描述、{note} 附加说明（如自动解绑）。进群消息会自动 @ 新人。</div>';
   $('gcReply').value=String(ch.botReply!==false);
   $('gcVoice').value=String(ch.voice!==false);
   $('gcKw').value=ch.keyword||'';
   $('gcPrompt').value=ch.extraPrompt||'';
+  const nt=c.notice||{};
+  $('gcNoticeOn').value=String(nt.enabled!==false);
+  $('gcJoin').value=nt.joinText||'';
+  $('gcLeave').value=nt.leaveText||'';
   let html='';
   for(const seg of ['rateLimit','cooldown','engage']){
     html+='<h2 style="font-size:14px;margin:18px 0 4px">'+SEGNAME[seg]+'</h2><div class="row" style="grid-template-columns:1fr 1fr 1fr">';
@@ -559,6 +570,16 @@ function cvRenderForm(){
     }
     html+='</div>';
   }
+  // 进出群提醒只有群聊用得上
+  if(String(cvSel).indexOf('g:')===0){
+    const gno=g.notice||{}; const ono=o.notice||{};
+    html+='<h2 style="font-size:14px;margin:18px 0 4px">进出群提醒</h2><div class="row">'+
+      '<div><label>是否提醒</label>'+sel('cvNoticeOn',ono.enabled,(gno.enabled!==false?'开启':'关闭'))+'</div>'+
+      '</div>'+
+      '<label>进群文案</label><input id="cvJoin" type="text" value="'+esc(ono.joinText||'')+'" placeholder="留空则用全局（'+esc(gno.joinText||'')+'）">'+
+      '<label>退群文案</label><input id="cvLeave" type="text" value="'+esc(ono.leaveText||'')+'" placeholder="留空则用全局（'+esc(gno.leaveText||'')+'）">'+
+      '<div class="hint">可用占位符：{name} 昵称、{kind} 进/退群描述、{note} 附加说明。进群消息会自动 @ 新人。</div>';
+  }
   $('convForm').innerHTML=html;
 }
 
@@ -584,7 +605,9 @@ async function convLoad(full){
 }
 
 $('gcSave').onclick=async()=>{
-  const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},rateLimit:{},cooldown:{},engage:{}};
+  const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},
+    notice:{enabled:$('gcNoticeOn').value==='true',joinText:$('gcJoin').value.trim(),leaveText:$('gcLeave').value.trim()},
+    rateLimit:{},cooldown:{},engage:{}};
   document.querySelectorAll('[data-gc]').forEach(inp=>{
     const a=inp.dataset.gc.split('.');
     const v=inp.value.trim();
@@ -608,6 +631,9 @@ $('cvSave').onclick=async()=>{
     extraPrompt:$('cvPrompt').value,
     rateLimit:{},cooldown:{},engage:{},
   };
+  if(String(cvSel).indexOf('g:')===0){
+    patch.notice={enabled:$('cvNoticeOn').value===''?null:($('cvNoticeOn').value==='true'),joinText:$('cvJoin').value.trim(),leaveText:$('cvLeave').value.trim()};
+  }
   document.querySelectorAll('[data-cv]').forEach(inp=>{
     const a=inp.dataset.cv.split('.');
     const v=inp.value.trim();

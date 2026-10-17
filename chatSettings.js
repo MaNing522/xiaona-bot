@@ -134,6 +134,25 @@ export function set(key, patch = {}) {
     }
     if (Object.keys(merged).length) cur[grp] = merged; else delete cur[grp];
   }
+  // ---- 进出群提醒：notice = { enabled?, joinText?, leaveText? }（只有群聊用得上）----
+  if ('notice' in patch) {
+    const src = patch.notice && typeof patch.notice === 'object' ? patch.notice : {};
+    const merged = { ...(cur.notice || {}) };
+    if ('enabled' in src) {
+      const v = src.enabled;
+      if (v === '' || v === null || v === undefined) delete merged.enabled;
+      else if (typeof v === 'boolean') merged.enabled = v;
+      else if (v === 'true' || v === 'false') merged.enabled = v === 'true';
+      else if (v === 1 || v === 0) merged.enabled = v === 1;
+    }
+    for (const f of ['joinText', 'leaveText']) {
+      if (f in src) {
+        const s = src[f] === null || src[f] === undefined ? '' : String(src[f]).trim();
+        if (!s) delete merged[f]; else merged[f] = s;
+      }
+    }
+    if (Object.keys(merged).length) cur.notice = merged; else delete cur.notice;
+  }
 
   if (Object.keys(cur).length) store[k] = cur; else delete store[k];
   persist();
@@ -146,11 +165,18 @@ export function getEffective(key) {
   const g = config();
   const o = isConvKey(key) ? (store[String(key)] || {}) : {};
   const chat = g.chat || {};
+  const gn = g.notice || {};
+  const on = o.notice || {};
   return {
     reply: typeof o.reply === 'boolean' ? o.reply : chat.botReply !== false,
     keyword: typeof o.keyword === 'string' ? o.keyword : (chat.keyword || ''),
     voice: typeof o.voice === 'boolean' ? o.voice : chat.voice !== false,
     extraPrompt: typeof o.extraPrompt === 'string' ? o.extraPrompt : (chat.extraPrompt || ''),
+    notice: {
+      enabled: typeof on.enabled === 'boolean' ? on.enabled : gn.enabled !== false,
+      joinText: typeof on.joinText === 'string' ? on.joinText : (gn.joinText || ''),
+      leaveText: typeof on.leaveText === 'string' ? on.leaveText : (gn.leaveText || ''),
+    },
     rateLimit: { ...g.rateLimit, ...(o.rateLimit || {}) },
     cooldown: { ...g.cooldown, ...(o.cooldown || {}) },
     engage: { ...g.engage, ...(o.engage || {}) },

@@ -825,9 +825,11 @@ async function route(req, res, url) {
       cooldown: { ...base.cooldown },
       engage: { ...base.engage },
       chat: { ...base.chat },
+      notice: { ...base.notice },
+      asr: { ...base.asr },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
