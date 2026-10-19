@@ -1717,6 +1717,7 @@ function inlineTextOf(segments, groupId) {
             if (!cached) warmAtName(groupId, qq);
             out += '@' + (cached || String(seg.data.name || '').trim() || qq);
         } else if (seg.type === 'reply') out += '[引用]';   // 原文要查 NapCat，这里不查
+        else if (seg.type === 'face' || seg.type === 'mface') out += faceLabel(seg);
         else if (SEG_PLACEHOLDER[seg.type]) out += SEG_PLACEHOLDER[seg.type];
     }
     return out.trim();
@@ -1732,6 +1733,46 @@ const SEG_PLACEHOLDER = {
     file: '[文件]',
     forward: '[聊天记录]',  // 合并转发：同步路径只报类型，给 AI 的版本会展开并标注发言人
 };
+
+/** QQ 内置表情 id → 中文名（OneBot 11 标准，1~120）——好让 AI/日志看懂对方发的什么表情 */
+const QQ_FACE_NAMES = {
+    1: '微笑', 2: '撇嘴', 3: '色', 4: '发呆', 5: '得意', 6: '流泪', 7: '害羞', 8: '闭嘴',
+    9: '睡', 10: '大哭', 11: '尴尬', 12: '发怒', 13: '调皮', 14: '呲牙', 15: '惊讶',
+    16: '难过', 17: '酷', 18: '冷汗', 19: '抓狂', 20: '吐', 21: '偷笑', 22: '可爱',
+    23: '白眼', 24: '傲慢', 25: '饥饿', 26: '困', 27: '惊恐', 28: '流汗', 29: '憨笑',
+    30: '悠闲', 31: '奋斗', 32: '咒骂', 33: '疑问', 34: '嘘', 35: '晕', 36: '折磨',
+    37: '衰', 38: '骷髅', 39: '敲打', 40: '再见', 41: '擦汗', 42: '抠鼻', 43: '鼓掌',
+    44: '糗大了', 45: '坏笑', 46: '左哼哼', 47: '右哼哼', 48: '哈欠', 49: '鄙视',
+    50: '委屈', 51: '快哭了', 52: '阴险', 53: '亲亲', 54: '吓', 55: '可怜', 56: '菜刀',
+    57: '西瓜', 58: '啤酒', 59: '篮球', 60: '乒乓', 61: '咖啡', 62: '饭', 63: '猪头',
+    64: '玫瑰', 65: '凋谢', 66: '示爱', 67: '爱心', 68: '心碎', 69: '蛋糕', 70: '闪电',
+    71: '炸弹', 72: '刀', 73: '足球', 74: '瓢虫', 75: '便便', 76: '月亮', 77: '太阳',
+    78: '礼物', 79: '拥抱', 80: '强', 81: '弱', 82: '握手', 83: '胜利', 84: '抱拳',
+    85: '勾引', 86: '拳头', 87: '差劲', 88: '爱你', 89: 'NO', 90: 'OK', 91: '爱情',
+    92: '飞吻', 93: '跳跳', 94: '发抖', 95: '怄火', 96: '转圈', 97: '磕头', 98: '回头',
+    99: '跳绳', 100: '挥手', 101: '激动', 102: '街舞', 103: '献吻', 104: '左太极',
+    105: '右太极', 106: '双喜', 107: '鞭炮', 108: '灯笼', 109: 'K歌', 110: '喝彩',
+    111: '祈祷', 112: '爆筋', 113: '棒棒糖', 114: '喝奶', 115: '下面', 116: '香蕉',
+    117: '飞机', 118: '开车', 119: '高铁', 120: '车厢',
+};
+
+/**
+ * 表情段的友好标签（脸/大表情）：能给名字就给名字，给不出再退回 [表情] 占位。
+ * 拿得到名字时 AI 才知道对方是个什么情绪，而不是干巴巴一个「[动画表情]」。
+ */
+function faceLabel(seg) {
+    const d = (seg && seg.data) || {};
+    const wrap = (n) => (n.startsWith('[') ? n : `[${n}]`);
+    if (seg.type === 'face') {
+        const n = String(d.name || d.faceText || '').trim();
+        if (n) return wrap(n);
+        const m = QQ_FACE_NAMES[String(d.id || d.faceId || '')];
+        return m ? `[${m}]` : '[表情]';
+    }
+    // mface：商城大表情，通常带 summary（如 "[doge]"）/name/description
+    const n = String(d.summary || d.name || d.description || '').trim();
+    return n ? wrap(n) : '[动画表情]';
+}
 
 /**
  * 合并转发的节点归一化：不同 OneBot 实现字段不一（sender.user_id / user_id / uin…），
@@ -1814,6 +1855,10 @@ async function inlineTextOfForAi(segments, groupId) {
             const t = await transcribe(seg.data);
             out += t ? `[语音]${t}` : SEG_PLACEHOLDER.record;
         }
+        // 表情：给出具体表情名（[微笑]/[doge]），比笼统的 [动画表情] 有用
+        else if (seg.type === 'face' || seg.type === 'mface') out += faceLabel(seg);
+        // 图片：提示模型这里有图、且可用 analyze_image 识别，别让它对着占位符干瞪眼
+        else if (seg.type === 'image') out += '[图片（可调用 analyze_image 识别）]';
         else if (SEG_PLACEHOLDER[seg.type]) out += SEG_PLACEHOLDER[seg.type];
     }
     return out.replace(/[ \t]{2,}/g, ' ').trim();
@@ -2898,6 +2943,10 @@ async function buildForwardText(segments, groupId, depth = 0) {
             else out += '@' + await atDisplayName(groupId, qq, seg.data.name);
         } else if (seg.type === 'reply') {
             out += await replyPreview(seg.data, groupId, depth);
+        } else if (seg.type === 'face' || seg.type === 'mface') {
+            out += faceLabel(seg);
+        } else if (seg.type === 'image') {
+            out += '[图片（可调用 analyze_image 识别）]';
         } else if (SEG_PLACEHOLDER[seg.type]) {
             out += SEG_PLACEHOLDER[seg.type];
         }
