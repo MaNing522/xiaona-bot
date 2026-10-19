@@ -361,7 +361,7 @@ function stripToolTags(text) {
  * 搜索/查数据这类"做事"已交给工具（function calling），这里只管：
  *   是否接话（可选）、要不要发语音、怎么分条。
  */
-function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '') {
+function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '', allowImage = false) {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该发语音时不发 —— 这里必须显式豁免。
@@ -377,7 +377,7 @@ function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '') {
 - **任何** Minecraft 服务器查询都用 \`mc_status\`：问"你自己连的服"→不填 address；问某个具体服务器（给了地址，比如 xxx.com、ip:端口）→填 address。**自己的服、别人的服，一律走 mc_status，绝不要用 web_search 去搜。**
 - 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
 - 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
-- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
+${allowImage ? '- 本条消息里带 [图片]、且需要知道图里是什么才用 `analyze_image` 识别（描述画面/读截图文字/看图回答）；不看图也能答的不要调。\n' : ''}- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
 - **只查本条消息要查的东西**：历史【最近对话】里提过的服务器/玩家不要顺手重复再查一遍，也别一条里塞多个查询。
 
 ${tagRule}
@@ -420,18 +420,21 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n（以上为该�
  * @param {string} [o.role]      提问者身份 guest|authorized|admin|owner
  * @param {boolean}[o.allowSkip] 是否判断"这条不是叫我"从而不回复（从严）
  * @param {boolean}[o.allowSearch] 是否开放联网搜索工具
+ * @param {boolean}[o.allowImage] 是否开放图片识别工具（仅当本条消息带图片时才开）
  * @param {string} [o.userId]    KV 缓存隔离
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, userId = '', sessionNote = '', ctx = {} }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, userId = '', sessionNote = '', ctx = {} }) {
     let tools = toolsForRole(role);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
+    // 图片识别工具只在"本条消息真的带图片"时才给模型，免得它对着纯文字消息瞎调
+    if (!allowImage) tools = tools.filter((t) => t.function.name !== 'analyze_image');
 
     const sys = getSystemPrompt();
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
-        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote) },
+        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote, allowImage) },
     ];
 
     const chat = (body) => chatCompletionRaw({
@@ -470,14 +473,87 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
 }
 
 // ---------- agent 工具的执行上下文（把真实能力注入给 agent.js 的工具） ----------
+/** 从消息段里挑出图片段（供图片识别工具用） */
+function imageSegmentsOf(segments) {
+    if (!Array.isArray(segments)) return [];
+    return segments.filter((s) => s && s.type === 'image' && s.data);
+}
+
+/** 按图片文件头判断 MIME（DS 说格式按实际内容判断，这里仍尽量给对，别误导下载端） */
+function sniffImageMime(buf) {
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+    if (buf.length >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif';
+    if (buf.length >= 12 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp';
+    return 'image/jpeg';
+}
+
+/** 单张图片 → base64 data URL（统一走内联，避免 NapCat 的内网地址 DS 够不着） */
+async function imageSegToDataUrl(seg) {
+    const d = (seg && seg.data) || {};
+    const f = typeof d.file === 'string' ? d.file : '';
+    const toDataUrl = (buf) => {
+        if (buf.length > 30 * 1024 * 1024) throw new Error('图片太大（超过 30MB）');
+        return 'data:' + sniffImageMime(buf) + ';base64,' + buf.toString('base64');
+    };
+    if (/^base64:\/\//i.test(f)) return toDataUrl(Buffer.from(f.replace(/^base64:\/\//i, ''), 'base64'));
+
+    // 让 NapCat 给出更可靠的本地文件路径 / 外链（事件里的字段有时只是文件名）
+    let local = '', url = String(d.url || '');
+    try {
+        const info = await callApi('get_image', { file: f });
+        if (info) { local = String(info.file || info.path || ''); url = String(info.url || url); }
+    } catch { /* 拿不到就退回事件自带字段 */ }
+    if (!local && /^[a-z]:[\\/]|^\//i.test(f)) local = f;
+    if (local && fs.existsSync(local)) return toDataUrl(fs.readFileSync(local));
+
+    if (!url && /^https?:\/\//i.test(f)) url = f;
+    if (url) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('图片下载失败 HTTP ' + res.status);
+        return toDataUrl(Buffer.from(await res.arrayBuffer()));
+    }
+    throw new Error('拿不到图片内容');
+}
+
+/** 调 DS 官方多模态接口识别图片（deepseek-flash 支持 content 块数组里的 image_url） */
+async function analyzeImages(images, question) {
+    const segs = (images || []).filter((s) => s && s.type === 'image' && s.data);
+    if (!segs.length) return '本条消息里没有图片可识别。';
+    let urls;
+    try {
+        urls = await Promise.all(segs.map(imageSegToDataUrl));
+    } catch (e) {
+        return '图片获取失败：' + e.message;
+    }
+    try {
+        const { content } = await chatCompletionRaw({
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
+                    ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
+                ],
+            }],
+            temperature: 0.3,
+            maxTokens: 800,
+        });
+        return content ? content.trim() : '（没识别出内容）';
+    } catch (e) {
+        return '图片识别失败：' + e.message;
+    }
+}
+
 /**
  * 组装当前会话的工具上下文。
  * @param {string} key  记忆/会话键
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
+ * @param {Array}  [images] 本条消息里的图片段（供 analyze_image 工具识别）
  */
-function buildAgentCtx(key, uid = '') {
+function buildAgentCtx(key, uid = '', images = []) {
     return {
         search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
+        analyzeImage: (q) => analyzeImages(images, q),
         mcStatus: (address) => agentMcStatus(address),
         playerQuery: (name) => agentPlayerQuery(name),
         balance: () => agentBalance(),
@@ -2462,15 +2538,17 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
+        const imgs = imageSegmentsOf(event.message);   // 本条消息里的图片（供 AI 按需识别）
         const result = await aiReply({
             metaLine,
             memory: mem,
             role: perm.role(String(event.user_id)),
             allowSkip,
             allowSearch: SEARCH_ENABLED,
+            allowImage: imgs.length > 0,
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
-            ctx: buildAgentCtx(convKey(event), String(event.user_id)),
+            ctx: buildAgentCtx(convKey(event), String(event.user_id), imgs),
         });
         let { reply, wantVoice } = result;
 
