@@ -538,9 +538,12 @@ async function analyzeImages(segs, question) {
     try {
         urls = await Promise.all(list.map(imageSegToDataUrl));
     } catch (e) {
+        logger.warn('[图片] 获取图片内容失败:', e.message);
         return '图片获取失败：' + e.message;
     }
     try {
+        // 额度必须给足：deepseek-flash 这类推理模型会先花 token 想，图越复杂思考越长，
+        // 给少了思维链会把额度吃光，正文 content 直接为空（表现为"识别不出内容"）
         const { content } = await chatCompletionRaw({
             messages: [{
                 role: 'user',
@@ -550,10 +553,12 @@ async function analyzeImages(segs, question) {
                 ],
             }],
             temperature: 0.3,
-            maxTokens: 800,
+            maxTokens: 2000,
+            timeoutMs: 90000,
         });
         return content ? content.trim() : '（没识别出内容）';
     } catch (e) {
+        logger.warn('[图片] 识别失败:', e.message);
         return '图片识别失败：' + e.message;
     }
 }

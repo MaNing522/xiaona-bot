@@ -121,34 +121,61 @@ export async function chatCompletionRaw({ messages, temperature = 0.7, maxTokens
     body.tool_choice = toolChoice || 'auto';
   }
 
-  let res;
-  try {
-    res = await fetch(c.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (e) {
-    // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
-    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-      throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
-    }
-    throw new Error(`连不上 AI 服务：${e && e.message ? e.message : e}`, { cause: e });
-  }
-  if (!res.ok) {
-    // 带上服务商返回的原文（如"余额不足""model not found"），方便直接看出原因
-    let detail = '';
+  /**
+   * 发一次请求。
+   * 返回 content / tool_calls / finishReason；finishReason 用于识别"被思维链吃光"的情况。
+   */
+  async function send() {
+    let res;
     try {
-      detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-    } catch { /* 读不出就算了，状态码本身也算原因 */ }
-    throw new Error(`AI 请求失败 (${res.status})${detail ? '：' + detail : ''}`);
+      res = await fetch(c.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
+      if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+        throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
+      }
+      throw new Error(`连不上 AI 服务：${e && e.message ? e.message : e}`, { cause: e });
+    }
+    if (!res.ok) {
+      // 带上服务商返回的原文（如"余额不足""model not found"），方便直接看出原因
+      let detail = '';
+      try {
+        detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      } catch { /* 读不出就算了，状态码本身也算原因 */ }
+      throw new Error(`AI 请求失败 (${res.status})${detail ? '：' + detail : ''}`);
+    }
+
+    const data = await res.json();
+    if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');
+    const choice = data.choices[0];
+    const m = choice.message || {};
+    return {
+      content: m.content || '',
+      tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : null,
+      finishReason: choice.finish_reason || '',
+    };
   }
 
-  const data = await res.json();
-  if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');
-  const m = data.choices[0].message || {};
-  return { content: m.content || '', tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : null };
+  const first = await send();
+  // 推理模型（如 deepseek-flash）会先花 token 想，max_tokens 不够时思维链把额度吃光，
+  // 正文 content 是空的、finish_reason=length —— 这时把额度翻倍重试一次，别把空回复当结果。
+  const starved = !first.content && !first.tool_calls && first.finishReason === 'length';
+  if (!starved) return { content: first.content, tool_calls: first.tool_calls };
+
+  const retryTokens = Math.min(Number(body.max_tokens) * 2, 8000);
+  logger.warn(`[AI] 思维链吃光额度（max_tokens=${body.max_tokens}），按 ${retryTokens} 重试一次`);
+  body.max_tokens = retryTokens;
+  const second = await send();
+  const stillEmpty = !second.content && !second.tool_calls;
+  if (stillEmpty && second.finishReason === 'length') {
+    throw new Error(`模型只输出了思考过程、没给出正文（max_tokens=${retryTokens} 仍不够）`);
+  }
+  return { content: second.content, tool_calls: second.tool_calls };
 }
 
 /**
