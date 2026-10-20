@@ -348,14 +348,23 @@ const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.t
 
 // ---------- AI 决策（含搜索/语音/跳过/多条回复标记解析） ----------
 /**
- * 剥掉 AI 输出的工具标记（【REPLY:…】【SEARCH:…】【VOICE:…】）。
- * 容忍模型漏写结尾 】 的畸形写法：只吃掉标记本身和紧跟的取值，
- * 不吞掉标记后面的正文，也不让标记漏到用户面前。
+ * 剥掉 AI 输出里"本不该给用户看"的部分：
+ *   1) 工具标记：【REPLY:…】【SEARCH:…】【VOICE:…】
+ *   2) 注入给模型的上下文标题（【已知记忆】【最近对话】…）—— 模型偶尔原样回吐
+ *   3) 元数据行（[当前对话:…][名称:…|…]消息内容:[…]）—— 同上
+ * 括号容错：模型可能写中文【】也可能写英文[]（元数据行就是英文[]，它容易跟着写），两种都清。
+ * 容忍漏写结尾括号的畸形写法：只吃掉标记本身和紧跟的取值，不吞正文。
+ * 用白名单精确匹配，避免误伤正常内容里出现的方括号（如游戏物品名【钻石】）。
  */
 function stripToolTags(text) {
     let s = String(text ?? '');
-    s = s.replace(/【\s*(?:REPLY|SEARCH|VOICE)\s*[:：][^】]*】/gi, '');   // 正常闭合
-    s = s.replace(/【\s*(?:REPLY|SEARCH|VOICE)\s*[:：]\s*(?:是|否|YES|NO|yes|no|true|false|1|0|需要|不需要)?/gi, ''); // 漏写 】 的裸露前缀
+    s = s.replace(/[【[]\s*(?:REPLY|SEARCH|VOICE)\s*[:：][^】\]]*[】\]]/gi, '');   // 标记：正常闭合
+    s = s.replace(/[【[]\s*(?:REPLY|SEARCH|VOICE)\s*[:：]\s*(?:是|否|YES|NO|yes|no|true|false|1|0|需要|不需要)?/gi, ''); // 标记：漏写结尾
+    // 注入的上下文标题（白名单）：模型把它们当"合法方括号内容"回吐时会漏给用户
+    s = s.replace(/[【[]\s*(?:已知记忆|本会话补充设定|最近对话|长期记忆|对话摘要|你应该知道的事|重要)\s*[】\]]/g, '');
+    // 元数据行的两个方括号字段 + 消息内容字段
+    s = s.replace(/[【[]\s*(?:当前对话|名称)\s*:[^】\]]*[】\]]/g, '');
+    s = s.replace(/消息内容\s*[:：]\s*[【[][^】\]]*[】\]]?/g, '');
     return s;
 }
 
@@ -464,14 +473,14 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
     // 解析格式标记（容忍全角冒号、空格等写法）
     // 调过工具=明确在办事，即使没写【REPLY:是】也不能跳过（见 decideSkip）
     const skip = decideSkip(reply, allowSkip, usedTool);
-    reply = reply.replace(/【\s*REPLY\s*[:：][^】]*】/g, '');
+    reply = reply.replace(/[【[]\s*REPLY\s*[:：][^】\]]*[】\]]/g, '');
 
     let wantVoice = false;
-    const voiceMatch = reply.match(/【\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*】/i);
+    const voiceMatch = reply.match(/[【[]\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*[】\]]/i);
     if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
-    reply = reply.replace(/【\s*VOICE\s*[:：][^】]*】/gi, '');
+    reply = reply.replace(/[【[]\s*VOICE\s*[:：][^】\]]*[】\]]/gi, '');
 
-    // 兜底：清掉漏写 】 的畸形标记，避免 【REPLY:… 直接漏给用户
+    // 兜底：清掉漏写结尾、以及元数据/上下文标题被回吐等所有畸形片段
     reply = stripToolTags(reply);
 
     return { reply: reply.trim(), wantVoice, skip };
@@ -2616,7 +2625,11 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             ctx: buildAgentCtx(convKey(event), String(event.user_id), {
                 images: imgs,
-                notify: (text) => sendReply(event, text),
+                // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
+                notify: (text) => {
+                    const t = stripToolTags(String(text)).trim();
+                    return t ? sendReply(event, t) : Promise.resolve();
+                },
             }),
         });
         let { reply, wantVoice } = result;

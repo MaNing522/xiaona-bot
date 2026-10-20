@@ -113,6 +113,11 @@ describe('decideSkip（是否跳过回复）', () => {
     expect(decideSkip('【REPLY:是】在呢～', true, false)).toBe(false);
   });
 
+  it('标记写成英文方括号 [REPLY:是] 也认（元数据用[]，模型容易跟着写）', () => {
+    expect(decideSkip('[REPLY:是] 在呢～', true, false)).toBe(false);
+    expect(decideSkip('[REPLY:否]', true, false)).toBe(true);
+  });
+
   it('关键：调过工具即使没写标记也不跳过（查服务器被吞的回归）', () => {
     expect(decideSkip('play.xxx 在线 3 人', true, true)).toBe(false);
   });

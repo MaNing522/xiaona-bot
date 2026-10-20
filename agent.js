@@ -186,6 +186,7 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
 /**
  * 判定"这条是否要跳过不回复"（只在允许跳过时生效）。
  * 允许跳过时从严：只有明确写了【REPLY:是】才回。**但调过工具=明确在办事，必须放行**——
+ * 括号可能是中文【】也可能是英文[]（元数据行用的是[]），两种都认。
  * 否则模型去查了服务器、却因为没写标记被当成"不是在叫我"吞掉。
  * @param {string} reply    模型最终回复
  * @param {boolean} allowSkip 是否启用"判断要不要接话"
@@ -193,7 +194,7 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
  */
 export function decideSkip(reply, allowSkip, usedTool) {
   if (!allowSkip) return false;
-  const yes = /【\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*】/.test(String(reply || ''));
+  const yes = /[【[]\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*[】\]]/i.test(String(reply || ''));
   return !yes && !usedTool;
 }
 
