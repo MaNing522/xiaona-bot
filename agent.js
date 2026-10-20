@@ -37,6 +37,18 @@ export const AGENT_TOOLS = [
   {
     minRole: 'guest',
     function: {
+      name: 'analyze_image',
+      description: '识别本条消息里图片的内容（描述画面、读截图里的文字/OCR、分析图表等）。只在**本条消息带有 [图片]**、且你确实需要知道图里是什么才能回答时才用；纯文字消息、或不用看图就能答的不要用。',
+      parameters: {
+        type: 'object',
+        properties: { question: { type: 'string', description: '你想从图里了解什么，如「图里的文字是什么」「这张截图报的什么错」（可选）' } },
+      },
+    },
+    run: async (args, ctx) => ctx.analyzeImage(String(args.question || '').trim()),
+  },
+  {
+    minRole: 'guest',
+    function: {
       name: 'mc_status',
       description: '查询 Minecraft 服务器状态（是否在线 / 版本 / 在线人数 / 玩家列表）。**不填 address** → 查小钠自己连着的那个服；**填 address**（如 play.example.com 或 1.2.3.4:25565）→ 查任意指定的服务器。**查任何 MC 服务器都用本工具（自己的和别人的都是），不要用 web_search。**',
       parameters: {

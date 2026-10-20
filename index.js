@@ -361,7 +361,7 @@ function stripToolTags(text) {
  * 搜索/查数据这类"做事"已交给工具（function calling），这里只管：
  *   是否接话（可选）、要不要发语音、怎么分条。
  */
-function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '') {
+function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '', allowImage = false) {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该发语音时不发 —— 这里必须显式豁免。
@@ -377,7 +377,7 @@ function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '') {
 - **任何** Minecraft 服务器查询都用 \`mc_status\`：问"你自己连的服"→不填 address；问某个具体服务器（给了地址，比如 xxx.com、ip:端口）→填 address。**自己的服、别人的服，一律走 mc_status，绝不要用 web_search 去搜。**
 - 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
 - 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
-- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
+${allowImage ? '- 本条消息里带 [图片]、且需要知道图里是什么才用 `analyze_image` 识别（描述画面/读截图文字/看图回答）；不看图也能答的不要调。\n' : ''}- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
 - **只查本条消息要查的东西**：历史【最近对话】里提过的服务器/玩家不要顺手重复再查一遍，也别一条里塞多个查询。
 
 ${tagRule}
@@ -420,24 +420,21 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n（以上为该�
  * @param {string} [o.role]      提问者身份 guest|authorized|admin|owner
  * @param {boolean}[o.allowSkip] 是否判断"这条不是叫我"从而不回复（从严）
  * @param {boolean}[o.allowSearch] 是否开放联网搜索工具
- * @param {string[]}[o.images] 本条消息里图片的 base64 data URL（有就直接内联给模型看）
+ * @param {boolean}[o.allowImage] 是否开放图片识别工具（仅当本条消息带图片时才开）
  * @param {string} [o.userId]    KV 缓存隔离
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, images = [], userId = '', sessionNote = '', ctx = {} }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, userId = '', sessionNote = '', ctx = {} }) {
     let tools = toolsForRole(role);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
+    // 图片识别工具只在"本条消息真的带图片"时才给模型，免得它对着纯文字消息瞎调
+    if (!allowImage) tools = tools.filter((t) => t.function.name !== 'analyze_image');
 
     const sys = getSystemPrompt();
-    const decision = buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote);
-    // 本条消息带图：把图片按 DS 官方多模态格式内联进 user 消息（content 用块数组），模型能亲眼看图，不依赖工具
-    const userContent = images.length
-        ? [{ type: 'text', text: decision }, ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))]
-        : decision;
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
-        { role: 'user', content: userContent },
+        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote, allowImage) },
     ];
 
     const chat = (body) => chatCompletionRaw({
@@ -519,20 +516,50 @@ async function imageSegToDataUrl(seg) {
     throw new Error('拿不到图片内容');
 }
 
-/** 本条消息的图片段 → base64 data URL 列表（拿不到的跳过，别让一张坏图拖垮整轮对话） */
-async function imageSegmentsToDataUrls(segs) {
-    const settled = await Promise.allSettled((segs || []).map(imageSegToDataUrl));
-    return settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+/** 调 DS 官方多模态接口识别图片：先把图片下载/读成本地数据，再 base64 上传给模型 */
+async function analyzeImages(segs, question) {
+    const list = (segs || []).filter((s) => s && s.type === 'image' && s.data);
+    if (!list.length) return '本条消息里没有图片可识别。';
+    let urls;
+    try {
+        urls = await Promise.all(list.map(imageSegToDataUrl));
+    } catch (e) {
+        return '图片获取失败：' + e.message;
+    }
+    try {
+        const { content } = await chatCompletionRaw({
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
+                    ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
+                ],
+            }],
+            temperature: 0.3,
+            maxTokens: 800,
+        });
+        return content ? content.trim() : '（没识别出内容）';
+    } catch (e) {
+        return '图片识别失败：' + e.message;
+    }
 }
 
 /**
  * 组装当前会话的工具上下文。
  * @param {string} key  记忆/会话键
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
+ * @param {object} [o]  { images, notify }：本条消息的图片段，以及"给用户发中间消息"的回调
  */
-function buildAgentCtx(key, uid = '') {
+function buildAgentCtx(key, uid = '', { images = [], notify = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
+        // AI 决定要识别本条消息的图：先告诉用户"稍等我在下载"，同时开始下载识别
+        analyzeImage: async (question) => {
+            const sent = notify ? notify('稍等，我先下载看一下这张图～').catch(() => {}) : Promise.resolve();
+            const result = await analyzeImages(images, question);
+            await sent;
+            return result;
+        },
         mcStatus: (address) => agentMcStatus(address),
         playerQuery: (name) => agentPlayerQuery(name),
         balance: () => agentBalance(),
@@ -2560,18 +2587,21 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
-        // 本条消息里的图片：转成 base64 data URL 后直接内联给模型看（DS 多模态）
-        const imageUrls = await imageSegmentsToDataUrls(imageSegmentsOf(event.message));
+        // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别（工具里会先告诉用户"稍等"）
+        const imgs = imageSegmentsOf(event.message);
         const result = await aiReply({
             metaLine,
             memory: mem,
             role: perm.role(String(event.user_id)),
             allowSkip,
             allowSearch: SEARCH_ENABLED,
-            images: imageUrls,
+            allowImage: imgs.length > 0,
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
-            ctx: buildAgentCtx(convKey(event), String(event.user_id)),
+            ctx: buildAgentCtx(convKey(event), String(event.user_id), {
+                images: imgs,
+                notify: (text) => sendReply(event, text),
+            }),
         });
         let { reply, wantVoice } = result;
 
