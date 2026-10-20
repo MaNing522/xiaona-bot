@@ -71,6 +71,11 @@ export const DEFAULTS = {
         joinText: '欢迎加入群聊！🎉',
         leaveText: '👋 {name} {kind}{note}',
     },
+    // 游戏ID 绑定的全局默认「每人上限」（网页「全局设置」可改）。
+    // 单个 QQ 的覆盖值由管理员及以上用 #绑定上限 命令设置（见 binding.js）。
+    bind: {
+        maxPerQQ: 3,           // 每个 QQ 最多绑定几个游戏ID
+    },
 };
 
 /**

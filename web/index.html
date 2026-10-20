@@ -463,12 +463,13 @@ async function logs(){try{const d=await api('/api/logs');
 
 // ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
 let cvSel='', cvGlobal=null, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true, cvErr='';
-const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起'};
+const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起',bind:'绑定'};
 // 数值项中文名（用于全局设置与会话覆盖表单）
 const NUM_LABELS={
   rateLimit:{userCooldownMs:'用户冷却(ms)',userPerMinute:'用户每分钟',userPerHour:'用户每小时',userPerDay:'用户每日',groupPerMinute:'群每分钟',groupPerHour:'群每小时',globalMaxConcurrent:'全局并发',globalPerMinute:'全局每分钟',queueMax:'队列上限',queueTimeoutMs:'排队超时(ms)',violationsToCooldown:'超限转冷却次数',penaltyCooldownMs:'冷却时长(ms)',floodWindowMs:'刷屏窗口(ms)',floodCount:'刷屏阈值',penaltyMuteMs:'禁言时长(ms)'},
   cooldown:{pokeMs:'戳一戳冷却(ms)',shakeMs:'摇一摇冷却(ms)',forwardDelayMs:'转发间隔(ms)',forwardMs:'转发冷却(ms)'},
   engage:{ttlMs:'会话有效期(ms)',initiatorLeft:'唤起人额度',otherLeft:'其他人额度'},
+  bind:{maxPerQQ:'每QQ绑定上限(个)'},
 };
 // 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）
 const CV_NUM_KEYS={
@@ -504,7 +505,7 @@ function gcRender(){
   $('gcJoin').value=nt.joinText||'';
   $('gcLeave').value=nt.leaveText||'';
   let html='';
-  for(const seg of ['rateLimit','cooldown','engage']){
+  for(const seg of ['bind','rateLimit','cooldown','engage']){
     html+='<h2 style="font-size:14px;margin:18px 0 4px">'+SEGNAME[seg]+'</h2><div class="row" style="grid-template-columns:1fr 1fr 1fr">';
     for(const k of Object.keys(NUM_LABELS[seg])){
       if(!NUM_LABELS[seg][k]) continue;
@@ -607,7 +608,7 @@ async function convLoad(full){
 $('gcSave').onclick=async()=>{
   const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},
     notice:{enabled:$('gcNoticeOn').value==='true',joinText:$('gcJoin').value.trim(),leaveText:$('gcLeave').value.trim()},
-    rateLimit:{},cooldown:{},engage:{}};
+    rateLimit:{},cooldown:{},engage:{},bind:{}};
   document.querySelectorAll('[data-gc]').forEach(inp=>{
     const a=inp.dataset.gc.split('.');
     const v=inp.value.trim();

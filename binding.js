@@ -3,10 +3,10 @@
 //
 // 规则：
 //   · 桥接群的 QQ 消息只会转发给「已绑定游戏ID」的账号；没绑定的收不到
-//   · 每个 QQ 最多绑定 3 个游戏ID（BIND_MAX_PER_QQ 可调）
+//   · 每个 QQ 的绑定上限：全局默认在 config.json 的 bind.maxPerQQ，单个 QQ 可由管理员用 #绑定上限 覆盖
 //   · 绑定前必须答对 4 位图形验证码（防机器人批量绑定）
 //
-// 数据存在 data/bindings.json：{ "qq": { "<QQ号>": { "ids": ["Steve"], "at": 时间 } } }
+// 数据存在 data/bindings.json：{ "qq": { "<QQ号>": { "ids": ["Steve"], "at": 时间 } }, "limits": { "<QQ号>": 数量 } }
 // ============================================================
 import path from 'path';
 import { renderCaptcha } from './captcha.js';
@@ -19,7 +19,7 @@ const MAX_TRIES = 5;
 let file = '';
 let maxPerQq = 3;
 let ttlSec = 300;
-let data = { qq: {} };
+let data = { qq: {}, limits: {} };
 /** 封禁名单：qq -> { until, reason, at }。until=0 表示永久（不会自动过期） */
 let bans = {};
 let banFile = '';
@@ -36,11 +36,12 @@ export function initBindings(saveDir, opts = {}) {
   // 没传就清空：重新初始化不能沿用上一轮的回调
   onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
   // 先清空再加载：重新初始化（如测试/重启）不能沿用上一轮的内存状态
-  data = { qq: {} };
+  data = { qq: {}, limits: {} };
   bans = {};
   pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
-  if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq };
+  if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq, limits: (j.limits && typeof j.limits === 'object' && !Array.isArray(j.limits)) ? { ...j.limits } : {} };
+  else data = { qq: {}, limits: {} };
   const bj = readJsonSafe(banFile, null, 'bans.json');
   if (bj && typeof bj === 'object') {
     for (const [k, v] of Object.entries(bj)) {
@@ -73,6 +74,40 @@ function saveBans() {
 }
 
 export function maxPerQQ() { return maxPerQq; }
+
+/** 全局默认上限热更新（config.json 的 bind.maxPerQQ 改动后由 index.js 调用） */
+export function setGlobalMaxPerQQ(n) {
+  const v = Number(n);
+  if (Number.isFinite(v) && v > 0) maxPerQq = Math.floor(v);
+}
+
+/** 某个 QQ 实际生效的绑定上限：有单独覆盖用覆盖值，否则用全局默认 */
+export function limitOf(qq) {
+  const key = String(qq || '');
+  const o = data.limits && data.limits[key];
+  const n = Number(o);
+  return Number.isFinite(n) && n > 0 ? n : maxPerQq;
+}
+
+/**
+ * 给某个 QQ 设置单独的绑定上限覆盖（管理员及以上用 #绑定上限 调用）。
+ * n <= 0 表示清除覆盖、回退全局默认。
+ * @returns {{ok:boolean, msg:string, max?:number}}
+ */
+export function setLimit(qq, n) {
+  const key = String(qq || '').trim();
+  if (!/^\d{5,14}$/.test(key)) return { ok: false, msg: 'QQ 号格式不对（5-14 位数字）' };
+  const v = Math.floor(Number(n));
+  if (!data.limits) data.limits = {};
+  if (!Number.isFinite(v) || v <= 0) {
+    delete data.limits[key];
+    save();
+    return { ok: true, msg: `✅ 已清除 QQ ${key} 的单独上限，回退全局默认 ${maxPerQq} 个。`, max: maxPerQq };
+  }
+  data.limits[key] = v;
+  save();
+  return { ok: true, msg: `✅ QQ ${key} 的绑定上限已设为 ${v} 个（全局默认 ${maxPerQq} 个）。`, max: v };
+}
 
 /** 某个 QQ 绑定的游戏ID */
 export function getGameIdsOf(qq) {
@@ -232,8 +267,8 @@ export function startBind(qq, gameId) {
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
     return { ok: false, error: `你已经绑定过 ${id} 了。查看： #我的绑定` };
   }
-  if (ids.length >= maxPerQq) {
-    return { ok: false, error: `每个QQ最多绑定 ${maxPerQq} 个游戏ID，你已经绑满：${ids.join('、')}\n先 #解绑 <游戏ID>，再绑新的` };
+  if (ids.length >= limitOf(key)) {
+    return { ok: false, error: `每个QQ最多绑定 ${limitOf(key)} 个游戏ID，你已经绑满：${ids.join('、')}\n先 #解绑 <游戏ID>，再绑新的` };
   }
   const answer = Array.from({ length: 4 }, () => Math.floor(Math.random() * 10)).join('');
   pending.set(key, { answer, gameId: id, expires: Date.now() + ttlSec * 1000, tries: 0 });
@@ -283,7 +318,7 @@ export function answerCaptcha(qq, text) {
   return {
     handled: true,
     ok: true,
-    msg: `✅ 绑定成功：${p.gameId}（${entry.ids.length}/${maxPerQq}）\n`
+    msg: `✅ 绑定成功：${p.gameId}（${entry.ids.length}/${limitOf(key)}）\n`
       + `之后群里有人发言，游戏里会显示成 [QQ][昵称][QQ号]：内容 转发给你这个账号。`,
   };
 }

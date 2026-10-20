@@ -27,7 +27,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, getPlayerHistory, initPresence, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, maxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
@@ -157,9 +157,10 @@ initMemory(SAVE_DIR, {
   contextRecent: Number(process.env.MEMORY_CONTEXT_RECENT || 20),
 });
 
-// 绑定模块初始化（QQ ↔ 游戏ID，#绑定；每人上限与验证码有效期来自 .env）
+// 绑定模块初始化（QQ ↔ 游戏ID，#绑定；每人上限的全局默认来自 config.json 的 bind.maxPerQQ，
+// 单个 QQ 的覆盖值由管理员及以上用 #绑定上限 设置；验证码有效期来自 .env）
 initBindings(SAVE_DIR, {
-  maxPerQq: Number(process.env.BIND_MAX_PER_QQ || 3),
+  maxPerQq: Number((cfg.bind && cfg.bind.maxPerQQ) || 3),
   ttlSec: Number(process.env.BIND_CAPTCHA_TTL || 300),
   // 绑定关系一变就通知服务器：人可能正挂在游戏里，
   // 绑好了要马上把计分板撤掉，解绑了要重新挂上（否则得重进服才生效）；
@@ -214,6 +215,8 @@ function applyLiveConfig() {
     reloadConfig();
     const c = config();
     initRateLimit(c.rateLimit);
+    // 绑定上限的全局默认也随配置热更新（单独的每人覆盖值不受影响）
+    if (c.bind) setGlobalMaxPerQQ(c.bind.maxPerQQ);
 }
 
 // 监听 config.json：改完自动热加载（轮询 1s；编辑器的"写坏一瞬间"由 reloadConfig 保底不生效）
@@ -1152,15 +1155,28 @@ async function handleCommand(event, text) {
 
         case '/绑定': {
             if (!arg) {
-                return sendReply(event, `❌ 用法：#绑定 <游戏ID>\n绑定后，桥接群的 QQ 消息会转发进游戏给你；每个QQ最多 ${maxPerQQ()} 个。`);
+                return sendReply(event, `❌ 用法：#绑定 <游戏ID>\n绑定后，桥接群的 QQ 消息会转发进游戏给你；每个QQ最多 ${limitOf(uid)} 个。`);
             }
             const r = startBind(uid, arg);
             if (!r.ok) return sendReply(event, `❌ ${r.error}`);
             return sendReply(event, [
                 segImageB64(r.image),
                 segText(`🔐 请把图中 4 位数字发给我（${Math.round(r.ttlSec / 60)} 分钟内有效）\n`
-                    + `绑定目标：${r.gameId}（第 ${r.count}/${maxPerQQ()} 个）`),
+                    + `绑定目标：${r.gameId}（第 ${r.count}/${limitOf(uid)} 个）`),
             ]);
+        }
+
+        // 管理员及以上给「低于自己权限的人」单独设置绑定上限（全局默认在 config.json / 网页里改）
+        case '/绑定上限': {
+            if (r !== 'admin' && r !== 'owner') return sendReply(event, '❌ 仅管理员及以上可设置绑定上限。');
+            const t = resolveTarget(event, arg);
+            if (!t) return sendReply(event, '❌ 用法：#绑定上限 <@或QQ号> <数量>\n不填数量（或填 0）则清除该人的单独上限、回退全局默认。');
+            const gate = perm.canManage(uid, t);
+            if (!gate.ok) return sendReply(event, gate.msg);
+            const nums = (arg.match(/\d+/g) || []).filter((n) => n !== String(t));
+            const v = nums.length ? Number(nums[nums.length - 1]) : 0;
+            const res = setLimit(t, v);
+            return sendReply(event, res.msg);
         }
 
         case '/状态': {
@@ -1208,7 +1224,7 @@ async function handleCommand(event, text) {
             return handleScheduler(event, cmd, arg, r);
 
         case '/授权': {
-            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行授权操作。');
+            if (r === 'guest' || r === 'authorized') return sendReply(event, '❌ 仅管理员及以上可执行授权操作。');
             if (!arg) {
                 const list = perm.listAuthorized();
                 const pend = perm.listPending();
@@ -1222,7 +1238,8 @@ async function handleCommand(event, text) {
                     + `✅ 授权用户(${list.length}): ${list.join('、') || '无'}\n`
                     + `🚫 黑名单(${bl.length}): ${bl.join('、') || '无'}\n`
                     + `⏳ 待审批(${pend.length}): ${pend.join('、') || '无'}\n`
-                    + '用法：#授权 <@或QQ号> [等级]（0主人/1管理员/2授权用户/3普通/4黑名单，默认2）');
+                    + '用法：#授权 <@或QQ号> [等级]（0主人/1管理员/2授权用户/3普通/4黑名单，默认2）\n'
+                    + '管理员及以上可用；管理员只能设「低于自己」的等级，不能授予主人/管理员。');
             }
             // 末位若是单个 0-4，视为等级；否则默认 2
             const parts = arg.split(/\s+/).filter(Boolean);
@@ -1230,7 +1247,7 @@ async function handleCommand(event, text) {
             const level = (parts.length >= 2 && /^[0-4]$/.test(last)) ? Number(last) : 2;
             const t = resolveTarget(event, arg);
             if (!t) return sendReply(event, '❌ 请 @对方 或提供 QQ 号。');
-            const res = perm.setLevel(t, level);
+            const res = perm.setLevelBy(uid, t, level);
             if (res.ok && level === 2) inviteSendOwner(t, '已授权');
             return sendReply(event, res.msg);
         }

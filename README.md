@@ -149,7 +149,7 @@ gradlew.bat build
 | MC 桥开关 | `MC_BRIDGE_MC_TO_QQ` / `MC_BRIDGE_QQ_TO_MC` / `MC_BRIDGE_OP_RELAY` / `MC_BRIDGE_GAME_IMAGE` | 各方向开关 |
 | MC 桥限流 | `MC_BRIDGE_CHAT_RATE_MAX` / `MC_BRIDGE_CHAT_RATE_WINDOW_SEC` / `MC_BRIDGE_DUP_MAX` / `MC_BRIDGE_DUP_TTL_SEC` | 公聊限速与重复屏蔽 |
 | 行为 | `BOT_REPLY` / `QQ_GROUP_NOTICE` / `POKE_REPLY` / `QQ_REQUEST_APPROVE` | 机器人消息、进出群提示、戳一戳、申请审批 |
-| 绑定 | `BIND_MAX_PER_QQ` / `BIND_CAPTCHA_TTL` | 每人可绑数量、验证码有效期 |
+| 绑定 | `BIND_CAPTCHA_TTL` | 验证码有效期（每人可绑数量见 config.json 的 `bind.maxPerQQ`，单个 QQ 可用 `#绑定上限` 覆盖） |
 | 日志 | `LOG_LEVEL` | `trace`/`debug`/`info`/`warn`/`error`/`fatal`（默认 `info`），三处输出见下 |
 | 限速 | `RL_*` | 用户/群/全局三级限额与惩罚阈值（详见「宽松限速」一节），全部可调 |
 | 成本 | `AI_MAX_TOKENS` / `AI_MAX_TOKENS_SHORT` / `AI_MAX_TOKENS_LONG` | 输出上限（默认 512 / 300 / 1200） |

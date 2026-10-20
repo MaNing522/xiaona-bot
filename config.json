@@ -67,5 +67,11 @@
     "enabled": true,
     "joinText": "欢迎加入群聊！🎉",
     "leaveText": "👋 {name} {kind}{note}"
+  },
+
+  // ---- 游戏ID 绑定的全局默认「每人上限」----
+  // 单个 QQ 的覆盖值由管理员及以上用 #绑定上限 命令设置；这里是不设覆盖时的默认值。
+  "bind": {
+    "maxPerQQ": 3
   }
 }

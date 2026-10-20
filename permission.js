@@ -235,6 +235,42 @@ export function setLevel(userId, level) {
   return { ok: true, msg: `✅ 已设置 QQ ${id} 为「${LEVEL_NAMES[lv]}」`, level: lv };
 }
 
+/**
+ * 判定「actor 能否管理 target」——用于 #授权 / #绑定上限 这类"只能管低于自己权限的人"的命令。
+ * 主人不受限；管理员只能管比自己低的人（授权用户/普通用户/黑名单），不能动同级或更高、也不能动自己。
+ * @returns {{ok:boolean, msg?:string}}
+ */
+export function canManage(actorId, targetId) {
+  const ar = role(actorId);
+  if (ar !== 'admin' && ar !== 'owner') return { ok: false, msg: '❌ 需管理员及以上权限。' };
+  if (ar === 'owner') return { ok: true };
+  const t = String(targetId);
+  if (t === String(actorId)) return { ok: false, msg: '❌ 不能对自己操作。' };
+  const tr = role(t);
+  if (tr === 'owner' || tr === 'admin') {
+    return { ok: false, msg: `❌ QQ ${t} 是${TIER_META[tr].name}（同级或更高），无权操作。` };
+  }
+  return { ok: true };
+}
+
+/**
+ * 由某个人（actor）设置另一个人的等级。
+ * 主人可设任意等级（走 setLevel）；管理员只能设「低于自己」的等级（授权用户/普通用户/黑名单），
+ * 且不能改动同级或更高的人、也不能改自己。
+ * @returns {{ok:boolean, msg:string, level?:number}}
+ */
+export function setLevelBy(actorId, targetId, level) {
+  const lv = Number(level);
+  if (!Number.isInteger(lv) || lv < 0 || lv > 4) return { ok: false, msg: '❌ 等级需为 0-4' };
+  const ar = role(actorId);
+  if (ar === 'owner') return setLevel(targetId, lv);
+  const gate = canManage(actorId, targetId);
+  if (!gate.ok) return { ok: false, msg: gate.msg };
+  // 管理员：只能授予「低于自己」的档位（2 授权用户 / 3 普通 / 4 黑名单），不能授予主人或管理员
+  if (lv < 2) return { ok: false, msg: '❌ 管理员只能设「授权用户/普通用户/黑名单」，不能授予主人或管理员。' };
+  return setLevel(targetId, lv);
+}
+
 export function listBlacklist() { return blacklist.slice(); }
 export function listExtraOwners() { return extraOwners.slice(); }
 export function listExtraAdmins() { return extraAdmins.slice(); }

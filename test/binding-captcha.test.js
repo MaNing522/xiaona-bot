@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initBindings, startBind, answerCaptcha, getGameIdsOf, maxPerQQ } from '../binding.js';
+import { initBindings, startBind, answerCaptcha, getGameIdsOf, maxPerQQ, limitOf, setLimit, setGlobalMaxPerQQ } from '../binding.js';
 
 let dir;
 
@@ -108,5 +108,41 @@ describe('answerCaptcha', () => {
 
   it('没有待验证时返回 handled:false', () => {
     expect(answerCaptcha('99999', '1111')).toEqual({ handled: false });
+  });
+});
+
+describe('每人绑定上限（全局默认 + 单QQ覆盖）', () => {
+  it('默认用全局上限', () => {
+    expect(limitOf('10001')).toBe(3);
+  });
+
+  it('setLimit 单人覆盖后按其上限拦截', () => {
+    setLimit('10001', 1);
+    expect(limitOf('10001')).toBe(1);
+    expect(limitOf('10002')).toBe(3); // 其他人不受影响
+    expect(startBind('10001', 'Steve').ok).toBe(true);
+    expect(answerCaptcha('10001', '1111').ok).toBe(true);
+    expect(startBind('10001', 'Alex').ok).toBe(false);
+  });
+
+  it('setLimit(0) 清除覆盖、回退全局默认', () => {
+    setLimit('10001', 1);
+    const r = setLimit('10001', 0);
+    expect(r.ok).toBe(true);
+    expect(limitOf('10001')).toBe(3);
+  });
+
+  it('覆盖值落盘：重新 init 后仍生效', () => {
+    setLimit('10001', 2);
+    initBindings(dir, { maxPerQq: 3, ttlSec: 300 });
+    expect(limitOf('10001')).toBe(2);
+  });
+
+  it('setGlobalMaxPerQQ 改全局默认，不影响已有覆盖', () => {
+    setLimit('10001', 1);
+    setGlobalMaxPerQQ(5);
+    expect(maxPerQQ()).toBe(5);
+    expect(limitOf('10002')).toBe(5);
+    expect(limitOf('10001')).toBe(1);
   });
 });

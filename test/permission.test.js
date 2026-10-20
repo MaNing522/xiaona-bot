@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { init, role, setLevel, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners } from '../permission.js';
+import { init, role, setLevel, setLevelBy, canManage, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners } from '../permission.js';
 
 const ENV_OWNER = '1000';
 const ENV_ADMIN = '2000';
@@ -89,5 +89,35 @@ describe('setLevel（#授权 等级设置）', () => {
     setLevel('3002', 2);
     init(dir);
     expect(role('3002')).toBe('authorized');
+  });
+});
+
+describe('setLevelBy / canManage（管理员及以上受限放权）', () => {
+  it('主人不受限：可设任意等级', () => {
+    expect(setLevelBy(ENV_OWNER, '3001', 1).ok).toBe(true);
+    expect(role('3001')).toBe('admin');
+    expect(setLevelBy(ENV_OWNER, '3001', 2).ok).toBe(true);
+    expect(role('3001')).toBe('authorized');
+  });
+
+  it('管理员只能设「低于自己」的等级（2/3/4），不能授予 0/1', () => {
+    expect(setLevelBy(ENV_ADMIN, '3001', 0).ok).toBe(false);
+    expect(setLevelBy(ENV_ADMIN, '3001', 1).ok).toBe(false);
+    expect(setLevelBy(ENV_ADMIN, '3001', 2).ok).toBe(true);
+    expect(role('3001')).toBe('authorized');
+    expect(setLevelBy(ENV_ADMIN, '3001', 4).ok).toBe(true);
+    expect(isBlacklisted('3001')).toBe(true);
+  });
+
+  it('管理员不能改动同级或更高（主人/管理员），也不能改自己', () => {
+    setLevel('3001', 1); // 另一个管理员
+    expect(setLevelBy(ENV_ADMIN, ENV_OWNER, 4).ok).toBe(false);
+    expect(setLevelBy(ENV_ADMIN, '3001', 4).ok).toBe(false);
+    expect(setLevelBy(ENV_ADMIN, ENV_ADMIN, 2).ok).toBe(false);
+  });
+
+  it('授权用户/普通用户无权执行', () => {
+    expect(setLevelBy('3001', '3002', 2).ok).toBe(false); // 普通用户
+    expect(canManage('3001', '3002').ok).toBe(false);
   });
 });
