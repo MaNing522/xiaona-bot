@@ -169,6 +169,11 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
 
     // 助手这一轮只发起了工具调用（可能同时多条），先原样记入，再逐条执行
     messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
+    // 模型在发起工具调用时自己写的那句话（如"让我看看这张图""正在搜一下"），先发给用户，
+    // 让他知道小钠正在干什么——而不是由代码塞一句固定话术
+    if (msg.content && ctx && typeof ctx.notify === 'function') {
+      try { await ctx.notify(String(msg.content)); } catch { /* 中间消息发不出去不影响主流程 */ }
+    }
     for (const call of calls) {
       const name = call.function && call.function.name;
       const out = await execTool(name, call.function && call.function.arguments, ctx, tools, onTool);

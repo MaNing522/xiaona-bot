@@ -373,6 +373,8 @@ function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '', all
 
 【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
 
+**调工具时先说一句**：决定调工具的同时，用你自己的一句话（如"让我看看这张图""我查一下"）顺口告诉对方你在干什么——这句话会先发出去，别用固定台词，也别写成"正在调用工具"这种机械话。
+
 **工具怎么选（别搞混，尤其别拿 web_search 乱搜）**：
 - **任何** Minecraft 服务器查询都用 \`mc_status\`：问"你自己连的服"→不填 address；问某个具体服务器（给了地址，比如 xxx.com、ip:端口）→填 address。**自己的服、别人的服，一律走 mc_status，绝不要用 web_search 去搜。**
 - 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
@@ -404,7 +406,7 @@ ${step}. **生成回复**：
    - 一条内容太长、或本来就想分几口气说时，可以拆成多条发：**单独占一行写三个连字符 ---** 当作分隔，最多 3 条；不需要拆就别写分隔线。
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
-${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n（以上为该会话的额外要求，在不违背基本人设与安全的前提下遵守。）\n` : ''}
+${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
 
 现在请回复用户：${userInput}`;
     return p;
@@ -553,13 +555,10 @@ async function analyzeImages(segs, question) {
 function buildAgentCtx(key, uid = '', { images = [], notify = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
-        // AI 决定要识别本条消息的图：先告诉用户"稍等我在下载"，同时开始下载识别
-        analyzeImage: async (question) => {
-            const sent = notify ? notify('稍等，我先下载看一下这张图～').catch(() => {}) : Promise.resolve();
-            const result = await analyzeImages(images, question);
-            await sent;
-            return result;
-        },
+        // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
+        notify: (text) => (notify ? notify(String(text)) : Promise.resolve()),
+        // AI 决定要识别本条消息的图
+        analyzeImage: async (question) => analyzeImages(images, question),
         mcStatus: (address) => agentMcStatus(address),
         playerQuery: (name) => agentPlayerQuery(name),
         balance: () => agentBalance(),
