@@ -7,7 +7,7 @@
 //
 // 音色 / 语速走 .env：
 //   TTS_VOICE  音色短名，默认 zh-CN-XiaoxiaoNeural（女声 XiaoXiao）
-//   TTS_RATE   语速增减，默认 +8%
+//   TTS_RATE   语速增减
 //   完整音色表：edge-tts --list-voices（或看名字规律 zh-CN-<名>Neural）
 //
 // 说明：接口免密钥、无需安装任何东西（只用到项目已有的 ws 依赖）。
