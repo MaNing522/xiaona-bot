@@ -19,6 +19,7 @@ import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
 import { isMcConnected } from './mcbridge.js';
 import * as chatCfg from './chatSettings.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
+import { bindingOverview, forceUnbind, clearUnbinds } from './binding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
@@ -738,6 +739,22 @@ async function route(req, res, url) {
   }
 
   // 授权变更仅由主人在 QQ 侧执行，面板不开放直接增删
+
+  // ---------- 绑定管理（已绑定用户 + 解绑记录） ----------
+  if (url.pathname === '/api/bindings' && req.method === 'GET') {
+    return sendJSON(res, 200, { ok: true, ...bindingOverview() });
+  }
+  if (url.pathname === '/api/bindings' && req.method === 'POST') {
+    const { action, qq, gameId } = await readBody(req);
+    if (action === 'unbind') {
+      const r = forceUnbind(qq, gameId);
+      return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, msg: r.msg, ids: r.ids } : { ok: false, error: r.error });
+    }
+    if (action === 'clearUnbinds') {
+      return sendJSON(res, 200, { ok: true, cleared: clearUnbinds() });
+    }
+    return sendJSON(res, 400, { ok: false, error: '未知操作' });
+  }
 
   if (url.pathname === '/api/login/start' && req.method === 'POST') {
     const { mode, qq, password } = await readBody(req);

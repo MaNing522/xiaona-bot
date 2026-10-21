@@ -96,20 +96,19 @@ function waitPort(port, timeoutMs) {
   });
 }
 
-// ---------- 启动机器人并联动退出 ----------
-async function startBot(napcat) {
-  try {
-    await waitPort(WS_PORT, 120000);
-    console.log(`[启动器] NapCat WS 端口 ${WS_PORT} 已就绪，启动机器人...`);
-  } catch {
-    console.log('[启动器] 等待 NapCat WS 超时，仍尝试启动机器人（机器人会自动重连）。');
-  }
+// ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
+function spawnBot() {
   const bot = spawn(process.execPath, ['index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
   const pipe = (chunk) => {
     String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[Bot] ${l.trim()}`));
   };
   bot.stdout.on('data', pipe);
   bot.stderr.on('data', pipe);
+  return bot;
+}
+
+// ---------- 进程联动：任一退出则关闭另一个并退出 ----------
+function linkExit(bot, napcat) {
   bot.on('exit', (code) => {
     console.log(`[启动器] 机器人已退出（code=${code}），关闭 NapCat...`);
     try { napcat.kill(); } catch {}
@@ -122,8 +121,21 @@ async function startBot(napcat) {
   });
 }
 
+// ---------- 启动机器人并联动退出（先等 NapCat WS 就绪） ----------
+async function startBot(napcat) {
+  try {
+    await waitPort(WS_PORT, 120000);
+    console.log(`[启动器] NapCat WS 端口 ${WS_PORT} 已就绪，启动机器人...`);
+  } catch {
+    console.log('[启动器] 等待 NapCat WS 超时，仍尝试启动机器人（机器人会自动重连）。');
+  }
+  const bot = spawnBot();
+  linkExit(bot, napcat);
+}
+
 // ---------- 自动登录尝试 ----------
-async function tryAutoLogin(qq) {
+// 只负责把 NapCat 跑起来并判断登录结果；拿到进程句柄后由调用方决定何时起机器人。
+async function tryAutoLoginNapcat(qq) {
   console.log(`🔄 尝试自动登录（QQ ${qq} 快速登录）...`);
   // 上一次手动登录留下的二维码图片会让 watchAutoLogin 里的"出现二维码即视为失败"
   // 立刻误判（文件本来就在），快速登录还没开始就被打断、直接掉进手动登录。
@@ -134,12 +146,18 @@ async function tryAutoLogin(qq) {
   if (res.ok) {
     console.log('✅ 自动登录成功。');
     saveLogin(qq);
-    await startBot(proc);
-    return true;
+    return { ok: true, proc };
   }
   console.log(`⚠️ 自动登录未成功（${res.reason}），停止该进程，改用手动登录。`);
   try { proc.kill(); } catch {}
-  return false;
+  return { ok: false, proc: null };
+}
+
+async function tryAutoLogin(qq) {
+  const r = await tryAutoLoginNapcat(qq);
+  if (!r.ok) return false;
+  await startBot(r.proc);
+  return true;
 }
 
 // ---------- 手动登录（账密 / 二维码） ----------
@@ -209,7 +227,8 @@ function watchLoginSuccess(proc, qq) {
   proc.stderr.on('data', feed);
 }
 
-async function manualLogin() {
+// 只负责拿到 NapCat 登录进程（含终端交互），返回进程句柄；机器人由调用方决定何时起。
+async function manualLoginNapcat() {
   const saved = readSaved();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = (q) => new Promise((res) => rl.question(q, res));
@@ -255,6 +274,11 @@ async function manualLogin() {
   console.log(`[启动器] 正在启动 NapCat（${choice === '1' ? '账密登录' : '二维码登录'}${qq ? '，QQ=' + qq : ''}）...`);
   const napcat = spawnNapcat(env);
   watchLoginSuccess(napcat, qq);
+  return napcat;
+}
+
+async function manualLogin() {
+  const napcat = await manualLoginNapcat();
   await startBot(napcat);
 }
 
@@ -265,9 +289,29 @@ async function main() {
   const saved = readSaved();
   if (saved) {
     console.log(`ℹ️ 上次成功登录的账号：${saved.qq}（手动登录时直接回车即可沿用）`);
-    if (await tryAutoLogin(saved.qq)) return;
   } else {
     console.log('ℹ️ 未找到历史登录账号，进入手动登录。');
+  }
+
+  // 网页控制面板启用时：先起机器人（面板立即可用），再进入 NapCat 登录。
+  // 这样即使登录要扫码 / 验证码，用户也能先打开面板查看二维码、操作登录，
+  // 而不是先被终端登录流程挡住。机器人起来后会自动重连 NapCat，无需担心先后。
+  const webuiEnabled = !!String(process.env.WEBUI_PASSWORD || '').trim();
+  if (webuiEnabled) {
+    console.log('ℹ️ 已启用网页控制面板：先启动面板（机器人），再处理 NapCat 登录。');
+    const bot = spawnBot();
+    let napcat = null;
+    if (saved) {
+      const auto = await tryAutoLoginNapcat(saved.qq);
+      if (auto.ok) napcat = auto.proc;
+    }
+    if (!napcat) napcat = await manualLoginNapcat();
+    linkExit(bot, napcat);
+    return;
+  }
+
+  if (saved) {
+    if (await tryAutoLogin(saved.qq)) return;
   }
   await manualLogin();
 }

@@ -184,6 +184,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     <nav class="nav">
       <button class="nav-item active" data-tab="login"><span class="ico">📊</span>登录状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
+      <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
       <button class="nav-item" data-tab="group"><span class="ico">🛡️</span>群管</button>
       <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话管理</button>
       <button class="nav-item" data-tab="trial"><span class="ico">🧪</span>私聊试用</button>
@@ -262,6 +263,21 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
     <div class="card"><h2>🟢 已授权 <span class="cnt" id="pmListN">0</span></h2><div class="chips" id="pmList"><span class="hint">加载中…</span></div></div>
     <div class="card"><h2>⏳ 待主人审批 <span class="cnt" id="pmPendingN">0</span></h2><div class="chips" id="pmPending"><span class="hint">暂无</span></div></div>
+  </div>
+
+  <!-- 绑定管理 -->
+  <div class="panel" data-panel="bind">
+    <div class="card span2">
+      <h2>🔗 已绑定用户 <span class="cnt" id="bdBoundN">0</span></h2>
+      <div class="hint" style="margin-top:0">每个 QQ 绑定的游戏ID。可单独解绑某个 ID，或解绑该 QQ 的全部绑定；封禁 / 上限状态一并显示。</div>
+      <div id="bdBound"><span class="hint">加载中…</span></div>
+    </div>
+    <div class="card span2">
+      <h2>🗑️ 解绑记录（保留 <span id="bdRetain">15</span> 天）</h2>
+      <div class="hint" style="margin-top:0">解绑（含退群 / 封禁导致的自动解绑）会记在这里，到期自动删除。</div>
+      <div id="bdUnbind"><span class="hint">暂无</span></div>
+      <button class="btn ghost" id="bdClearUnbinds" style="width:auto;margin-top:12px">清除全部解绑记录</button>
+    </div>
   </div>
 
   <!-- 群管 -->
@@ -469,7 +485,7 @@ const NUM_LABELS={
   rateLimit:{userCooldownMs:'用户冷却(ms)',userPerMinute:'用户每分钟',userPerHour:'用户每小时',userPerDay:'用户每日',groupPerMinute:'群每分钟',groupPerHour:'群每小时',globalMaxConcurrent:'全局并发',globalPerMinute:'全局每分钟',queueMax:'队列上限',queueTimeoutMs:'排队超时(ms)',violationsToCooldown:'超限转冷却次数',penaltyCooldownMs:'冷却时长(ms)',floodWindowMs:'刷屏窗口(ms)',floodCount:'刷屏阈值',penaltyMuteMs:'禁言时长(ms)'},
   cooldown:{pokeMs:'戳一戳冷却(ms)',shakeMs:'摇一摇冷却(ms)',forwardDelayMs:'转发间隔(ms)',forwardMs:'转发冷却(ms)'},
   engage:{ttlMs:'会话有效期(ms)',initiatorLeft:'唤起人额度',otherLeft:'其他人额度'},
-  bind:{maxPerQQ:'每QQ绑定上限(个)'},
+  bind:{maxPerQQ:'每QQ绑定上限(个)',unbindRetainDays:'解绑记录保留(天)'},
 };
 // 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）
 const CV_NUM_KEYS={
@@ -700,8 +716,57 @@ $('trInput').addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e
 // 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
 window.addEventListener('pagehide',()=>{try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
 
-load();perms();refresh();logs();convLoad(true);load();perms();
-setInterval(load,5000);setInterval(perms,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);
+// ---------- 绑定管理（已绑定用户 + 解绑记录） ----------
+function bdFmt(ms){
+  if(!ms)return '—';
+  const d=new Date(ms);const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function bindLoad(){
+  try{
+    const d=await api('/api/bindings');
+    $('bdRetain').textContent=String(d.retainDays||15);
+    rollNum($('bdBoundN'), (d.bound||[]).length);
+    const bound=d.bound||[];
+    $('bdBound').innerHTML=bound.length?bound.map(b=>{
+      const ids=(b.ids||[]).map(id=>'<span class="chip" style="display:inline-flex;align-items:center;gap:6px">'+esc(id)+
+        '<a href="#" data-unbind="'+esc(b.qq)+'" data-gid="'+esc(id)+'" title="解绑此ID" style="color:var(--danger);text-decoration:none;font-weight:600">✕</a></span>').join('');
+      const ban=b.banned?('<span class="pill red" style="margin-left:6px">已封禁'+(b.banUntil?('（至 '+bdFmt(b.banUntil)+'）'):'（永久）')+'</span>'):'';
+      const lim=b.limitOverride!=null?('单独上限 '+b.limit):('上限 '+b.limit);
+      return '<div class="cmd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+        '<div style="flex:1;min-width:0"><b>QQ '+esc(b.qq)+'</b>'+ban+'<span class="hint" style="margin-left:6px">'+esc(lim)+'</span>'+
+        '<div class="chips" style="margin-top:6px">'+(ids||'<span class="hint">无</span>')+'</div></div>'+
+        '<button class="btn ghost" data-unbind-all="'+esc(b.qq)+'" style="width:auto;min-height:30px;padding:0 12px;font-size:12px;margin:0">解绑全部</button>'+
+        '</div>';
+    }).join(''):'<span class="hint">暂无绑定用户</span>';
+    const ub=d.unbinds||[];
+    $('bdUnbind').innerHTML=ub.length?('<table style="width:100%;border-collapse:collapse;font-size:13.5px">'+
+      '<tr style="color:var(--sub);text-align:left"><th style="padding:6px 8px;border-bottom:1px solid var(--line)">QQ</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">游戏ID</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">方式</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">解绑时间</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">到期删除</th></tr>'+
+      ub.map(u=>'<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(u.qq)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(u.gameId)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+(u.by==='self'?'本人':'管理员')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(u.at)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(u.expireAt)+'</td></tr>').join('')+
+      '</table>'):'<span class="hint">暂无解绑记录</span>';
+    document.querySelectorAll('#bdBound [data-unbind]').forEach(a=>a.onclick=async(e)=>{
+      e.preventDefault();
+      const qq=a.dataset.unbind, gid=a.dataset.gid;
+      if(!confirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
+      try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unbind',qq,gameId:gid})}); bindLoad(); }
+      catch(err){ alert('解绑失败: '+err.message); }
+    });
+    document.querySelectorAll('#bdBound [data-unbind-all]').forEach(b=>b.onclick=async()=>{
+      const qq=b.dataset.unbindAll;
+      if(!confirm('确认解绑 QQ '+qq+' 的全部绑定？'))return;
+      try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unbind',qq})}); bindLoad(); }
+      catch(err){ alert('解绑失败: '+err.message); }
+    });
+  }catch(e){}
+}
+$('bdClearUnbinds').onclick=async()=>{
+  if(!confirm('确认清除全部解绑记录？'))return;
+  try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'clearUnbinds'})}); bindLoad(); }
+  catch(e){ alert('清除失败: '+e.message); }
+};
+
+load();perms();bindLoad();refresh();logs();convLoad(true);load();perms();
+setInterval(load,5000);setInterval(perms,8000);setInterval(bindLoad,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);
 </script>
 </body>
 </html>

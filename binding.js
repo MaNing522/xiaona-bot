@@ -6,7 +6,7 @@
 //   · 每个 QQ 的绑定上限：全局默认在 config.json 的 bind.maxPerQQ，单个 QQ 可由管理员用 #绑定上限 覆盖
 //   · 绑定前必须答对 4 位图形验证码（防机器人批量绑定）
 //
-// 数据存在 data/bindings.json：{ "qq": { "<QQ号>": { "ids": ["Steve"], "at": 时间 } }, "limits": { "<QQ号>": 数量 } }
+// 数据存在 data/bindings.json：{ "qq": { "<QQ号>": { "ids": ["Steve"], "at": 时间 } }, "limits": { "<QQ号>": 数量 }, "unbinds": [{ "qq", "gameId", "at", "by" }] }
 // ============================================================
 import path from 'path';
 import { renderCaptcha } from './captcha.js';
@@ -19,7 +19,9 @@ const MAX_TRIES = 5;
 let file = '';
 let maxPerQq = 3;
 let ttlSec = 300;
-let data = { qq: {}, limits: {} };
+/** 解绑记录保留时长（毫秒）；默认 15 天，可由 config.json 的 bind.unbindRetainDays 调整 */
+let unbindRetainMs = 15 * 24 * 3600 * 1000;
+let data = { qq: {}, limits: {}, unbinds: [] };
 /** 封禁名单：qq -> { until, reason, at }。until=0 表示永久（不会自动过期） */
 let bans = {};
 let banFile = '';
@@ -33,15 +35,25 @@ export function initBindings(saveDir, opts = {}) {
   banFile = path.join(saveDir, 'bans.json');
   maxPerQq = Number(opts.maxPerQq) > 0 ? Number(opts.maxPerQq) : 3;
   ttlSec = Number(opts.ttlSec) > 0 ? Number(opts.ttlSec) : 300;
+  const retainDays = Number(opts.unbindRetainDays);
+  unbindRetainMs = Number.isFinite(retainDays) && retainDays >= 0
+    ? Math.floor(retainDays) * 24 * 3600 * 1000
+    : 15 * 24 * 3600 * 1000;
   // 没传就清空：重新初始化不能沿用上一轮的回调
   onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
   // 先清空再加载：重新初始化（如测试/重启）不能沿用上一轮的内存状态
-  data = { qq: {}, limits: {} };
+  data = { qq: {}, limits: {}, unbinds: [] };
   bans = {};
   pending.clear();
   const j = readJsonSafe(file, null, 'bindings.json');
-  if (j && j.qq && typeof j.qq === 'object') data = { qq: j.qq, limits: (j.limits && typeof j.limits === 'object' && !Array.isArray(j.limits)) ? { ...j.limits } : {} };
-  else data = { qq: {}, limits: {} };
+  if (j && j.qq && typeof j.qq === 'object') {
+    data = {
+      qq: j.qq,
+      limits: (j.limits && typeof j.limits === 'object' && !Array.isArray(j.limits)) ? { ...j.limits } : {},
+      unbinds: Array.isArray(j.unbinds) ? j.unbinds.filter((u) => u && u.qq && u.gameId) : [],
+    };
+  } else data = { qq: {}, limits: {}, unbinds: [] };
+  sweepUnbinds();
   const bj = readJsonSafe(banFile, null, 'bans.json');
   if (bj && typeof bj === 'object') {
     for (const [k, v] of Object.entries(bj)) {
@@ -79,6 +91,12 @@ export function maxPerQQ() { return maxPerQq; }
 export function setGlobalMaxPerQQ(n) {
   const v = Number(n);
   if (Number.isFinite(v) && v > 0) maxPerQq = Math.floor(v);
+}
+
+/** 解绑记录保留天数热更新（config.json 的 bind.unbindRetainDays 改动后由 index.js 调用） */
+export function setGlobalUnbindRetainDays(days) {
+  const v = Number(days);
+  if (Number.isFinite(v) && v >= 0) unbindRetainMs = Math.floor(v) * 24 * 3600 * 1000;
 }
 
 /** 某个 QQ 实际生效的绑定上限：有单独覆盖用覆盖值，否则用全局默认 */
@@ -334,6 +352,7 @@ export function unbind(qq, arg) {
   if (!a) return { ok: false, error: `用法：#解绑 <游戏ID>，或 #解绑 all 清空。当前：${ids.join('、')}` };
   if (a.toLowerCase() === 'all' || a === '全部') {
     delete data.qq[key];      // 不留空壳，否则「N 个 QQ 的绑定记录」会一直虚高
+    for (const id of ids) recordUnbind(key, id, 'self');
     save();
     notifyChange(ids);
     return { ok: true, msg: `🗑️ 已解绑全部：${ids.join('、')}` };
@@ -343,6 +362,7 @@ export function unbind(qq, arg) {
   const [removed] = ids.splice(i, 1);
   if (!ids.length) delete data.qq[key];
   else entry.at = Date.now();
+  recordUnbind(key, removed, 'self');
   save();
   notifyChange([removed]);
   return { ok: true, msg: `🗑️ 已解绑 ${removed}${ids.length ? `，剩余：${ids.join('、')}` : '，你已没有绑定'}` };
@@ -361,6 +381,7 @@ export function forceUnbind(qq, gameId) {
   if (!a) {
     const all = ids.slice();
     delete data.qq[key];
+    for (const id of all) recordUnbind(key, id, 'admin');
     save();
     notifyChange(all);
     return { ok: true, msg: `🗑️ 已强制解绑 QQ ${key} 的全部绑定：${all.join('、')}`, ids: all };
@@ -370,9 +391,72 @@ export function forceUnbind(qq, gameId) {
   const [removed] = ids.splice(i, 1);
   if (!ids.length) delete data.qq[key];
   else entry.at = Date.now();
+  recordUnbind(key, removed, 'admin');
   save();
   notifyChange([removed]);
   return { ok: true, msg: `🗑️ 已强制解绑 QQ ${key} 的 ${removed}`, ids: [removed] };
+}
+
+/* ============================================================
+ * 解绑记录：解绑（含退群/封禁导致的自动解绑）会留一条记录，供网页
+ * 「绑定管理」查看；超过保留期（默认 15 天，config.json 的
+ * bind.unbindRetainDays 可调）自动删除。
+ * ============================================================ */
+
+/** 记一条解绑记录（只改内存，落盘交给调用方统一 save） */
+function recordUnbind(qq, gameId, by) {
+  if (!Array.isArray(data.unbinds)) data.unbinds = [];
+  data.unbinds.push({ qq: String(qq), gameId: String(gameId), at: Date.now(), by: by || '' });
+}
+
+/** 清掉超过保留期的解绑记录；有变化才落盘 */
+function sweepUnbinds() {
+  if (!Array.isArray(data.unbinds)) { data.unbinds = []; return; }
+  const cutoff = Date.now() - unbindRetainMs;
+  const kept = data.unbinds.filter((u) => u && Number(u.at) > cutoff);
+  if (kept.length !== data.unbinds.length) { data.unbinds = kept; save(); }
+}
+
+/** 全部解绑记录（副本，含预计过期时间） */
+export function listUnbinds() {
+  sweepUnbinds();
+  return (data.unbinds || []).map((u) => ({ ...u, expireAt: Number(u.at) + unbindRetainMs }));
+}
+
+/** 清空全部解绑记录，返回清掉的条数 */
+export function clearUnbinds() {
+  const n = Array.isArray(data.unbinds) ? data.unbinds.length : 0;
+  data.unbinds = [];
+  save();
+  return n;
+}
+
+/** 面板用的绑定总览：已绑定用户（含上限/封禁）+ 解绑记录 + 保留期 */
+export function bindingOverview() {
+  sweepUnbinds();
+  const bound = [];
+  for (const qq of Object.keys(data.qq)) {
+    const entry = data.qq[qq];
+    const ids = entry && Array.isArray(entry.ids) ? entry.ids : [];
+    if (!ids.length) continue;
+    const ban = isBanned(qq);
+    bound.push({
+      qq,
+      ids: ids.slice(),
+      at: Number(entry.at) || 0,
+      limit: limitOf(qq),
+      limitOverride: data.limits && data.limits[qq] != null ? Number(data.limits[qq]) : null,
+      banned: !!ban,
+      banUntil: ban ? ban.until : 0,
+      banReason: ban ? ban.reason : '',
+    });
+  }
+  return {
+    bound,
+    unbinds: listUnbinds(),
+    retainDays: Math.round(unbindRetainMs / (24 * 3600 * 1000)),
+    maxPerQQ: maxPerQq,
+  };
 }
 
 /** 查看自己的绑定 */

@@ -13,8 +13,6 @@
 // ============================================================
 import crypto from 'crypto';
 import fs from 'fs';
-import path from 'path';
-import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger } from './logger.js';
 
 // 配置在 startMcBridge() 时从 process.env 读取。
@@ -449,65 +447,6 @@ function rateBlocked(name) {
     return true;
 }
 
-/** 玩家 → { name, ip, events:[{type,at,ip}] }：最近 5 次上下线（含登录 IP），供主人私聊 #查询 用 */
-const joinHistory = new Map();
-const JOIN_HISTORY_MAX = 5;
-const JOIN_HISTORY_PLAYERS = 500;
-/** 落盘位置：data/presence.json（由 initPresence 传入；为空则只在内存里记） */
-let presenceFile = '';
-
-/**
- * 加载上次运行留下的上下线记录（机器人重启不丢）。
- * 结构：{ players: { "<小写名>": { name, ip, events:[{type,at,ip}] } } }
- */
-export function initPresence(saveDir) {
-    presenceFile = path.join(saveDir, 'presence.json');
-    const j = readJsonSafe(presenceFile, null, 'presence.json');
-    const players = j && j.players && typeof j.players === 'object' ? j.players : {};
-    joinHistory.clear();
-    for (const key of Object.keys(players).slice(-JOIN_HISTORY_PLAYERS)) {
-        const e = players[key];
-        if (!e || !Array.isArray(e.events)) continue;
-        joinHistory.set(key, {
-            name: String(e.name || key),
-            ip: String(e.ip || ''),
-            events: e.events.slice(-JOIN_HISTORY_MAX),
-        });
-    }
-    logger.info(`[MC桥] 已加载 ${joinHistory.size} 名玩家的上下线记录`);
-}
-
-/** 整表落盘（原子写，避免半截文件） */
-function savePresence() {
-    if (!presenceFile) return;
-    const players = {};
-    for (const [k, v] of joinHistory) players[k] = v;
-    writeJsonAtomic(presenceFile, { players });
-}
-
-function recordPresence(type, name, ip) {
-    const key = String(name || '').toLowerCase();
-    if (!key) return;
-    let e = joinHistory.get(key);
-    if (!e) {
-        if (joinHistory.size >= JOIN_HISTORY_PLAYERS) {
-            const oldest = joinHistory.keys().next().value;
-            if (oldest !== undefined) joinHistory.delete(oldest);
-        }
-        e = { name: String(name), ip: '', events: [] };
-        joinHistory.set(key, e);
-    }
-    if (ip) e.ip = ip;   // 只有 join 带 IP，取最近一次
-    e.events.push({ type, at: Date.now(), ip: ip || '' });
-    if (e.events.length > JOIN_HISTORY_MAX) e.events.splice(0, e.events.length - JOIN_HISTORY_MAX);
-    savePresence();
-}
-
-/** 取某玩家的上下线记录（最近 5 次）与最近一次登录 IP；没有记录返回 null */
-export function getPlayerHistory(name) {
-    return joinHistory.get(String(name || '').toLowerCase()) || null;
-}
-
 /**
  * Carpet 假人（/player 生成的假玩家）名字前缀。假人的上下线/发言一律不往群里转发，
  * 免得一批假人进进出出把桥接群刷屏。要加别的前缀往数组里塞就行。
@@ -548,11 +487,7 @@ async function onEvent(ev) {
 
     if (ev.type === 'join' || ev.type === 'leave') {
         // 先把上下线消息发到群里——这是用户最需要看到的结果。
-        // 后面的记录/计分板是附带动作，**失败也不能把这条消息吞掉**（否则退太快时容易"少一条"）。
         await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`);
-        try { if (ev.player) recordPresence(ev.type, ev.player, ev.ip); } catch (e) { logger.warn(`[MC桥] 记录上下线失败（${who}）：${e.message}`); }
-        // 端口复用下 MC 只看到 127.0.0.1，mod 已用端口映射还原出真实客户端 IP，这里只记到控制台
-        if (ev.type === 'join' && ev.ip) logger.info(`[MC桥] ${who} 真实客户端 IP: ${ev.ip}`);
         // 上线才查一次绑定，把答案单独回给 mod（mod 只为这名玩家渲染计分板）
         if (ev.type === 'join' && ev.player) await bindCheck(ev.player);
         return;

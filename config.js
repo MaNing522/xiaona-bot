@@ -75,6 +75,7 @@ export const DEFAULTS = {
     // 单个 QQ 的覆盖值由管理员及以上用 #绑定上限 命令设置（见 binding.js）。
     bind: {
         maxPerQQ: 3,           // 每个 QQ 最多绑定几个游戏ID
+        unbindRetainDays: 15,  // 解绑记录在网页「绑定管理」里保留多少天，到期自动删除
     },
 };
 
