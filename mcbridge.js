@@ -28,6 +28,8 @@ let playersCache = { at: 0, list: [] };
 let warnedOldMod = false;
 let warnedNoBindCheck = false;
 let warnedNoWhitelist = false;
+/** /bridge/bans 不存在时只提示一次（旧版 mod） */
+let warnedNoBans = false;
 /** 玩家 → { start, count, warned }：游戏公聊 → QQ 的限速窗口 */
 const chatRate = new Map();
 /** 限速状态表上限，防止长期运行时随人数一路涨 */
@@ -298,6 +300,21 @@ export async function pushBlacklistAll() {
     const ids = (deps && typeof deps.getBlacklistedIds === 'function') ? (deps.getBlacklistedIds() || []) : [];
     if (!ids.length) return;
     await banPlayers(ids, true, 'QQ黑名单同步').catch(() => {});
+}
+
+/** 读取服务器封禁名单（需要 mod ≥ 2.7.0）；失败返回 null */
+export async function getGameBans() {
+    if (!cfg || !cfg.base) return null;
+    try {
+        const r = await api('/bridge/bans', { timeoutMs: 8000 });
+        return Array.isArray(r && r.bans) ? r.bans : [];
+    } catch (e) {
+        if (!warnedNoBans && /\b40[34]\b/.test(e.message)) {
+            logger.error(`[MC桥] 读取游戏封禁名单失败：${e.message}。需要 mod ≥ 2.7.0 的 /bridge/bans。`);
+            warnedNoBans = true;
+        }
+        return null;
+    }
 }
 
 /** 在线玩家（带 10 秒缓存） */

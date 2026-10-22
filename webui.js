@@ -16,10 +16,13 @@ import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
-import { isMcConnected } from './mcbridge.js';
+import { isMcConnected, getGameBans, banPlayers } from './mcbridge.js';
 import * as chatCfg from './chatSettings.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
-import { bindingOverview, forceUnbind, clearUnbinds } from './binding.js';
+import {
+  bindingOverview, forceUnbind, clearUnbinds, banUser, unbanUser,
+  deleteUnbind, restoreUnbind,
+} from './binding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NAPCAT_DIR = path.join(__dirname, 'napcat');
@@ -740,15 +743,56 @@ async function route(req, res, url) {
 
   // 授权变更仅由主人在 QQ 侧执行，面板不开放直接增删
 
-  // ---------- 绑定管理（已绑定用户 + 解绑记录） ----------
+  // ---------- 绑定管理（已绑定用户 + 解绑记录 + 封禁名单） ----------
   if (url.pathname === '/api/bindings' && req.method === 'GET') {
-    return sendJSON(res, 200, { ok: true, ...bindingOverview() });
+    // 游戏内封禁名单要问服务器 mod；桥没连上/旧版 mod 时返回 null，前端据此提示
+    let gameBans = null;
+    if (isMcConnected()) {
+      try { gameBans = await getGameBans(); } catch { gameBans = null; }
+    }
+    return sendJSON(res, 200, { ok: true, ...bindingOverview(), gameBans, mcConnected: isMcConnected() });
   }
   if (url.pathname === '/api/bindings' && req.method === 'POST') {
-    const { action, qq, gameId } = await readBody(req);
+    const { action, qq, gameId, at, time, reason, player } = await readBody(req);
     if (action === 'unbind') {
       const r = forceUnbind(qq, gameId);
       return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, msg: r.msg, ids: r.ids } : { ok: false, error: r.error });
+    }
+    // QQ 号封禁：同时把其名下已绑定的游戏ID 同步进服务器封禁名单
+    if (action === 'ban') {
+      const r = banUser(qq, time, reason);
+      if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+      let synced = [];
+      if (r.ids && r.ids.length && isMcConnected()) {
+        const g = await banPlayers(r.ids, true, r.reason || 'QQ封禁').catch(() => null);
+        if (g && Array.isArray(g.done)) synced = g.done;
+      }
+      return sendJSON(res, 200, { ok: true, permanent: r.permanent, until: r.until, ids: r.ids, synced });
+    }
+    // 删除 QQ 封禁记录（解封，不恢复被封时已解绑的游戏ID）
+    if (action === 'unban') {
+      const r = unbanUser(qq);
+      return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true } : { ok: false, error: r.error });
+    }
+    // 直接封禁 / 解封游戏ID
+    if (action === 'banGame' || action === 'unbanGame') {
+      const name = String(player || gameId || '').trim();
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return sendJSON(res, 400, { ok: false, error: '游戏ID 格式不对' });
+      if (!isMcConnected()) return sendJSON(res, 400, { ok: false, error: 'MC 服务器未连接' });
+      const banned = action === 'banGame';
+      const r = await banPlayers([name], banned, banned ? String(reason || '').trim() : '');
+      if (!r) return sendJSON(res, 400, { ok: false, error: '调用服务器失败（mod 版本过旧？）' });
+      if (Array.isArray(r.failed) && r.failed.includes(name)) return sendJSON(res, 400, { ok: false, error: '服务器执行失败' });
+      return sendJSON(res, 200, { ok: true });
+    }
+    // 解绑记录：撤销（重新绑回） / 删除单条
+    if (action === 'restoreUnbind') {
+      const r = restoreUnbind(qq, gameId, at);
+      return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true } : { ok: false, error: r.error });
+    }
+    if (action === 'deleteUnbind') {
+      const r = deleteUnbind(qq, gameId, at);
+      return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true } : { ok: false, error: r.error });
     }
     if (action === 'clearUnbinds') {
       return sendJSON(res, 200, { ok: true, cleared: clearUnbinds() });

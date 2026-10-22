@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   POST /bridge/whitelist_response 本机回答"某玩家在不在绑定名单里"（白名单模式进服时的实时询问）
  *   POST /bridge/command  本机（管理员/主人）经 AI 执行一条游戏命令（受 bridge.allowCommands 白名单约束）
  *   POST /bridge/ban      本机把 QQ 黑名单同步到服务器封禁名单（/ban、/pardon）
+ *   GET  /bridge/bans     读取服务器封禁名单（网页控制面板展示 / 解封用）
  *   GET  /bridge/status   版本、玩家数、开关状态
  *
  * 注意：命令执行只走 /bridge/command 的**受控白名单**（见 {@link Config.Bridge#allowCommands}），
@@ -167,6 +168,7 @@ public class BridgeServer {
         hs.createContext("/bridge/whitelist_response", ex -> route(ex, this::handleWhitelistResponse));
         hs.createContext("/bridge/command", ex -> route(ex, this::handleCommand));
         hs.createContext("/bridge/ban", ex -> route(ex, this::handleBan));
+        hs.createContext("/bridge/bans", ex -> route(ex, this::handleBans));
         hs.createContext("/bridge/status", ex -> route(ex, this::handleStatus));
         hs.createContext("/", ex -> route(ex, this::handleNotFound));
         hs.setExecutor(new ThreadPoolExecutor(4, 32, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(),
@@ -448,6 +450,45 @@ public class BridgeServer {
         m.put("banned", banned);
         m.put("done", done);
         m.put("failed", failed);
+        sendJson(ex, 200, m);
+    }
+
+    /**
+     * 读取服务器封禁名单（网页控制面板展示与解封用）。
+     * 返回 {@code {"ok":true,"bans":[{"name","uuid","reason","source","created","expires"}]}}，
+     * expires=0 表示永久封禁。
+     */
+    private void handleBans(HttpExchange ex, String body) throws IOException {
+        if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
+        MinecraftServer s = events.getServer();
+        if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
+
+        List<Map<String, Object>> list = new ArrayList<>();
+        // 封禁名单是普通集合，必须在服务端线程里读，避免与 /ban 并发修改撞车
+        java.util.concurrent.CompletableFuture<Void> done = new java.util.concurrent.CompletableFuture<>();
+        s.execute(() -> {
+            try {
+                for (net.minecraft.server.BannedPlayerEntry e : s.getPlayerManager().getUserBanList().values()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", e.getKey().name());
+                    m.put("uuid", String.valueOf(e.getKey().id()));
+                    m.put("reason", e.getReason() == null ? "" : e.getReason());
+                    m.put("source", e.getSource() == null ? "" : e.getSource());
+                    m.put("created", e.getCreationDate() == null ? 0 : e.getCreationDate().getTime());
+                    m.put("expires", e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime());
+                    list.add(m);
+                }
+            } catch (Throwable t) {
+                BotState.error("[桥] 读取封禁名单失败：" + t.getMessage());
+            } finally {
+                done.complete(null);
+            }
+        });
+        try { done.get(3, TimeUnit.SECONDS); } catch (Exception ignore) { /* 超时按已读到的返回 */ }
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", true);
+        m.put("bans", list);
         sendJson(ex, 200, m);
     }
 

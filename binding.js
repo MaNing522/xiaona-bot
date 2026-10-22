@@ -431,6 +431,58 @@ export function clearUnbinds() {
   return n;
 }
 
+/** 删除一条解绑记录（按 qq + gameId + at 定位） */
+export function deleteUnbind(qq, gameId, at) {
+  if (!Array.isArray(data.unbinds)) return { ok: false, error: '没有解绑记录' };
+  const i = data.unbinds.findIndex((u) => u && String(u.qq) === String(qq)
+    && String(u.gameId) === String(gameId) && Number(u.at) === Number(at));
+  if (i < 0) return { ok: false, error: '这条解绑记录已不存在' };
+  data.unbinds.splice(i, 1);
+  save();
+  return { ok: true };
+}
+
+/**
+ * 撤销一条解绑记录：把该 QQ ↔ 游戏ID 重新绑回去。
+ * 被封禁的 QQ 不允许恢复（否则等于绕过封禁）。
+ */
+export function restoreUnbind(qq, gameId, at) {
+  const key = String(qq || '').trim();
+  const id = String(gameId || '').trim();
+  if (!/^\d{5,14}$/.test(key)) return { ok: false, error: 'QQ 号格式不对（5-14 位数字）' };
+  if (!GAME_ID.test(id)) return { ok: false, error: '游戏ID 格式不对' };
+  const ban = isBanned(key);
+  if (ban) return { ok: false, error: `QQ ${key} 正在封禁中，不能恢复绑定：${bannedMsg(ban)}` };
+  const ids = getGameIdsOf(key);
+  if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) return { ok: false, error: `QQ ${key} 已绑定 ${id}` };
+  if (ids.length >= limitOf(key)) return { ok: false, error: `QQ ${key} 的绑定已满（${limitOf(key)} 个）` };
+  const entry = data.qq[key] || (data.qq[key] = { ids: [], at: 0 });
+  if (!Array.isArray(entry.ids)) entry.ids = [];
+  entry.ids.push(id);
+  entry.at = Date.now();
+  // 同一条解绑记录已经恢复过就删掉，避免重复点
+  if (Array.isArray(data.unbinds)) {
+    const i = data.unbinds.findIndex((u) => u && String(u.qq) === key
+      && String(u.gameId) === id && Number(u.at) === Number(at));
+    if (i >= 0) data.unbinds.splice(i, 1);
+  }
+  save();
+  logger.info(`[绑定] 撤销解绑：QQ ${key} ↔ 游戏ID ${id}`);
+  notifyChange([id]);
+  return { ok: true };
+}
+
+/** 全部生效中的封禁（先清过期），按时间倒序 */
+export function listBans() {
+  const out = [];
+  for (const qq of Object.keys(bans)) {
+    const e = isBanned(qq);
+    if (e) out.push({ qq, until: e.until, reason: e.reason, at: e.at });
+  }
+  out.sort((a, b) => (b.at || 0) - (a.at || 0));
+  return out;
+}
+
 /** 面板用的绑定总览：已绑定用户（含上限/封禁）+ 解绑记录 + 保留期 */
 export function bindingOverview() {
   sweepUnbinds();
@@ -453,6 +505,7 @@ export function bindingOverview() {
   }
   return {
     bound,
+    bans: listBans(),
     unbinds: listUnbinds(),
     retainDays: Math.round(unbindRetainMs / (24 * 3600 * 1000)),
     maxPerQQ: maxPerQq,
