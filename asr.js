@@ -28,6 +28,9 @@ import fs from 'fs';
 import { logger } from './logger.js';
 import { config } from './config.js';
 
+/** 同一条 record 段的识别结果缓存（WeakMap：消息处理完随段对象一起回收） */
+const transcribeCache = new WeakMap();
+
 /** 语音段占位（未配置/识别失败时用） */
 export const VOICE_PLACEHOLDER = '[语音]';
 
@@ -166,11 +169,18 @@ function cleanText(s) {
 
 /**
  * 把一条语音段转成文字。
+ * 同一条 record 段在一次消息处理里可能被读两次（触发关键词判断 + 交给模型），
+ * 用 WeakMap 缓存 Promise，避免重复上传识别。
  * @param {object} data OneBot record 段的数据：{ file, url, path, format, ... }
  * @returns {Promise<string|null>} 识别出的文字；未启用 / 拿不到音频 / 服务异常均返回 null
  */
-export async function transcribe(data) {
-    if (!data) return null;
+export function transcribe(data) {
+    if (!data || typeof data !== 'object') return Promise.resolve(null);
+    if (!transcribeCache.has(data)) transcribeCache.set(data, doTranscribe(data));
+    return transcribeCache.get(data);
+}
+
+async function doTranscribe(data) {
     if (!asrEnabled()) return null;
 
     // QQ 语音多是非原生格式（amr/silk 且常查不出扩展名）：优先让 NapCat 转成 wav，

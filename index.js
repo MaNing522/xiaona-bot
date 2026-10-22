@@ -1714,6 +1714,41 @@ const SEG_PLACEHOLDER = {
     forward: '[聊天记录]',  // 合并转发：同步路径只报类型，给 AI 的版本会展开并标注发言人
 };
 
+/**
+ * 把消息里所有语音段识别成文字（按顺序拼接）。
+ * 不管这条消息最后会不会交给 AI，收到的语音都要先转出来——日志、记忆、关键词触发都用得上。
+ * 没配 ASR / 识别失败时返回空串，语音仍按 [语音] 占位。
+ */
+async function transcribeVoiceOf(segments) {
+    if (!Array.isArray(segments) || !asrEnabled()) return '';
+    const out = [];
+    for (const seg of segments) {
+        if (seg && seg.type === 'record') {
+            const t = await transcribe(seg.data);
+            if (t) out.push(t);
+        }
+    }
+    return out.join(' ').trim();
+}
+
+/**
+ * 语音识别结果里是否出现了「在叫小钠」的词。
+ * 语音常把名字听错，只用 cset.keyword 会漏；这里把正式名、同音错字表（小娜/晓娜…）、
+ * 会话关键词一起认，命中就按"被叫到"处理。
+ */
+function voiceHitKeyword(text, cset) {
+    if (!text) return false;
+    const a = config().asr || {};
+    const words = new Set();
+    if (a.canonicalName) words.add(String(a.canonicalName).trim());
+    if (cset && cset.keyword) words.add(String(cset.keyword).trim());
+    for (const item of String(a.homophones || '').split(/[,，;；\n]+/)) {
+        const w = item.split('=')[0].trim();
+        if (w) words.add(w);
+    }
+    return [...words].some((w) => w && text.includes(w));
+}
+
 /** QQ 内置表情 id → 中文名（OneBot 11 标准，1~120）——好让 AI/日志看懂对方发的什么表情 */
 const QQ_FACE_NAMES = {
     1: '微笑', 2: '撇嘴', 3: '色', 4: '发呆', 5: '得意', 6: '流泪', 7: '害羞', 8: '闭嘴',
@@ -2363,8 +2398,16 @@ async function onMessage(event) {
     }
 
     const segments = event.message;
+    // 语音消息一律先识别成文字：日志、记忆、转发标签、关键词触发都要用，
+    // 不能等"确定要交给 AI"时才识别（那样语音永远叫不醒机器人）。
+    const voiceText = await transcribeVoiceOf(segments);
     // 媒体段显示成 [图片]/[文件] 这类占位、@ 还原成 @昵称（同步，只读缓存，绝不等 NapCat —— 转发就在后面）
-    const raw = inlineTextOf(segments, event.group_id);
+    const plainText = inlineTextOf(segments, event.group_id);
+    // 把识别结果并进正文：纯语音 → "[语音]识别内容"，文字+语音 → "文字 [语音]识别内容"
+    const raw = !voiceText ? plainText
+        : (plainText === SEG_PLACEHOLDER.record
+            ? `${SEG_PLACEHOLDER.record}${voiceText}`
+            : `${plainText} ${SEG_PLACEHOLDER.record}${voiceText}`).trim();
     const atBot = wasAtBot(segments);
 
     const fromName = (event.sender && (event.sender.card || event.sender.nickname)) || '';
@@ -2472,9 +2515,11 @@ async function onMessage(event) {
     let allowSkip = false;
     if (event.message_type === 'group') {
         const kw = cset.keyword ? raw.includes(cset.keyword) : false;
+        // 语音特有的触发词：识别结果常把「小钠」听成「小娜/晓娜」等，正式名、同音表、会话关键词一起认
+        const voiceKw = voiceHitKeyword(voiceText, cset);
         // "引用回应"：引用了机器人自己的发言 = 在跟它说话（主人审批的引用在那之前就 return 了，不受影响）
-        const quoted = (!atBot && !kw) ? await quotedBot(segments, me) : false;
-        const triggered = atBot || kw || quoted;
+        const quoted = (!atBot && !kw && !voiceKw) ? await quotedBot(segments, me) : false;
+        const triggered = atBot || kw || voiceKw || quoted;
 
         if (triggered) {
             // 被明确叫到：开启/续期「唤起会话」——接下来的几条，即使没 @ 也没关键词，
@@ -2487,7 +2532,7 @@ async function onMessage(event) {
                 exp: Date.now() + cset.engage.ttlMs,
             });
             // 只有"仅凭关键词撞上"的首次触发才需要判断；@/引用是明确在叫它，直接回
-            allowSkip = kw && !atBot && !quoted;
+            allowSkip = (kw || voiceKw) && !atBot && !quoted;
             if (ENGAGE_DEBUG) logger.info(`[唤起] ${k} 由 ${event.user_id} 唤起（续期）`);
         } else {
             // 没被叫到：看是不是处在「唤起会话」里
