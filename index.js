@@ -1018,6 +1018,17 @@ function forwardCooldownOf(gid) {
 const FORWARD_USAGE = '\n用法：每行一条，「QQ号 或 @某人」+ 空格 + 文案\n'
     + '例：\n#聊天记录\n12345678 你好呀\n@张三 在吗';
 
+/**
+ * 绑定入口限制：只允许在桥接群（.env 的 MC_BRIDGE_GROUP）里发起。
+ * 其他群、私聊、游戏内一律不行——绑定后消息要转发进游戏，别的群绑了没有意义，
+ * 也避免有人拿机器人在无关群里刷绑定。
+ */
+function canBindHere(event) {
+    return event.message_type === 'group'
+        && !!MC_BRIDGE_GROUP
+        && String(event.group_id ?? '') === MC_BRIDGE_GROUP;
+}
+
 async function handleCommand(event, text) {
     const [rawCmd, ...rest] = text.split(/\s+/);
     // 命令前缀：支持 "#"（推荐）与 "/"（兼容），内部统一按 "/" 处理
@@ -1101,6 +1112,11 @@ async function handleCommand(event, text) {
         }
 
         case '/绑定': {
+            if (!canBindHere(event)) {
+                return sendReply(event, MC_BRIDGE_GROUP
+                    ? `❌ 绑定只能在桥接群（群号 ${MC_BRIDGE_GROUP}）里进行，其他群和私聊都不行。`
+                    : '❌ 绑定功能未启用：还没有配置桥接群（.env 的 MC_BRIDGE_GROUP）。');
+            }
             if (!arg) {
                 return sendReply(event, `❌ 用法：#绑定 <游戏ID>\n绑定后，桥接群的 QQ 消息会转发进游戏给你；每个QQ最多 ${limitOf(uid)} 个。`);
             }
@@ -2401,8 +2417,9 @@ async function onMessage(event) {
     }
 
     // #绑定 的图形验证码答案：先于命令/转发/AI 处理，
-    // 否则验证码会被当成普通聊天转发进游戏、或交给 AI 回复
-    if (userInput && !/^[#/]/.test(userInput)) {
+    // 否则验证码会被当成普通聊天转发进游戏、或交给 AI 回复。
+    // 只在桥接群里认——绑定本身只能在桥接群发起，验证码当然也一样。
+    if (canBindHere(event) && userInput && !/^[#/]/.test(userInput)) {
         const cap = answerCaptcha(event.user_id, userInput);
         if (cap.handled) {
             await sendReply(event, cap.msg);
