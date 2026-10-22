@@ -7,7 +7,12 @@ import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.server.BannedPlayerEntry;
+import net.minecraft.server.BannedPlayerList;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.PlayerConfigEntry;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -412,7 +417,11 @@ public class BridgeServer {
     /**
      * 本机把 QQ 黑名单同步到服务器封禁名单。
      * 参数：{@code {"players":["Steve"],"banned":true,"reason":"QQ黑名单同步"}}。
-     * banned=true → /ban，false → /pardon；不受 allowCommands 约束（这是管理动作，不是 AI 命令）。
+     * banned=true → 封禁，false → 解封；不受 allowCommands 约束（这是管理动作，不是 AI 命令）。
+     *
+     * 注意：这里**直接写服务器封禁名单**，不走 /ban、/pardon 命令。
+     * 1.21.11 的 /ban 走 GameProfileResolver 异步解析档案，离线/解析不到时会静默什么都不做也不报错，
+     * 表现为「命令返回成功但 banlist 仍是空的」。
      */
     private void handleBan(HttpExchange ex, String body) throws IOException {
         if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
@@ -426,9 +435,10 @@ public class BridgeServer {
         List<String> names = strList(o, "players", MAX_TARGETS);
         if (names.isEmpty()) { sendJson(ex, 400, Map.of("ok", false, "error", "players 不能为空")); return; }
         boolean banned = !o.has("banned") || o.get("banned").isJsonNull() || o.get("banned").getAsBoolean();
-        // 原因只保留一行、限长，避免拼进命令时把命令结构撑坏
-        String reason = opt(o, "reason").replaceAll("[\\r\\n\\t]+", " ").trim();
-        if (reason.length() > 100) reason = reason.substring(0, 100);
+        // 原因只保留一行、限长，避免撑坏名单文件里的 JSON
+        String reason0 = opt(o, "reason").replaceAll("[\\r\\n\\t]+", " ").trim();
+        if (reason0.length() > 100) reason0 = reason0.substring(0, 100);
+        final String reason = reason0;
 
         MinecraftServer s = events.getServer();
         if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
@@ -436,15 +446,46 @@ public class BridgeServer {
 
         List<String> done = new ArrayList<>();
         List<String> failed = new ArrayList<>();
-        for (String name : names) {
-            if (!name.matches("[A-Za-z0-9_]{3,16}")) { failed.add(name); continue; }
-            String cmd = banned
-                    ? ("ban " + name + (reason.isBlank() ? "" : " " + reason))
-                    : ("pardon " + name);
-            String out = GameCommands.run(s, cmd);
-            if (out.startsWith("执行出错") || out.startsWith("调度失败")) failed.add(name);
-            else done.add(name);
-        }
+        java.util.concurrent.CompletableFuture<Void> finished = new java.util.concurrent.CompletableFuture<>();
+        // 封禁名单是普通集合，增删必须在服务端线程里做
+        s.execute(() -> {
+            try {
+                BannedPlayerList list = s.getPlayerManager().getUserBanList();
+                for (String name : names) {
+                    if (!name.matches("[A-Za-z0-9_]{3,16}")) { failed.add(name); continue; }
+                    try {
+                        if (banned) {
+                            // 优先用服务器名称缓存里的真实档案（在线模式 UUID 才对得上），查不到再按离线档案
+                            PlayerConfigEntry key = s.getApiServices().nameToIdCache().findByName(name)
+                                    .orElseGet(() -> PlayerConfigEntry.fromNickname(name));
+                            if (!list.contains(key)) {
+                                list.add(new BannedPlayerEntry(key, new java.util.Date(), "xiaona-bridge", null,
+                                        reason.isBlank() ? "Banned by xiaona bridge" : reason));
+                            }
+                            ServerPlayerEntity online = s.getPlayerManager().getPlayer(name);
+                            if (online != null) {
+                                online.networkHandler.disconnect(Text.translatable("multiplayer.disconnect.banned"));
+                            }
+                            done.add(name);
+                        } else {
+                            boolean hit = false;
+                            // 复制一份再遍历，边遍历边删会撞并发修改
+                            for (BannedPlayerEntry e : new ArrayList<>(list.values())) {
+                                if (e.getKey().name().equalsIgnoreCase(name)) { list.remove(e); hit = true; }
+                            }
+                            if (hit) done.add(name); else failed.add(name);
+                        }
+                    } catch (Throwable t) {
+                        BotState.error("[桥] 封禁 " + name + " 失败：" + t.getMessage());
+                        failed.add(name);
+                    }
+                }
+            } finally {
+                finished.complete(null);
+            }
+        });
+        try { finished.get(5, TimeUnit.SECONDS); } catch (Exception ignore) { /* 超时按已处理的结果返回 */ }
+
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);
         m.put("banned", banned);

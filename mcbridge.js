@@ -28,8 +28,8 @@ let playersCache = { at: 0, list: [] };
 let warnedOldMod = false;
 let warnedNoBindCheck = false;
 let warnedNoWhitelist = false;
-/** /bridge/bans 不存在时只提示一次（旧版 mod） */
-let warnedNoBans = false;
+/** /bridge/bans 读取失败时的日志节流时间戳（旧版 mod 也不会刷屏） */
+let warnedNoBansAt = 0;
 /** 玩家 → { start, count, warned }：游戏公聊 → QQ 的限速窗口 */
 const chatRate = new Map();
 /** 限速状态表上限，防止长期运行时随人数一路涨 */
@@ -309,9 +309,10 @@ export async function getGameBans() {
         const r = await api('/bridge/bans', { timeoutMs: 8000 });
         return Array.isArray(r && r.bans) ? r.bans : [];
     } catch (e) {
-        if (!warnedNoBans && /\b40[34]\b/.test(e.message)) {
-            logger.error(`[MC桥] 读取游戏封禁名单失败：${e.message}。需要 mod ≥ 2.7.0 的 /bridge/bans。`);
-            warnedNoBans = true;
+        // 面板每 8 秒轮询一次，失败日志每分钟最多一条，避免刷屏
+        if (Date.now() - warnedNoBansAt > 60000) {
+            warnedNoBansAt = Date.now();
+            logger.error(`[MC桥] 读取游戏封禁名单失败：${e.message}（需要 mod ≥ 2.7.0 的 /bridge/bans）`);
         }
         return null;
     }
