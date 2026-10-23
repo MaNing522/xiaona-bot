@@ -27,7 +27,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, humanDuration } from './binding.js';
+import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
@@ -1051,7 +1051,6 @@ async function handleCommand(event, text) {
         // ===== 群管理（仅群里可用，需主人/管理员） =====
         case '/禁言':
         case '/解禁':
-        case '/临时禁言':
         case '/踢出':
         case '/拉黑':
         case '/全体禁言':
@@ -1333,7 +1332,20 @@ function resolveTarget(event, arg) {
 }
 
 // 需要指定目标成员的指令
-const ADMIN_TARGET_CMDS = new Set(['/禁言', '/解禁', '/临时禁言', '/踢出', '/拉黑']);
+const ADMIN_TARGET_CMDS = new Set(['/禁言', '/解禁', '/踢出', '/拉黑']);
+
+/** QQ 群禁言上限：30 天（OneBot set_group_ban 的 duration，单位秒） */
+const QQ_MUTE_MAX_SEC = 30 * 24 * 3600;
+
+/**
+ * 从群管命令参数里取出时长：先去掉开头的 @昵称 / QQ号，剩下的第一个词就是时长。
+ * 与 #封禁 使用同一套格式（1d5s / 2h30m / 30s），避免两套时间规则各记各的。
+ */
+function argTimeOf(arg, target) {
+    const toks = String(arg || '').split(/\s+/).filter(Boolean);
+    if (toks.length && (/^@/.test(toks[0]) || toks[0] === String(target) || /^\d{5,14}$/.test(toks[0]))) toks.shift();
+    return toks.shift() || '';
+}
 
 async function handleGroupAdmin(event, cmd, arg, roleName) {
     // 仅群里可用
@@ -1353,18 +1365,27 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
         if (String(target) === String(botId)) return sendReply(event, '❌ 不能对自己执行该操作。');
         const ops = {
             '/禁言': () => {
-                const min = (arg.match(/\d+/)?.[0] ? Number(arg.match(/\d+/)[0]) : 10) || 10;
-                return { action: 'set_group_ban', params: { group_id: gid, user_id: target, duration: min * 60 }, ok: `已禁言 ${target} ${min} 分钟。` };
-            },
-            '/临时禁言': () => {
-                const sec = (arg.match(/\d+/)?.[0] ? Number(arg.match(/\d+/)[0]) : 60) || 60;
-                return { action: 'set_group_ban', params: { group_id: gid, user_id: target, duration: sec }, ok: `已临时禁言 ${target} ${sec} 秒。` };
+                // 不填时长默认 10 分钟；支持 1d5s、2h30m 这类组合写法（与 #封禁 一致）。
+                // 纯数字沿用老习惯按「分钟」算（如 30 = 30 分钟），免得老用法突然报错。
+                const t = argTimeOf(arg, target) || '10m';
+                const dur = /^\d+$/.test(t) ? { permanent: false, ms: Number(t) * 60000 } : parseBanTime(t);
+                if (!dur) return { error: '时长格式不对，支持 1d5s / 2h30m / 30s（不填默认 10 分钟）' };
+                // QQ 最多只能禁言 30 天；填「永久」按上限处理
+                const sec = dur.permanent ? QQ_MUTE_MAX_SEC
+                    : Math.max(1, Math.min(QQ_MUTE_MAX_SEC, Math.round(dur.ms / 1000)));
+                const capped = dur.permanent || dur.ms > QQ_MUTE_MAX_SEC * 1000;
+                return {
+                    action: 'set_group_ban',
+                    params: { group_id: gid, user_id: target, duration: sec },
+                    ok: `已禁言 ${target} ${humanDuration(sec * 1000)}${capped ? '（QQ 上限 30 天）' : ''}。`,
+                };
             },
             '/解禁': () => ({ action: 'set_group_ban', params: { group_id: gid, user_id: target, duration: 0 }, ok: `已解除 ${target} 的禁言。` }),
             '/踢出': () => ({ action: 'set_group_kick', params: { group_id: gid, user_id: target, reject_add_request: false }, ok: `已将 ${target} 移出本群。` }),
             '/拉黑': () => ({ action: 'set_group_kick', params: { group_id: gid, user_id: target, reject_add_request: true }, ok: `已将 ${target} 移出本群并拉黑（拒绝再次入群）。` }),
         };
         const op = ops[cmd]();
+        if (op.error) return sendReply(event, `❌ ${op.error}`);
         try {
             await callApi(op.action, op.params);
             // #拉黑 同时把对方名下的游戏ID 同步到服务器封禁名单（见 perm 的黑名单同步）

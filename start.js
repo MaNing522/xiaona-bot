@@ -108,8 +108,9 @@ function waitPort(port, timeoutMs) {
 // ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
 function spawnBot() {
   const bot = spawn(process.execPath, ['index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 机器人自己的日志已经带时间戳（logger.js），这里只加来源前缀，避免出现两个时间
   const pipe = (chunk) => {
-    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [Bot] ${l.trim()}`));
+    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[Bot] ${l.trim()}`));
   };
   bot.stdout.on('data', pipe);
   bot.stderr.on('data', pipe);
