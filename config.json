@@ -46,23 +46,16 @@
     "maxPerQQ": 5,
     "unbindRetainDays": 15
   },
-  // 联网搜索后端（网页「全局设置」可切换）
-  //   provider = off关闭 | baidu百度智能搜索 | deepseekDeepSeek官方搜索 | custom自定义接口
-  // 密钥在 .env：BAIDU_SEARCH_KEY / SEARCH_CUSTOM_KEY（deepseek 复用 AI_API_KEY）
   "search": {
-    "provider": "baidu",
+    "provider": "deepseek",
     "customUrl": "",
     "limit": 5
   },
-  // 图像识别后端：ai 用 AI 主模型 | custom 自定义视觉接口 | off 关闭
-  // 自定义接口密钥在 .env 的 VISION_CUSTOM_KEY
   "vision": {
     "provider": "ai",
     "customUrl": "",
     "customModel": ""
   },
-  // MC 服务器连接模式：""用 .env 的 MC_BRIDGE_URL | off无连接 | loopback本地回环 | lan局域网 | public公网地址
-  // 密钥/桥接群仍看 .env 的 MC_BRIDGE_SECRET / MC_BRIDGE_GROUP
   "bridge": {
     "mode": "",
     "port": 25565,

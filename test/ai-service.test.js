@@ -82,3 +82,56 @@ describe('chatCompletionRaw（推理模型额度兜底）', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('chatCompletionRaw（网络抖动重试）', () => {
+  /** 造一个 undici 风格的网络错误：TypeError: fetch failed，真正原因在 cause 里 */
+  function netErr(code) {
+    const e = new TypeError('fetch failed');
+    e.cause = { code, message: 'getaddrinfo ' + code };
+    return e;
+  }
+
+  it('DNS 临时失败（EAI_AGAIN）会自动重试并成功', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(netErr('EAI_AGAIN'))
+      .mockRejectedValueOnce(netErr('EAI_AGAIN'))
+      .mockResolvedValueOnce(reply('搜到了'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await chatCompletionRaw({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 500 });
+    expect(r.content).toBe('搜到了');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('重试 3 次仍失败才报「连不上 AI 服务」', async () => {
+    const fetchMock = vi.fn(async () => { throw netErr('ECONNRESET'); });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      chatCompletionRaw({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 500 }),
+    ).rejects.toThrow(/连不上 AI 服务/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('非网络类异常不重试', async () => {
+    const fetchMock = vi.fn(async () => { throw new TypeError('boom'); });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      chatCompletionRaw({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 500 }),
+    ).rejects.toThrow(/连不上 AI 服务/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('超时不重试（避免用户等成倍时间）', async () => {
+    const timeoutErr = new Error('The operation was aborted due to timeout');
+    timeoutErr.name = 'TimeoutError';
+    const fetchMock = vi.fn(async () => { throw timeoutErr; });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      chatCompletionRaw({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 500 }),
+    ).rejects.toThrow(/AI 超时/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

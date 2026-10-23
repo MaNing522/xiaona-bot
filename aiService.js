@@ -98,6 +98,33 @@ function intEnv(name, dflt) {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 网络层可重试的错误码：DNS 临时失败（EAI_AGAIN，家宽路由器最常见）、
+// 连接被重置/拒绝、网络不可达、undici 自己的连接错误
+const RETRYABLE_CODES = new Set([
+  'EAI_AGAIN', 'ENOTFOUND', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE',
+  'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+  'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+/** 从错误链（cause 可能套好几层）里找错误码 */
+function errCodeOf(e) {
+  let cur = e;
+  for (let i = 0; cur && i < 5; i++) {
+    if (cur.code) return String(cur.code);
+    cur = cur.cause;
+  }
+  return '';
+}
+
+/** 是不是「网络抖动」这类重试一次就能好的错误（超时除外，超时重试太耗时间） */
+function isTransientNetErr(e) {
+  if (!e || e.name === 'TimeoutError' || e.name === 'AbortError') return false;
+  if (RETRYABLE_CODES.has(errCodeOf(e))) return true;
+  return /fetch failed|socket hang up|other side closed|EAI_AGAIN|ECONNRESET/i.test(String(e.message || ''));
+}
+
 /**
  * 发一次对话补全请求，返回**完整的助手消息**（含 tool_calls），供 agent 工具循环使用。
  * tools 传入 OpenAI 兼容的工具定义数组时，模型可自主返回 tool_calls。
@@ -124,22 +151,33 @@ export async function chatCompletionRaw({ messages, temperature = 0.7, maxTokens
   /**
    * 发一次请求。
    * 返回 content / tool_calls / finishReason；finishReason 用于识别"被思维链吃光"的情况。
+   * 网络抖动（DNS 临时失败、连接被重置）自动重试，最多 3 次，避免一句"技术问题"打发用户。
    */
   async function send() {
+    const ATTEMPTS = 3;
     let res;
-    try {
-      res = await fetch(c.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (e) {
-      // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
-      if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-        throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        res = await fetch(c.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        break;
+      } catch (e) {
+        // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
+        if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+          throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
+        }
+        if (attempt < ATTEMPTS && isTransientNetErr(e)) {
+          const code = errCodeOf(e) || (e && e.message) || '未知错误';
+          logger.warn(`[AI] 连接失败（${code}），${400 * attempt}ms 后重试（第 ${attempt + 1}/${ATTEMPTS} 次）`);
+          await sleep(400 * attempt);
+          continue;
+        }
+        throw new Error(`连不上 AI 服务：${e && e.message ? e.message : e}`, { cause: e });
       }
-      throw new Error(`连不上 AI 服务：${e && e.message ? e.message : e}`, { cause: e });
     }
     if (!res.ok) {
       // 带上服务商返回的原文（如"余额不足""model not found"），方便直接看出原因
