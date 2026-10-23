@@ -22,6 +22,15 @@ const WS_PORT = Number((process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').match(/:
 
 const AUTO_TIMEOUT = 25000; // 自动登录最长等待
 
+// ---------- 控制台时间戳 ----------
+// 启动器自己的提示不加（交互提示加时间反而碍事），
+// 但从子进程管道过来的运行日志（[NapCat] / [Bot]）要带时间，方便和日志文件对齐。
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // ---------- 历史登录账号（供自动登录） ----------
 function readSaved() {
   const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
@@ -44,7 +53,7 @@ function spawnNapcat(env) {
   if (qq) args.push('-q', String(qq));
   const proc = spawn(NODE_BIN, args, { cwd: NAPCAT_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const pipe = (chunk) => {
-    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[NapCat] ${l.trim()}`));
+    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [NapCat] ${l.trim()}`));
   };
   proc.stdout.on('data', pipe);
   proc.stderr.on('data', pipe);
@@ -100,7 +109,7 @@ function waitPort(port, timeoutMs) {
 function spawnBot() {
   const bot = spawn(process.execPath, ['index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
   const pipe = (chunk) => {
-    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[Bot] ${l.trim()}`));
+    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [Bot] ${l.trim()}`));
   };
   bot.stdout.on('data', pipe);
   bot.stderr.on('data', pipe);

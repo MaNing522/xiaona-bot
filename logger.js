@@ -62,15 +62,26 @@ function toText(a) {
 const pad = (n) => String(n).padStart(2, '0');
 const LEVEL_NAME = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
 
+/** 本地时间戳：YYYY-MM-DD HH:mm:ss（withMs=true 时补 .mmm，给日志文件用） */
+function stamp(d, withMs = false) {
+  const base =
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return withMs ? `${base}.${String(d.getMilliseconds()).padStart(3, '0')}` : base;
+}
+
 function dailyFile(d) {
   const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   return path.join(LOG_DIR, `${day}.log`);
 }
 
 function writeAll(levelName, msg) {
+  // 一次调用共用一个时间戳：终端与日志文件看到的是同一时刻
+  const now = new Date();
+  const ts = stamp(now);
   // 1) 终端（emoji → [表情]）
   try {
-    process.stdout.write(termSafe(msg) + '\n');
+    process.stdout.write(`${ts} ${termSafe(msg)}\n`);
   } catch {
     /* 终端写失败（如管道已关）不能反过来影响业务 */
   }
@@ -85,11 +96,7 @@ function writeAll(levelName, msg) {
   // 3) 文件（按天；时间戳用本地时间，和文件名一致，排查时不必再换算时区）
   if (!FILE_LOG) return;
   try {
-    const d = new Date();
-    const ts =
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
-    fs.appendFileSync(dailyFile(d), `${ts} ${levelName.toUpperCase().padEnd(5)} ${msg}\n`);
+    fs.appendFileSync(dailyFile(now), `${stamp(now, true)} ${levelName.toUpperCase().padEnd(5)} ${msg}\n`);
   } catch {
     /* 落盘失败不影响运行 */
   }
