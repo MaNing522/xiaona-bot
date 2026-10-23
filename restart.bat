@@ -33,8 +33,12 @@ cd /d "%~dp0"
 echo [restart] Stopping the current Xiaona (start.js process tree)...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -match 'start\.js' -and $_.CommandLine -match 'QQBot' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }"
 
+rem Also stop stray NapCat instances (manually started, or left over from an earlier run).
+rem If port 3001 is still held, the fresh NapCat cannot bind and the bot can never connect.
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -match 'QQBot\\napcat' -or $_.CommandLine -match 'napcat\.mjs' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }"
+
 rem Give Windows a moment to release ports 80 / 3001
-ping -n 4 127.0.0.1 >nul
+ping -n 5 127.0.0.1 >nul
 
 echo [restart] Registering the logon task XiaonaBot...
 rem No inner quotes around the path: cmd.exe does not treat \" as an escape

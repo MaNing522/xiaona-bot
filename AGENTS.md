@@ -71,6 +71,8 @@ cd c:\QQBot; .\restart.bat
 ```
 
 - 后台隐藏启动：`background.vbs`（wscript 调用，未提权会自动弹一次 UAC；`restart.bat` 与计划任务都走它）。
+- **后台隐藏运行没有可交互终端**：`start.js` 检测到 `stdin` 不是 TTY 时**不会**进手动登录（否则会永远卡在等待输入，NapCat 起不来 → 面板一直显示连不上 3001），而是直接用二维码模式把 NapCat 跑起来，二维码在网页面板看。快速登录失败但已出二维码/需要验证时也**不杀** NapCat 进程。
+- `restart.bat` 除了结束 `start.js` 进程树，还会清理**残留的 NapCat**（手动启动或上次没退干净的）。残留进程占着 3001 时，新 NapCat 绑不上端口，机器人就会一直 `ECONNREFUSED 127.0.0.1:3001`。
 - 开机自启：计划任务 **`XiaonaBot`**（登录时触发，延迟 30 秒，最高权限），动作为 `wscript.exe "C:\QQBot\background.vbs"`。
   排查：`schtasks /query /tn "XiaonaBot" /v /fo LIST`（需管理员）；删除：`schtasks /delete /tn "XiaonaBot" /f`。
 

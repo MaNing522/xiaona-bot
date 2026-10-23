@@ -21,6 +21,7 @@ const LOGIN_FILE = path.join(__dirname, 'data', 'login.json');
 const WS_PORT = Number((process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').match(/:(\d+)/)?.[1] || 3001);
 
 const AUTO_TIMEOUT = 25000; // 自动登录最长等待
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- 控制台时间戳 ----------
 // 启动器自己的提示不加（交互提示加时间反而碍事），
@@ -145,27 +146,45 @@ async function startBot(napcat) {
 
 // ---------- 自动登录尝试 ----------
 // 只负责把 NapCat 跑起来并判断登录结果；拿到进程句柄后由调用方决定何时起机器人。
+// 返回 { ok, proc }：proc 不为空 = NapCat 进程仍然活着（已登录，或正在等扫码/验证）。
 async function tryAutoLoginNapcat(qq) {
-  console.log(`🔄 尝试自动登录（QQ ${qq} 快速登录）...`);
-  // 上一次手动登录留下的二维码图片会让 watchAutoLogin 里的"出现二维码即视为失败"
-  // 立刻误判（文件本来就在），快速登录还没开始就被打断、直接掉进手动登录。
-  // 每次尝试前先清掉，只认本次真正新生成的二维码。
-  try { fs.unlinkSync(QR_FILE); } catch { /* 本来就没有 */ }
-  const proc = spawnNapcat({ ...process.env, NAPCAT_QUICK_ACCOUNT: String(qq) });
-  const res = await watchAutoLogin(proc, AUTO_TIMEOUT);
-  if (res.ok) {
-    console.log('✅ 自动登录成功。');
-    saveLogin(qq);
-    return { ok: true, proc };
+  // 快速登录失败时常见两种可继续的状态：
+  //   qr     已经出了二维码，进程在等人扫
+  //   verify 需要验证码/滑块，进程在等人操作
+  // 这两种都**不能杀进程**——留着让用户在网页面板处理，杀了就等于把服务弄断。
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    console.log(`🔄 尝试自动登录（QQ ${qq} 快速登录${attempt > 1 ? '，第 ' + attempt + ' 次' : ''}）...`);
+    // 上一次手动登录留下的二维码图片会让 watchAutoLogin 里的"出现二维码即视为失败"
+    // 立刻误判（文件本来就在），快速登录还没开始就被打断、直接掉进手动登录。
+    // 每次尝试前先清掉，只认本次真正新生成的二维码。
+    try { fs.unlinkSync(QR_FILE); } catch { /* 本来就没有 */ }
+    const proc = spawnNapcat({ ...process.env, NAPCAT_QUICK_ACCOUNT: String(qq) });
+    const res = await watchAutoLogin(proc, AUTO_TIMEOUT);
+    if (res.ok) {
+      console.log('✅ 自动登录成功。');
+      saveLogin(qq);
+      return { ok: true, proc };
+    }
+    if (res.reason === 'qr' || res.reason === 'verify') {
+      console.log(`⚠️ 自动登录未完成（${res.reason === 'qr' ? '已出二维码，等待扫码' : '需要验证码/滑块'}）：NapCat 保持运行，请到网页面板完成登录。`);
+      return { ok: false, proc };
+    }
+    console.log(`⚠️ 自动登录未成功（${res.reason}）。`);
+    try { proc.kill(); } catch { /* 可能已退出 */ }
+    // 刚重启时旧 QQ 进程可能还没完全退出，隔几秒重试一次
+    if (attempt === 1 && res.reason === 'exit') {
+      console.log('   旧进程可能还在退出中，6 秒后重试一次…');
+      await sleep(6000);
+      continue;
+    }
+    return { ok: false, proc: null };
   }
-  console.log(`⚠️ 自动登录未成功（${res.reason}），停止该进程，改用手动登录。`);
-  try { proc.kill(); } catch {}
   return { ok: false, proc: null };
 }
 
 async function tryAutoLogin(qq) {
   const r = await tryAutoLoginNapcat(qq);
-  if (!r.ok) return false;
+  if (!r.proc) return false;
   await startBot(r.proc);
   return true;
 }
@@ -313,9 +332,21 @@ async function main() {
     let napcat = null;
     if (saved) {
       const auto = await tryAutoLoginNapcat(saved.qq);
-      if (auto.ok) napcat = auto.proc;
+      if (auto.proc) napcat = auto.proc;   // 登录成功，或正在等扫码/验证：进程都留着
     }
-    if (!napcat) napcat = await manualLoginNapcat();
+    if (!napcat) {
+      if (process.stdin.isTTY) {
+        napcat = await manualLoginNapcat();
+      } else {
+        // 后台隐藏运行（计划任务 / background.vbs）没有可交互终端：
+        // 绝不能在 stdin 上等输入，否则会一直卡着、NapCat 起不来，机器人连不上 3001。
+        // 直接按二维码模式把 NapCat 跑起来，二维码在网页面板里显示。
+        console.log('[启动器] 无交互终端（后台运行）：改用二维码登录，NapCat 保持运行，可在网页面板扫码。');
+        const qq = saved ? String(saved.qq) : '';
+        napcat = spawnNapcat({ ...process.env, ...(qq ? { NAPCAT_QUICK_ACCOUNT: qq } : {}) });
+        watchLoginSuccess(napcat, qq);
+      }
+    }
     linkExit(bot, napcat);
     return;
   }
