@@ -37,7 +37,9 @@ rem Give Windows a moment to release ports 80 / 3001
 ping -n 4 127.0.0.1 >nul
 
 echo [restart] Registering the logon task XiaonaBot...
-schtasks /create /tn "XiaonaBot" /tr "\"wscript.exe\" \"%~dp0background.vbs\"" /sc onlogon /rl highest /delay 0000:30 /f >nul
+rem No inner quotes around the path: cmd.exe does not treat \" as an escape
+rem (it toggles quoting), which made schtasks fail. C:\QQBot has no spaces.
+schtasks /create /tn "XiaonaBot" /tr "wscript.exe %~dp0background.vbs" /sc onlogon /rl highest /delay 0000:30 /f >nul
 if errorlevel 1 echo [restart] WARNING: failed to register the logon task.
 
 echo [restart] Starting Xiaona in background (no console window)...
