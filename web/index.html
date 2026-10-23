@@ -321,6 +321,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <h2>⚙️ 全局设置 <span class="hint" style="margin:0;font-weight:400">来自 config.json，保存后热加载生效</span></h2>
       <div id="gcfgChat"></div>
       <div id="gcfgNum"></div>
+      <div id="gcfgFunc"></div>
       <button class="btn green" id="gcSave" style="width:auto;margin-top:14px">保存全局设置</button>
       <div class="hint" id="gcMsg"></div>
     </div>
@@ -357,6 +358,9 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="stat"><span>机器人 ↔ NapCat</span><span id="stBot" class="pill warn">…</span></div>
       <div class="stat"><span>NapCat 在线</span><span id="stNapcat" class="pill warn">…</span></div>
       <div class="stat"><span>AI 模型</span><b id="stModel">—</b></div>
+      <div class="stat"><span>联网搜索</span><b id="stSearch">—</b></div>
+      <div class="stat"><span>图像识别</span><b id="stVision">—</b></div>
+      <div class="stat"><span>MC 服务器桥</span><b id="stBridge">—</b></div>
       <div class="stat"><span>NapCat 地址</span><b id="stWs">—</b></div>
       <div class="stat"><span>WebUI 端口</span><b id="stWebuiPort">—</b></div>
       <div class="stat"><span>登录进程</span><b id="stLogin">—</b></div>
@@ -450,6 +454,11 @@ async function load(){try{const s=await api('/api/status');
   set('stNapcat',s.napcatUp?'在线':'离线',s.napcatUp?'ok':'warn');
   set('stNpBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
   $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
+  // 搜索 / 图像识别 / MC 桥：显示当前切在哪个后端
+  const se=s.search||{}, vi=s.vision||{}, mc=s.mcBridge||{};
+  $('stSearch').textContent=(se.enabled?(SEARCH_NAMES[se.provider]||se.provider):'已关闭');
+  $('stVision').textContent=(VISION_NAMES[vi.provider]||vi.provider||'AI 主模型');
+  $('stBridge').textContent=(mc.base?(mc.connected?'已连接 · ':'未连接 · ')+(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'):(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'));
   if($('stWebuiPort'))$('stWebuiPort').textContent=s.webuiPort||'—';
   $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
   $('sub').textContent=s.wsUrl+' · 授权由主人管理'+(s.botError?' · '+s.botError:'');
@@ -509,6 +518,11 @@ const CV_NUM_KEYS={
 };
 const TA_STYLE='width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;color:#1f2329;font:inherit;font-size:15px;resize:vertical';
 
+// 搜索 / 图像识别 / MC 桥的名称（供状态页与全局设置显示）
+const SEARCH_NAMES={off:'已关闭',baidu:'百度智能搜索',deepseek:'DeepSeek 搜索',custom:'自定义接口'};
+const VISION_NAMES={ai:'AI 主模型',custom:'自定义接口',off:'已关闭'};
+const BRIDGE_NAMES={'':'.env 地址','off':'无连接','loopback':'本地回环','lan':'局域网','public':'公网地址'};
+
 // 全局设置表单（config.json）
 function gcRender(){
   const c=cvGlobal||{}; const ch=c.chat||{};
@@ -544,6 +558,29 @@ function gcRender(){
     html+='</div>';
   }
   $('gcfgNum').innerHTML=html;
+  // 功能后端：联网搜索 / 图像识别 / MC 服务器连接模式
+  const s=c.search||{}, v=c.vision||{}, b=c.bridge||{};
+  const bridgeMode = Object.prototype.hasOwnProperty.call(BRIDGE_NAMES, String(b.mode||'')) ? String(b.mode||'') : '';
+  $('gcfgFunc').innerHTML=
+    '<h2 style="font-size:14px;margin:18px 0 4px">联网搜索</h2>'+
+    '<div class="row"><div><label>搜索后端</label><select id="gcSearch"><option value="off">关闭</option><option value="baidu">百度智能搜索</option><option value="deepseek">DeepSeek 搜索</option><option value="custom">自定义接口</option></select></div>'+
+    '<div><label>返回条数</label><input id="gcSearchLimit" type="number" min="1" max="50" step="1" value="'+(Number(s.limit)||5)+'"></div></div>'+
+    '<label>自定义接口地址（仅 custom 后端使用）</label><input id="gcSearchUrl" type="text" value="'+esc(s.customUrl||'')+'" placeholder="https://…/v1/tools/search">'+
+    '<div class="hint">DeepSeek 搜索走官方 Search API，复用 .env 的 AI_API_KEY；百度用 .env 的 BAIDU_SEARCH_KEY；自定义接口的密钥放 .env 的 SEARCH_CUSTOM_KEY（留空则免密钥）。接口需支持 POST {query,count} 并返回 results / references / choices 三种结构之一。</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">图像识别</h2>'+
+    '<div class="row"><div><label>识别后端</label><select id="gcVision"><option value="ai">AI 主模型</option><option value="custom">自定义接口</option><option value="off">关闭</option></select></div>'+
+    '<div><label>模型名（可选，仅自定义）</label><input id="gcVisionModel" type="text" value="'+esc(v.customModel||'')+'" placeholder="留空由接口决定"></div></div>'+
+    '<label>自定义接口地址（仅 custom 后端使用）</label><input id="gcVisionUrl" type="text" value="'+esc(v.customUrl||'')+'" placeholder="https://…/v1/chat/completions">'+
+    '<div class="hint">自定义识别接口需为 OpenAI 兼容 /chat/completions 且支持 image_url 图片输入；密钥放 .env 的 VISION_CUSTOM_KEY（留空则免密钥）。</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">MC 服务器连接</h2>'+
+    '<div class="row"><div><label>连接模式</label><select id="gcBridge"><option value="">.env 地址（默认）</option><option value="off">无连接</option><option value="loopback">本地回环</option><option value="lan">局域网</option><option value="public">公网地址</option></select></div>'+
+    '<div><label>端口（回环 / 局域网用）</label><input id="gcBridgePort" type="number" min="1" max="65535" step="1" value="'+((Number(b.port)>=1&&Number(b.port)<=65535)?Number(b.port):'')+'" placeholder="25565"></div></div>'+
+    '<label>服务器局域网地址（仅局域网模式）</label><input id="gcBridgeLan" type="text" value="'+esc(b.lanHost||'')+'" placeholder="192.168.1.x 或主机名">'+
+    '<label>公网完整地址（仅公网模式，含 http:// 与端口）</label><input id="gcBridgePub" type="text" value="'+esc(b.publicUrl||'')+'" placeholder="http://1.2.3.4:43733">'+
+    '<div class="hint">密钥（MC_BRIDGE_SECRET）与桥接群（MC_BRIDGE_GROUP）仍在 .env 里配置。切换模式保存后约 1 秒生效并自动重连。</div>';
+  $('gcSearch').value=Object.prototype.hasOwnProperty.call(SEARCH_NAMES,String(s.provider||'baidu'))?String(s.provider||'baidu'):'baidu';
+  $('gcVision').value=Object.prototype.hasOwnProperty.call(VISION_NAMES,String(v.provider||'ai'))?String(v.provider||'ai'):'ai';
+  $('gcBridge').value=bridgeMode;
 }
 
 // 会话列表（所有群聊 + 所有好友；主人私聊默认置顶，可手动置顶/取消）
@@ -638,7 +675,10 @@ async function convLoad(full){
 $('gcSave').onclick=async()=>{
   const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},
     notice:{enabled:$('gcNoticeOn').value==='true',joinText:$('gcJoin').value.trim(),leaveText:$('gcLeave').value.trim()},
-    rateLimit:{},cooldown:{},engage:{},bind:{}};
+    rateLimit:{},cooldown:{},engage:{},bind:{},
+    search:{provider:$('gcSearch').value,limit:Number($('gcSearchLimit').value)||5,customUrl:$('gcSearchUrl').value.trim()},
+    vision:{provider:$('gcVision').value,customUrl:$('gcVisionUrl').value.trim(),customModel:$('gcVisionModel').value.trim()},
+    bridge:{mode:$('gcBridge').value,port:Number($('gcBridgePort').value)||25565,lanHost:$('gcBridgeLan').value.trim(),publicUrl:$('gcBridgePub').value.trim()}};
   document.querySelectorAll('[data-gc]').forEach(inp=>{
     const a=inp.dataset.gc.split('.');
     const v=inp.value.trim();
@@ -648,7 +688,7 @@ $('gcSave').onclick=async()=>{
     const d=await api('/api/global-config',{method:'POST',body:JSON.stringify(body)});
     if(d&&d.config) cvGlobal=d.config;
     gcRender(); cvRenderList(); cvRenderForm();
-    $('gcMsg').textContent='✅ 已保存并即时生效';
+    $('gcMsg').textContent='✅ 已保存并即时生效（连接模式切换约 1 秒内重连）';
     setTimeout(()=>{$('gcMsg').textContent='';},2500);
   }catch(e){ $('gcMsg').textContent='❌ '+e.message; }
 };

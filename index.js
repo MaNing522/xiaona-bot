@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache } from './tts.js';
-import { getSearchContext } from './search.js';
+import { getSearchContext, isSearchEnabled, searchSettings } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
 import { chatCompletionRaw, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
@@ -24,7 +24,7 @@ import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryCon
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
@@ -87,22 +87,39 @@ const MC_PREFIX = String(process.env.MC_BRIDGE_PREFIX_MC || '[MC]');
 
 // ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
 const AI_ENABLED = isAiEnabled();
-const SEARCH_ENABLED = !!String(process.env.BAIDU_SEARCH_KEY || '').trim();
 const WEBUI_ENABLED = !!String(process.env.WEBUI_PASSWORD || '').trim();
-const MC_ENABLED = !!String(process.env.MC_BRIDGE_URL || '').trim()
-    && !!String(process.env.MC_BRIDGE_SECRET || '').trim();
 const OWNER_ENABLED = !!String(process.env.BOT_OWNER || '').trim();
+// 联网搜索：后端与开关在 config.json 的 search 段（off/baidu/deepseek/custom），实时判定、热切换
+function searchEnabled() { return isSearchEnabled(); }
+// 图片识别：后端在 config.json 的 vision 段（ai 用主模型 / custom / off）
+function visionSettings() {
+    const v = (cfg && cfg.vision) || {};
+    const provider = String(v.provider || 'ai').trim().toLowerCase();
+    return {
+        provider,
+        customUrl: String(v.customUrl || '').trim(),
+        customModel: String(v.customModel || '').trim(),
+    };
+}
+function visionEnabled() {
+    const v = visionSettings();
+    if (v.provider === 'off') return false;
+    if (v.provider === 'custom') return !!v.customUrl; // 要换接口却没填地址 = 不可用
+    return true;
+}
 
 function logFeatureStates() {
     // 不用 emoji：终端会把它们替换成 [表情]，反而看不出开关状态
     const on = (b) => (b ? '[已启用]' : '[已停用]');
     logger.info('=== 功能状态（.env 里缺配置的会自动停用）===');
     logger.info(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
-    logger.info(`   联网搜索       ${on(SEARCH_ENABLED)}${SEARCH_ENABLED ? '' : '  缺 BAIDU_SEARCH_KEY'}`);
+    logger.info(`   联网搜索       ${on(isSearchEnabled())}${isSearchEnabled() ? `  后端 ${searchSettings().provider}` : ''}`);
+    logger.info(`   图像识别       ${on(visionEnabled())}  后端 ${visionSettings().provider}`);
     logger.info(`   语音合成       [已启用]  Edge 免密钥（${process.env.TTS_VOICE || 'zh-CN-XiaoxiaoNeural'} ${process.env.TTS_RATE || '+8%'}）`);
     logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 FunASR(SenseVoice) ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
-    logger.info(`   MC 服务器桥    ${on(MC_ENABLED)}${MC_ENABLED ? '' : '  缺 MC_BRIDGE_URL / MC_BRIDGE_SECRET'}`);
+    const bt = getBridgeTarget();
+    logger.info(`   MC 服务器桥    ${on(isMcConfigured())}${isMcConfigured() ? `  ${bt.base}（模式 ${bt.mode || 'env'}）` : `  模式 ${bt.mode || 'env'} 未配置`}`);
     logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
 }
 
@@ -218,6 +235,8 @@ function applyLiveConfig() {
     if (c.bind) setGlobalMaxPerQQ(c.bind.maxPerQQ);
     // 解绑记录保留天数随配置热更新
     if (c.bind) setGlobalUnbindRetainDays(c.bind.unbindRetainDays);
+    // MC 桥连接模式随配置热切换（off/loopback/lan/public，见 config.json 的 bridge 段）
+    applyBridgeConfig();
 }
 
 // 监听 config.json：改完自动热加载（轮询 1s；编辑器的"写坏一瞬间"由 reloadConfig 保底不生效）
@@ -263,11 +282,10 @@ let promptCache = { mtimeMs: 0, text: '' };
  * 这些值只放 .env（不入库），提交到 GitHub 不会泄露地址。没配桥时返回 ''。
  */
 function mcServerInfoLine() {
-    if (!MC_ENABLED) return '';
+    const bt = getBridgeTarget();
+    if (!bt.base) return '';
     const name = String(process.env.MC_SERVER_NAME || '').trim();
-    const host = String(process.env.MC_BRIDGE_URL || '').trim()
-        .replace(/^https?:\/\//i, '')
-        .replace(/\/+$/, '');
+    const host = bt.base.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
     if (name && host) return `${name}（${host}）`;
     return name || host;
 }
@@ -531,8 +549,39 @@ async function imageSegToDataUrl(seg) {
     throw new Error('拿不到图片内容');
 }
 
-/** 调 DS 官方多模态接口识别图片：先把图片下载/读成本地数据，再 base64 上传给模型 */
+/** 调自定义视觉接口识别图片（OpenAI 兼容 /chat/completions，支持 image_url 输入） */
+async function analyzeImagesViaCustom(urls, question, v) {
+    const key = String(process.env.VISION_CUSTOM_KEY || '').trim();
+    const headers = { 'Content-Type': 'application/json' };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const body = {
+        messages: [{
+            role: 'user',
+            content: [
+                { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
+                ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
+            ],
+        }],
+        temperature: 0.3,
+        max_tokens: 2000,
+    };
+    if (v.customModel) body.model = v.customModel;
+    const res = await fetch(v.customUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(90000),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    return content ? String(content).trim() : '（没识别出内容）';
+}
+
+/** 图片识别入口：后端由 config.json 的 vision.provider 决定（ai 主模型 / custom 自定义 / off 关闭） */
 async function analyzeImages(segs, question) {
+    const v = visionSettings();
+    if (v.provider === 'off') return '图片识别已关闭（config.json 的 vision.provider=off）。';
     const list = (segs || []).filter((s) => s && s.type === 'image' && s.data);
     if (!list.length) return '本条消息里没有图片可识别。';
     let urls;
@@ -543,6 +592,8 @@ async function analyzeImages(segs, question) {
         return '图片获取失败：' + e.message;
     }
     try {
+        if (v.provider === 'custom') return await analyzeImagesViaCustom(urls, question, v);
+        // 默认（ai）：走主 AI 服务商的多模态接口。
         // 额度必须给足：deepseek-flash 这类推理模型会先花 token 想，图越复杂思考越长，
         // 给少了思维链会把额度吃光，正文 content 直接为空（表现为"识别不出内容"）
         const { content } = await chatCompletionRaw({
@@ -572,7 +623,7 @@ async function analyzeImages(segs, question) {
  */
 function buildAgentCtx(key, uid = '', { images = [], notify = null } = {}) {
     return {
-        search: (q) => (q ? getSearchContext(q, 5) : '没有提供搜索关键词。'),
+        search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
         notify: (text) => (notify ? notify(String(text)) : Promise.resolve()),
         // AI 决定要识别本条消息的图
@@ -2635,8 +2686,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             memory: mem,
             role: perm.role(String(event.user_id)),
             allowSkip,
-            allowSearch: SEARCH_ENABLED,
-            allowImage: imgs.length > 0,
+            allowSearch: searchEnabled(),
+            allowImage: imgs.length > 0 && visionEnabled(),
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             ctx: buildAgentCtx(convKey(event), String(event.user_id), {
@@ -2775,7 +2826,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         memory: mem,
         role: mcRole,
         allowSkip: false,
-        allowSearch: SEARCH_ENABLED,
+        allowSearch: searchEnabled(),
         userId: player,
         ctx: buildAgentCtx(key, mcQq || player),
     });
@@ -2842,7 +2893,7 @@ async function runTrialChat(clientId, text) {
         memory,
         role: 'guest',          // 固定普通用户
         allowSkip: false,
-        allowSearch: SEARCH_ENABLED,
+        allowSearch: searchEnabled(),
         userId: TRIAL_KEY + ':' + String(clientId || 'default'),   // KV 缓存按客户端隔离
         ctx: buildAgentCtx(TRIAL_KEY),
     });
@@ -3435,11 +3486,8 @@ if (WEBUI_ENABLED) {
 
 // 启动与 Minecraft 服务器侧 mod 的桥：接收游戏聊天/进出服事件，并把回复注入游戏
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
-if (MC_ENABLED) {
-    startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, getBlacklistedIds: getBlacklistedGameIds, runGameCommand });
-} else {
-    logger.info('未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，MC 服务器桥已停用。');
-}
+// 连不连、连哪由 config.json 的 bridge.mode 决定（env默认/off/loopback/lan/public），缺配置自动停用
+startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, getBlacklistedIds: getBlacklistedGameIds, runGameCommand });
 
 // 闲时维护：语音缓存清理 + 记忆过期清理。避开工作日高峰（9-12 / 14-18），
 // 高峰期自动推迟到闲时再跑，不跟实时对话抢资源。

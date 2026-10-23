@@ -16,7 +16,8 @@ import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
-import { isMcConnected, getGameBans, banPlayers } from './mcbridge.js';
+import { isMcConnected, getGameBans, banPlayers, getBridgeTarget, isMcConfigured } from './mcbridge.js';
+import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
 import {
@@ -510,8 +511,8 @@ async function probeAiReachable() {
 
 async function handleHealth(res) {
   const botConnected = !!bot.connected;
-  const mcConfigured = !!String(process.env.MC_BRIDGE_URL || '').trim()
-    && !!String(process.env.MC_BRIDGE_SECRET || '').trim();
+  const bt = getBridgeTarget();
+  const mcConfigured = isMcConfigured();
   const mcConnected = mcConfigured ? isMcConnected() : false;
   const aiEnabled = isAiEnabled();
   const aiReachable = aiEnabled ? await probeAiReachable() : false;
@@ -520,7 +521,7 @@ async function handleHealth(res) {
     status: botConnected && (!mcConfigured || mcConnected) ? 'ok' : 'degraded',
     uptime: Math.round(process.uptime()),
     bot: { connected: botConnected },
-    mcBridge: { configured: mcConfigured, connected: mcConnected },
+    mcBridge: { configured: mcConfigured, connected: mcConnected, mode: bt.mode, base: bt.base },
     ai: { enabled: aiEnabled, reachable: aiReachable },
     timestamp: new Date().toISOString(),
   };
@@ -705,6 +706,7 @@ async function route(req, res, url) {
 
   if (url.pathname === '/api/status') {
     const ls = await loginStatus();
+    const bt = getBridgeTarget();
     return sendJSON(res, 200, {
       serviceUp: true,
       model: process.env.AI_MODEL || 'deepseek-flash',
@@ -713,6 +715,10 @@ async function route(req, res, url) {
       botConnected: bot.connected,
       botError: bot.lastError,
       owner: perm.getOwner(),
+      // 联网搜索 / 图像识别 / MC 桥：让状态页看得见当前切在哪个后端
+      search: { enabled: isSearchEnabled(), provider: searchSettings().provider },
+      vision: { provider: String(((config() && config().vision) || {}).provider || 'ai') },
+      mcBridge: { mode: bt.mode, base: bt.base, connected: isMcConnected() },
       ...ls,
     });
   }
@@ -889,15 +895,19 @@ async function route(req, res, url) {
       notice: { ...base.notice },
       asr: { ...base.asr },
       bind: { ...base.bind },
+      // 搜索 / 图像识别 / MC 桥接：可直接在网页切换后端与地址
+      search: { ...base.search },
+      vision: { ...base.vision },
+      bridge: { ...base.bridge },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
     }
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
-    reloadConfig(); // 立即热加载生效
+    reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
     return sendJSON(res, 200, { ok: true, config: config() });
   }
 

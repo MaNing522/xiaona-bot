@@ -14,10 +14,21 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import { logger } from './logger.js';
+import { config } from './config.js';
 
-// 配置在 startMcBridge() 时从 process.env 读取。
+// 配置在 startMcBridge() 时从 process.env + config.json 读取。
 // 不能写在模块顶层：ESM 的 import 会先于 index.js 里的 dotenv.config() 执行，那时 env 还是空的。
+// 连接地址由 config.json 的 bridge.mode 决定（网页「全局设置」可切换，热加载即换即重连）：
+//   ''（默认）   沿用 .env 的 MC_BRIDGE_URL（旧行为）
+//   off          不连接（覆盖 .env 里已填的地址）
+//   loopback     本机回环 http://127.0.0.1:<port>
+//   lan          局域网 http://<lanHost>:<port>
+//   public       公网地址（publicUrl 原样使用）
 let cfg = null;
+/** 事件流循环的代际：applyBridgeConfig 换配置时 +1，旧循环看到代际不符立即退出 */
+let loopGen = 0;
+/** 当前事件流的 AbortController：换配置/停止时用它掐断在途连接 */
+let streamCtl = null;
 let deps = null;
 let stopped = false;
 let lastEventId = 0;
@@ -59,10 +70,39 @@ function capMap(map, max, isExpired) {
     }
 }
 
+/** 桥端口：config.json 的 bridge.port（1~65535），非法回退 25565 */
+function bridgePortOf(b) {
+    const n = Number(b && b.port);
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 25565;
+}
+
+/**
+ * 按 config.json 的 bridge 段 + .env 算出"连哪个地址 / 什么模式"。
+ * 纯函数便于单测。
+ * @returns {{mode:string, base:string}}
+ */
+export function bridgeTargetOf(b = null, envUrl = '') {
+    const sec = b || {};
+    const mode = String(sec.mode || '').trim().toLowerCase();
+    // ''（默认）＝沿用 .env 的 MC_BRIDGE_URL（老部署不用改任何东西）
+    if (mode === 'off') return { mode, base: '' };
+    if (mode === 'loopback') return { mode, base: `http://127.0.0.1:${bridgePortOf(sec)}` };
+    if (mode === 'lan') {
+        const host = String(sec.lanHost || '').trim()
+            .replace(/^https?:\/\//i, '').split(/[/?#]/)[0].trim();
+        return { mode, base: host ? `http://${host}:${bridgePortOf(sec)}` : '' };
+    }
+    if (mode === 'public') return { mode, base: String(sec.publicUrl || '').trim().replace(/\/+$/, '') };
+    return { mode: '', base: String(envUrl || '').trim().replace(/\/+$/, '') };
+}
+
 function readConfig() {
-    const base = (process.env.MC_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+    // mode 为空时沿用 .env 的 MC_BRIDGE_URL；显式选了模式则 config.json 优先（网页切换的依据）
+    const t = bridgeTargetOf((config() && config().bridge) || {}, process.env.MC_BRIDGE_URL || '');
+    const base = t.base;
     return {
         base,
+        mode: t.mode,
         secret: (process.env.MC_BRIDGE_SECRET || '').trim(),
         groupId: Number(process.env.MC_BRIDGE_GROUP || 0),
         mcToQq: (process.env.MC_BRIDGE_MC_TO_QQ || 'true') !== 'false',
@@ -696,8 +736,10 @@ async function runGameCommand(payload) {
 }
 
 async function streamLoop() {
-    while (!stopped) {
+    const gen = loopGen;
+    while (!stopped && gen === loopGen) {
         const ctl = new AbortController();
+        streamCtl = ctl;
         try {
             const headers = { ...signedHeaders(''), Accept: 'text/event-stream' };
             if (lastEventId > 0) headers['Last-Event-ID'] = String(lastEventId);
@@ -711,7 +753,7 @@ async function streamLoop() {
             const reader = res.body.getReader();
             const dec = new TextDecoder();
             let buf = '';
-            while (!stopped) {
+            while (!stopped && gen === loopGen) {
                 const { value, done } = await reader.read();
                 if (done) break;
                 buf += dec.decode(value, { stream: true });
@@ -731,43 +773,88 @@ async function streamLoop() {
             throw new Error('事件流已结束');
         } catch (e) {
             connected = false;
-            if (stopped) return;
+            if (stopped || gen !== loopGen) return;
             logger.error('[MC桥] 连接中断:', e.message, '→ 3 秒后重连');
             await sleep(3000);
         }
     }
 }
 
-// ---------- 启动 / 停止 ----------
+// ---------- 启动 / 停止 / 换配置 ----------
 /**
  * 启动桥客户端。
  * @param {object} d 依赖注入：
  *   callApi(action, params) -> Promise   OneBot 调用
  *   segText(text) -> segment             文本消息段
  *   askAi({player, text, isPrivate}) -> Promise<string|null>   小钠的回复
+ * @returns {boolean} 是否启动了事件流
  */
 export function startMcBridge(d) {
     deps = d || {};
-    cfg = readConfig();
+    return applyBridgeConfig(true).started;
+}
+
+/**
+ * （重新）应用连接配置：读 config.json 的 bridge 段 + .env，掐断旧流、按新地址重连。
+ * config.json 热加载（index.js 的 watchConfig）与网页「全局设置」保存都会触发到这里，
+ * 所以连接模式切换 1 秒内生效，无需重启。
+ * @param {boolean} [force] 强制重读并重连（启动时用）；默认目标没变就直接返回
+ * @returns {{started:boolean, mode:string, base:string}}
+ */
+export function applyBridgeConfig(force = false) {
+    const newCfg = readConfig();
+    // 目标（地址+群+密钥+模式）没变：不管是在正常连接、还是本来就缺配置连不上，都直接返回。
+    // 这样 config.json 里改任何无关项（限速/冷却等）都不会把桥白白重连一次、也不会刷日志。
+    const sameTarget = !!cfg && cfg.base === newCfg.base && cfg.groupId === newCfg.groupId
+        && cfg.secret === newCfg.secret && cfg.mode === newCfg.mode;
+    if (sameTarget && !force) return { started: !stopped, mode: newCfg.mode, base: newCfg.base };
+    cfg = newCfg;
+    // 掐断在途连接与 3 秒重连等待：换配置立刻生效，别被旧循环黏住
+    loopGen += 1;
+    if (streamCtl) streamCtl.abort();
+    stopped = true;
+    connected = false;
 
     if (!cfg.base || !cfg.secret) {
-        logger.info('[MC桥] 未配置 MC_BRIDGE_URL / MC_BRIDGE_SECRET，跳过（游戏内小钠不可用）。');
-        return false;
+        logger.info(`[MC桥] 连接模式「${cfg.mode || 'env'}」未配置（缺地址或 MC_BRIDGE_SECRET），不连接。`);
+        return { started: false, mode: cfg.mode, base: cfg.base };
     }
     if (cfg.secret.length < 32) {
-        logger.error('[MC桥] MC_BRIDGE_SECRET 短于 32 个字符，服务端会拒绝；请与 config.json 的 bridge.secret 保持一致。');
-        return false;
+        logger.error('[MC桥] MC_BRIDGE_SECRET 短于 32 个字符，服务端会拒绝；请与 mod 侧 bridge.secret 保持一致。');
+        return { started: false, mode: cfg.mode, base: cfg.base };
     }
 
+    // 换目标服务器 = 重新开始：光标、告警节流、缓存全部归零
+    lastEventId = 0;
+    needResync = false;
+    playersCache = { at: 0, list: [] };
+    warnedOldMod = warnedNoBindCheck = warnedNoWhitelist = false;
+    warnedNoBansAt = 0;
+
     stopped = false;
-    logger.info(`[MC桥] 启动：${cfg.base}${cfg.groupId ? ` 桥接群 ${cfg.groupId}` : '（未配置桥接群，游戏消息不会发到 QQ）'}`);
+    logger.info(`[MC桥] 启动（模式 ${cfg.mode || 'env'}）：${cfg.base}${cfg.groupId ? ` 桥接群 ${cfg.groupId}` : '（未配置桥接群，游戏消息不会发到 QQ）'}`);
     streamLoop();
-    return true;
+    return { started: true, mode: cfg.mode, base: cfg.base };
 }
 
 export function stopMcBridge() {
+    loopGen += 1;
+    if (streamCtl) streamCtl.abort();
     stopped = true;
     connected = false;
+}
+
+/** 当前配置是否"应该连得上"（地址 + 密钥都齐了；是否真连上另看 isMcConnected） */
+export function isMcConfigured() {
+    const t = bridgeTargetOf((config() && config().bridge) || {}, process.env.MC_BRIDGE_URL || '');
+    const secret = String(process.env.MC_BRIDGE_SECRET || '').trim();
+    return !!(t.base && secret);
+}
+
+/** 给网页状态/日志看的当前目标（模式 + 地址），不对调用方暴露密钥 */
+export function getBridgeTarget() {
+    const t = bridgeTargetOf((config() && config().bridge) || {}, process.env.MC_BRIDGE_URL || '');
+    return { mode: t.mode, base: t.base };
 }
 
 /** 从游戏内事件转发到 QQ 群（供外部复用） */

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
-import { signedHeaders, startMcBridge } from '../mcbridge.js';
+import { signedHeaders, startMcBridge, bridgeTargetOf } from '../mcbridge.js';
 
 const SECRET = 's'.repeat(40);
 
@@ -63,5 +63,45 @@ describe('signedHeaders', () => {
     vi.stubEnv('MC_BRIDGE_FROM', '203.0.113.7');
     startMcBridge({}); // 重新读取配置
     expect(signedHeaders('')['X-Xiaona-From']).toBe('203.0.113.7');
+  });
+});
+
+describe('bridgeTargetOf（连接模式 → 地址）', () => {
+  it('mode 为空 → 沿用 .env 的 MC_BRIDGE_URL（并去掉结尾斜杠）', () => {
+    expect(bridgeTargetOf({}, 'http://1.2.3.4:43733/'))
+      .toEqual({ mode: '', base: 'http://1.2.3.4:43733' });
+  });
+
+  it('off → 不连接（即使 .env 填了地址）', () => {
+    expect(bridgeTargetOf({ mode: 'off' }, 'http://1.2.3.4:43733'))
+      .toEqual({ mode: 'off', base: '' });
+  });
+
+  it('loopback → 127.0.0.1 + 配置端口', () => {
+    expect(bridgeTargetOf({ mode: 'loopback', port: 25565 }, 'http://1.2.3.4:43733'))
+      .toEqual({ mode: 'loopback', base: 'http://127.0.0.1:25565' });
+  });
+
+  it('lan → 填的局域网主机 + 端口，允许写成带协议的地址', () => {
+    expect(bridgeTargetOf({ mode: 'lan', lanHost: '192.168.1.9', port: 43733 }, ''))
+      .toEqual({ mode: 'lan', base: 'http://192.168.1.9:43733' });
+    expect(bridgeTargetOf({ mode: 'lan', lanHost: 'http://server.lan/', port: 43733 }, ''))
+      .toEqual({ mode: 'lan', base: 'http://server.lan:43733' });
+  });
+
+  it('lan 没填主机 → 空地址（视为未配置）', () => {
+    expect(bridgeTargetOf({ mode: 'lan', port: 43733 }, 'http://1.2.3.4:1').base).toBe('');
+  });
+
+  it('public → 原样使用公网地址', () => {
+    expect(bridgeTargetOf({ mode: 'public', publicUrl: 'http://example.com:43733/' }, ''))
+      .toEqual({ mode: 'public', base: 'http://example.com:43733' });
+  });
+
+  it('端口非法时回退 25565', () => {
+    expect(bridgeTargetOf({ mode: 'loopback', port: 70000 }, '').base)
+      .toBe('http://127.0.0.1:25565');
+    expect(bridgeTargetOf({ mode: 'loopback', port: 'abc' }, '').base)
+      .toBe('http://127.0.0.1:25565');
   });
 });

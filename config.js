@@ -77,6 +77,33 @@ export const DEFAULTS = {
         maxPerQQ: 3,           // 每个 QQ 最多绑定几个游戏ID
         unbindRetainDays: 15,  // 解绑记录在网页「绑定管理」里保留多少天，到期自动删除
     },
+    // 联网搜索后端（网页「全局设置」可切换）：
+    //   provider = off关闭 | baidu百度智能搜索 | deepseek DeepSeek官方搜索 | custom自定义接口
+    // deepseek 复用 .env 的 AI_API_KEY（官方 Search API，按次计费）；
+    // custom 的密钥放 .env 的 SEARCH_CUSTOM_KEY（留空则接口免鉴权访问）。
+    search: {
+        provider: 'baidu',
+        // custom 后端：DeepSeek 风格的原始 JSON 搜索接口地址（POST {query,count} → {results:[...]}）
+        customUrl: '',
+        limit: 5,              // 每次最多返回几条结果（1~50）
+    },
+    // 图片识别（多模态）：
+    //   provider = ai 用 AI 主模型识别（默认）| custom 自定义视觉接口 | off 关闭图像识别
+    // custom 的密钥放 .env 的 VISION_CUSTOM_KEY（留空则接口免鉴权访问）。
+    vision: {
+        provider: 'ai',
+        customUrl: '',         // custom 后端：OpenAI 兼容 /chat/completions 地址（需支持 image_url）
+        customModel: '',       // custom 后端要用的模型名（留空由接口自己决定）
+    },
+    // Minecraft 服务器连接（网页「全局设置」可切换）：
+    //   mode = ''用 .env 的 MC_BRIDGE_URL（默认）| off无连接 | loopback本地回环 | lan局域网 | public公网地址
+    // 密钥/桥接群仍看 .env 的 MC_BRIDGE_SECRET / MC_BRIDGE_GROUP。
+    bridge: {
+        mode: '',
+        port: 25565,           // loopback / lan 模式用：桥 HTTP 端口（服务商只放行的那一个）
+        lanHost: '',           // lan 模式用：服务器局域网地址（IP 或主机名）
+        publicUrl: '',         // public 模式用：完整公网地址（含 http:// 与端口）
+    },
 };
 
 /**
