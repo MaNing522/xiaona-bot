@@ -19,6 +19,7 @@ import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
 import { isMcConnected, getGameBans, banPlayers, getBridgeTarget, isMcConfigured } from './mcbridge.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
+import { HELP_CMDS, TIERS } from './help.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
 import {
   bindingOverview, forceUnbind, clearUnbinds, banUser, unbanUser,
@@ -726,6 +727,11 @@ async function route(req, res, url) {
   // 终端实时日志（与终端输出一致）
   if (url.pathname === '/api/logs') {
     return sendJSON(res, 200, { logs: logs.slice(-200) });
+  }
+
+  // 功能列表：直接复用 #帮助 的命令表（help.js 是唯一数据源，避免网页与 QQ 菜单说法不一致）
+  if (url.pathname === '/api/features') {
+    return sendJSON(res, 200, { commands: HELP_CMDS, tiers: TIERS });
   }
 
   if (url.pathname === '/api/perms') {

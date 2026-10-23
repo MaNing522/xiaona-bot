@@ -23,6 +23,7 @@ h1{font-size:17px;margin:0}
 .pill.ok{background:rgba(82,196,26,.14);color:var(--ok)}
 .pill.warn{background:rgba(250,173,20,.16);color:#d48806}
 .pill.red{background:rgba(255,77,79,.14);color:var(--danger)}
+.pill.mut{background:rgba(31,35,41,.06);color:var(--sub)}
 .live{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
 .card{background:var(--card);border:1px solid #f0f0f0;border-radius:var(--radius);padding:20px;margin-bottom:16px;
   box-shadow:0 1px 2px rgba(0,0,0,.03)}
@@ -84,6 +85,10 @@ label{font-size:13.5px;color:var(--sub)}
 .stat:last-child{border-bottom:0}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{background:var(--card2);border:1px solid var(--line);padding:6px 13px;border-radius:6px;font-size:13.5px}
+/* 功能列表的分类筛选块（可点，选中高亮） */
+.ftcat{cursor:pointer;user-select:none;transition:.15s}
+.ftcat:hover{border-color:var(--accent)}
+.ftcat.on{background:rgba(22,119,255,.12);border-color:var(--accent);color:var(--accent);font-weight:600}
 .qr{text-align:center}
 .qr img{width:min(280px,68vw);height:min(280px,68vw);border-radius:10px;image-rendering:pixelated;border:1px solid var(--line)}
 .hint{font-size:13px;color:var(--sub);margin-top:10px;line-height:1.7}
@@ -185,7 +190,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item active" data-tab="login"><span class="ico">📊</span>登录状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
-      <button class="nav-item" data-tab="group"><span class="ico">🛡️</span>群管</button>
+      <button class="nav-item" data-tab="features"><span class="ico">🧩</span>功能</button>
       <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话管理</button>
       <button class="nav-item" data-tab="trial"><span class="ico">🧪</span>私聊试用</button>
       <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
@@ -294,24 +299,28 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
   </div>
 
-  <!-- 群管 -->
-  <div class="panel" data-panel="group">
+  <!-- 功能列表 -->
+  <div class="panel" data-panel="features">
     <div class="card">
-      <h2>🛡️ 群管理（主人 / 管理员）</h2>
-      <div class="hint" style="margin-top:0">发送指令给机器人 <b>@小钠 + #指令</b> 即可执行（限本群）。</div>
-      <div class="cmd"><b>#禁言 @或QQ号 [分钟]</b><div class="hint">默认 10 分钟。</div></div>
-      <div class="cmd"><b>#临时禁言 @或QQ号 [秒]</b><div class="hint">短时禁言，默认 60 秒。</div></div>
-      <div class="cmd"><b>#解禁 @或QQ号</b><div class="hint">解除禁言。</div></div>
-      <div class="cmd"><b>#踢出 @或QQ号</b><div class="hint">移出本群。</div></div>
-      <div class="cmd"><b>#拉黑 @或QQ号</b><div class="hint">移出并拒绝再次入群。</div></div>
-      <div class="cmd"><b>#全体禁言</b> · <b>#解除全体禁言</b><div class="hint">开启/关闭全体禁言。</div></div>
-      <div class="cmd"><b>#群公告 内容</b><div class="hint">发布群公告。</div></div>
-      <div class="cmd"><b>#定时提醒 <时间> <内容></b><div class="hint">到时提醒；时间可用 N分钟/N小时/HH:MM。群聊提醒发送到本群。</div></div>
-      <div class="cmd"><b>#定时禁言 @或QQ号 <开始>-<结束></b><div class="hint">时间段禁言（如 12:00-18:00），每天重复，结束自动解禁。</div></div>
-      <div class="cmd"><b>#定时解禁 @或QQ号 <时间></b><div class="hint">安排在指定时间解禁某成员。</div></div>
-      <div class="cmd"><b>#定时列表</b> · <b>#取消定时 &lt;id&gt;</b><div class="hint">查看 / 取消定时任务（主人/管理员）。</div></div>
-      <div class="cmd"><b>#换名 &lt;新昵称&gt;</b> · <b>#换头像 &lt;图片&gt;</b><div class="hint">主人专用，修改机器人昵称/头像（需 NapCat 支持）。</div></div>
-      <div class="hint">示例：<b>#禁言</b> 然后 @某人 500；或 <b>#拉黑 123456789</b>；群聊含"<b>小钠</b>"或 @小钠 触发智能回复</div>
+      <h2>🪪 权限档位</h2>
+      <div class="hint" style="margin-top:0">从高到低，高档自动包含低档的全部功能。下面是每个档位新增的能力。</div>
+      <div id="ftTiers"><span class="hint">加载中…</span></div>
+    </div>
+    <div class="card span2">
+      <h2>🧩 功能列表 <span class="cnt" id="ftCount">0</span></h2>
+      <div class="hint" style="margin-top:0">在群里 <b>@小钠 + #指令</b>，或直接私聊发送；不认得的指令不会被当成闲聊。</div>
+      <div class="row" style="margin-top:10px">
+        <input id="ftSearch" type="text" placeholder="搜索功能 / 指令 / 说明，如：禁言、记忆、截图">
+        <select id="ftRole">
+          <option value="">全部权限</option>
+          <option value="all">👤 普通用户</option>
+          <option value="auth">✅ 授权用户</option>
+          <option value="admin">🛡️ 管理员</option>
+          <option value="owner">👑 主人</option>
+        </select>
+      </div>
+      <div class="chips" id="ftCats" style="margin-top:12px"></div>
+      <div id="ftList" style="margin-top:12px"><span class="hint">加载中…</span></div>
     </div>
   </div>
 
@@ -499,6 +508,38 @@ async function refresh(){try{const s=await api('/api/login/status');
 async function logs(){try{const d=await api('/api/logs');
   renderLog('lgLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
 }catch(e){}}
+
+// ---------- 功能列表（指令表直接来自 help.js，与 QQ 里的 #帮助 同一份数据） ----------
+let ftCmds=null, ftTiers=[], ftCat='全部';
+const FT_ROLE_NAME={all:'普通用户',auth:'授权用户',admin:'管理员',owner:'主人'};
+const FT_ROLE_CLASS={all:'mut',auth:'ok',admin:'warn',owner:'red'};
+async function ftLoad(){
+  if(!ftCmds){
+    try{ const d=await api('/api/features'); ftCmds=d.commands||[]; ftTiers=d.tiers||[]; }
+    catch(e){ $('ftList').innerHTML='<span class="hint">加载失败：'+esc(e.message)+'</span>'; return; }
+    $('ftTiers').innerHTML=(ftTiers||[]).map(t=>'<div class="stat"><span>'+esc(t.name)+'</span><b style="font-weight:600">'+esc(t.note)+'</b></div>').join('')||'<span class="hint">—</span>';
+  }
+  const cats=['全部',...new Set(ftCmds.map(c=>c.cat))];
+  $('ftCats').innerHTML=cats.map(c=>'<span class="chip ftcat'+(c===ftCat?' on':'')+'" data-cat="'+esc(c)+'">'+esc(c)+'</span>').join('');
+  ftRender();
+}
+function ftRender(){
+  if(!ftCmds) return;
+  const kw=($('ftSearch').value||'').trim().toLowerCase();
+  const role=$('ftRole').value;
+  const list=ftCmds.filter(c=>
+    (ftCat==='全部'||c.cat===ftCat) &&
+    (!role||c.role===role) &&
+    (!kw||(c.c+' '+c.d).toLowerCase().includes(kw)));
+  $('ftCount').textContent=list.length;
+  $('ftList').innerHTML=list.length?list.map(c=>
+    '<div class="cmd"><b>'+esc(c.c)+'</b> <span class="pill '+(FT_ROLE_CLASS[c.role]||'mut')+'">'+esc(FT_ROLE_NAME[c.role]||c.role)+'</span>'+
+    '<div class="hint">'+esc(c.d)+'</div></div>').join('') :
+    '<span class="hint">没有匹配的功能，换个关键词或分类试试</span>';
+}
+$('ftSearch').oninput=ftRender;
+$('ftRole').onchange=ftRender;
+$('ftCats').onclick=(e)=>{ const t=e.target.closest('.ftcat'); if(!t) return; ftCat=t.dataset.cat; ftLoad(); };
 
 // ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
 let cvSel='', cvGlobal=null, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true, cvErr='';
@@ -904,7 +945,7 @@ $('bdClearUnbinds').onclick=async()=>{
   catch(e){ alert('清除失败: '+e.message); }
 };
 
-load();perms();bindLoad();refresh();logs();convLoad(true);load();perms();
+load();perms();bindLoad();refresh();logs();convLoad(true);ftLoad();load();perms();
 setInterval(load,5000);setInterval(perms,8000);setInterval(bindLoad,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);
 </script>
 </body>
