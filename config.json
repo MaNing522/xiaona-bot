@@ -35,7 +35,7 @@
   },
   "notice": {
     "enabled": true,
-    "joinText": "欢迎新人加入群聊！",
+    "joinText": "欢迎新人加入群聊！记得看群公告",
     "leaveText": "{name} {kind}{note}"
   },
   "asr": {

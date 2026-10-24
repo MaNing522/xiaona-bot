@@ -18,7 +18,8 @@
 //
 // 相关 .env（都可留空用默认值）：
 //   ASR_URL    完整接口地址，默认 http://127.0.0.1:8899/v1/audio/transcriptions
-//   ASR_MODEL  模型名，默认 iic/SenseVoiceSmall（服务端用 SenseVoice）
+//   ASR_MODEL  模型名，默认 sensevoice（FunASR 1.4+ 服务端只认自己注册的名字，
+//              如 sensevoice / paraformer；传 ModelScope 的 iic/SenseVoiceSmall 会被 400 拒绝）
 //   ASR_TOKEN  若服务端要求鉴权，填了会带 Authorization: Bearer <token>
 //   ASR_ENABLED=false 可整体关闭语音识别（默认开）
 // 相关 config.json：asr.canonicalName / asr.homophones（同音纠正表，见下）
@@ -35,7 +36,7 @@ const transcribeCache = new WeakMap();
 export const VOICE_PLACEHOLDER = '[语音]';
 
 const DEFAULT_URL = 'http://127.0.0.1:8899/v1/audio/transcriptions';
-const DEFAULT_MODEL = 'iic/SenseVoiceSmall';
+const DEFAULT_MODEL = 'sensevoice';
 const ASR_TIMEOUT_MS = 20000;
 
 /** FunASR 原生吃得下的格式；其余（amr/silk/wma/spx…）先转码成 wav */
@@ -208,7 +209,10 @@ async function doTranscribe(data) {
             signal: AbortSignal.timeout(ASR_TIMEOUT_MS),
         });
         if (!res.ok) {
-            logger.warn(`[ASR] 本地 FunASR 返回 ${res.status}，本条语音跳过识别`);
+            // 带上服务端返回的原文（如 Unknown model 'iic/SenseVoiceSmall'），方便直接看出原因
+            let detail = '';
+            try { detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 160); } catch { /* 读不出就算了 */ }
+            logger.warn(`[ASR] 本地 FunASR 返回 ${res.status}${detail ? '：' + detail : ''}，本条语音跳过识别`);
             return null;
         }
         const j = await res.json().catch(() => null);

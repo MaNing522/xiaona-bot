@@ -20,6 +20,10 @@ const QR_FILE = path.join(NAPCAT_DIR, 'napcat', 'cache', 'qrcode.png');
 const LOGIN_FILE = path.join(__dirname, 'data', 'login.json');
 const WS_PORT = Number((process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').match(/:(\d+)/)?.[1] || 3001);
 
+// 本地语音识别服务（FunASR）：默认 http://127.0.0.1:8899/v1/audio/transcriptions
+const ASR_ENABLED = String(process.env.ASR_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const ASR_URL = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions').trim();
+
 const AUTO_TIMEOUT = 25000; // 自动登录最长等待
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -104,6 +108,66 @@ function waitPort(port, timeoutMs) {
     };
     tryConn();
   });
+}
+
+// ---------- 本地语音识别服务（FunASR） ----------
+/** 端口是否已被监听（ASR 已由别人/上次启动拉起来时就不用再起一个） */
+function portIsOpen(port, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const s = net.connect(port, '127.0.0.1');
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      s.destroy();
+      resolve(ok);
+    };
+    s.setTimeout(timeoutMs, () => finish(false));
+    s.once('connect', () => finish(true));
+    s.once('error', () => finish(false));
+  });
+}
+
+/** 从 ASR_URL 取本机端口；配的是外部地址则返回 0（外部服务不归启动器管） */
+function asrLocalPort() {
+  try {
+    const u = new URL(ASR_URL);
+    if (!['127.0.0.1', 'localhost'].includes(u.hostname)) return 0;
+    return Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 确保本地语音识别服务在跑：没在跑就隐藏启动 asr-venv 里的 funasr-server。
+ * 以前只能靠手动双击 startASR.bat，开机/重启后经常忘，语音就全变成 [语音] 占位。
+ * 起不来只记一行日志，不影响机器人本体。
+ */
+async function ensureAsrService() {
+  if (!ASR_ENABLED) return null;
+  const port = asrLocalPort();
+  if (!port) return null;
+  if (await portIsOpen(port)) {
+    console.log(`[启动器] 语音识别服务已在运行（127.0.0.1:${port}）`);
+    return null;
+  }
+  const exe = path.join(__dirname, 'asr-venv', 'Scripts', 'funasr-server.exe');
+  if (!fs.existsSync(exe)) {
+    console.log('[启动器] 未找到本地语音识别服务（asr-venv\\Scripts\\funasr-server.exe），语音消息将只显示 [语音]');
+    return null;
+  }
+  console.log(`[启动器] 启动本地语音识别服务（FunASR SenseVoice，端口 ${port}），模型加载需要十几秒...`);
+  const proc = spawn(
+    exe,
+    ['--host', '127.0.0.1', '--port', String(port), '--model', 'sensevoice', '--device', 'cpu'],
+    { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
+  );
+  const pipe = (chunk) => String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [ASR] ${l.trim()}`));
+  proc.stdout.on('data', pipe);
+  proc.stderr.on('data', pipe);
+  proc.on('exit', (code) => console.log(`[启动器] 语音识别服务已退出（code=${code}），语音消息将只显示 [语音]`));
+  return proc;
 }
 
 // ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
@@ -321,6 +385,10 @@ async function main() {
   } else {
     console.log('ℹ️ 未找到历史登录账号，进入手动登录。');
   }
+
+  // 语音识别服务如果不主动拉起，重启/开机后就一直没人启动，语音全变 [语音]。
+  // 放在最前面异步启动，模型加载十几秒，不阻塞 NapCat 与机器人的启动。
+  ensureAsrService().catch(() => {});
 
   // 网页控制面板启用时：先起机器人（面板立即可用），再进入 NapCat 登录。
   // 这样即使登录要扫码 / 验证码，用户也能先打开面板查看二维码、操作登录，

@@ -123,6 +123,26 @@ function logFeatureStates() {
     logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
 }
 
+/**
+ * 启动后确认本地语音识别服务是否就绪。
+ * 服务由启动器（start.js）拉起，模型加载要十几秒，所以这里轮询最多 1 分钟；
+ * 一直连不上就把原因写进日志，避免语音悄悄变成 [语音] 却没人知道为什么。
+ */
+async function checkAsrService() {
+    if (!asrEnabled()) return;
+    const url = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions');
+    for (let i = 0; i < 6; i++) {
+        try {
+            // 该接口只收 POST，GET 会回 405——能拿到任何 HTTP 响应就说明服务活着
+            await fetch(url, { signal: AbortSignal.timeout(3000) });
+            logger.info(`   语音识别服务   已就绪（${url}）`);
+            return;
+        } catch { /* 还没起来，10 秒后再试 */ }
+        await new Promise((r) => setTimeout(r, 10000));
+    }
+    logger.warn(`   语音识别服务   连不上（${url}），语音消息将只显示 [语音]；请检查 asr-venv 是否装好、startASR.bat 能否启动`);
+}
+
 // ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
 // 被 @/关键词/引用 叫到，就像现实里被叫住一样，接下来对方继续说，也该继续听着；
 // 但也不能被无限占着，所以给额度：首先唤起的人多给几条，别人插嘴只给一条。
@@ -3456,6 +3476,7 @@ if (WS_TOKEN === 'your_napcat_token') {
 }
 logProviderInfo();
 logFeatureStates();
+checkAsrService();
 connect();
 
 // 启动网页控制面板（非阻塞）；授权由主人管理，面板通知走主人回调

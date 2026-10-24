@@ -17,6 +17,9 @@ voice_cache/
 logs/
 *.log
 
+# 语音识别服务的 Python 虚拟环境（体积大，不入库；由 startASR.bat / 启动器自动使用）
+asr-venv/
+
 # ---------- 与本项目无关的另一个项目 ----------
 meteor-vulkan-compat/
 

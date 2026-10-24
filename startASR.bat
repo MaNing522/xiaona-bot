@@ -8,6 +8,11 @@ rem  Local FunASR (SenseVoice) ASR server for the QQ bot.
 rem  It serves the OpenAI-compatible endpoint used by asr.js:
 rem      http://127.0.0.1:8899/v1/audio/transcriptions
 rem
+rem  It runs from the project-local venv "asr-venv", so the bot does
+rem  not depend on the global Python. The launcher (start.js) starts
+rem  this server automatically in the background; run this file only
+rem  when you want to watch its logs in a console.
+rem
 rem  Usage:  double-click this file, or run with a device arg:
 rem      startASR.bat cuda    (NVIDIA GPU, much faster)
 rem
@@ -20,30 +25,33 @@ set PORT=8899
 set DEVICE=cpu
 if not "%~1"=="" set DEVICE=%~1
 
-where python >nul 2>&1
-if errorlevel 1 (
-  echo [ASR] Python not found in PATH. Please install Python 3.8+ first.
-  echo [ASR] https://www.python.org/downloads/
+set "PYEXE=%~dp0asr-venv\Scripts\python.exe"
+set "FSERVER=%~dp0asr-venv\Scripts\funasr-server.exe"
+
+if not exist "%PYEXE%" (
+  echo [ASR] venv not found: asr-venv
+  echo [ASR] Create it once with the commands below, then retry:
+  echo [ASR]   python -m venv asr-venv
+  echo [ASR]   asr-venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+  echo [ASR]   asr-venv\Scripts\python.exe -m pip install funasr fastapi uvicorn python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
   pause
   exit /b 1
 )
 
-echo [ASR] Checking dependencies: funasr / fastapi / uvicorn / python-multipart ...
-python -c "import funasr, fastapi, uvicorn, multipart" >nul 2>&1
+"%PYEXE%" -c "import funasr, fastapi, uvicorn, multipart" >nul 2>&1
 if errorlevel 1 (
   echo [ASR] Installing dependencies, this may take a few minutes ...
-  python -m pip install -U funasr fastapi uvicorn python-multipart
+  "%PYEXE%" -m pip install funasr fastapi uvicorn python-multipart -i https://pypi.tuna.tsinghua.edu.cn/simple
   if errorlevel 1 (
-    echo [ASR] pip install failed. Check your network or use a pip mirror, e.g.
-    echo [ASR]   python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple funasr fastapi uvicorn python-multipart
+    echo [ASR] pip install failed. Check your network or try another mirror.
     pause
     exit /b 1
   )
 )
 
-where funasr-server >nul 2>&1
-if errorlevel 1 (
-  echo [ASR] "funasr-server" not found. Try: python -m pip install -U funasr
+if not exist "%FSERVER%" (
+  echo [ASR] funasr-server not found in asr-venv. Reinstall funasr:
+  echo [ASR]   asr-venv\Scripts\python.exe -m pip install -U funasr
   pause
   exit /b 1
 )
@@ -52,7 +60,7 @@ echo [ASR] Starting FunASR server: port=%PORT% device=%DEVICE% model=sensevoice
 echo [ASR] First run will download the SenseVoice model, please be patient ...
 echo [ASR] Endpoint: http://127.0.0.1:%PORT%/v1/audio/transcriptions
 echo.
-funasr-server --host 127.0.0.1 --port %PORT% --model sensevoice --device %DEVICE%
+"%FSERVER%" --host 127.0.0.1 --port %PORT% --model sensevoice --device %DEVICE%
 
 echo.
 echo [ASR] Server stopped.
