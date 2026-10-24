@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { textToSpeech, cleanVoiceCache } from './tts.js';
+import { textToSpeech, cleanVoiceCache, ttsProvider } from './tts.js';
 import { getSearchContext, isSearchEnabled, searchSettings } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
@@ -115,7 +115,12 @@ function logFeatureStates() {
     logger.info(`   AI 对话        ${on(AI_ENABLED)}${AI_ENABLED ? '' : '  缺 AI_API_KEY'}`);
     logger.info(`   联网搜索       ${on(isSearchEnabled())}${isSearchEnabled() ? `  后端 ${searchSettings().provider}` : ''}`);
     logger.info(`   图像识别       ${on(visionEnabled())}  后端 ${visionSettings().provider}`);
-    logger.info(`   语音合成       [已启用]  Edge 免密钥（${process.env.TTS_VOICE || 'zh-CN-XiaoxiaoNeural'} ${process.env.TTS_RATE || '+8%'}）`);
+    const ttsKind = ttsProvider();
+    const ttsReady = ttsKind === 'xiaomi' ? !!String(process.env.MIMO_API_KEY || '').trim() : true;
+    const ttsDesc = ttsKind === 'xiaomi'
+        ? `小米 MiMo（${process.env.TTS_XIAOMI_VOICE || '冰糖'}）`
+        : `Edge 免密钥（${process.env.TTS_VOICE || 'zh-CN-XiaoxiaoNeural'} ${process.env.TTS_RATE || '+8%'}）`;
+    logger.info(`   语音合成       ${on(ttsReady)}  ${ttsDesc}${ttsReady ? '' : '  缺 MIMO_API_KEY'}`);
     logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 FunASR(SenseVoice) ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
     const bt = getBridgeTarget();
@@ -451,6 +456,9 @@ ${step++}. **是否需要接话（默认不接，一律从严）**：小钠刚�
 ${step++}. **语音发送判断**：
    - 如果回复内容适合语音朗读（简短、自然、口语化），且用户有语音意图，标记：【VOICE:YES】
    - **重要**：当【VOICE:YES】时，回复文本必须是纯语音内容，不要添加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
+   - **风格标签**：语音内容开头用一对括号写一个风格词，用来指定语气，例如 (温柔) (开心) (俏皮) (慵懒) (磁性) (怅然) (怅然 低沉) (东北话) (粤语)。标签只是给语音引擎的指令，不会被读出来；可以写多个风格词。
+   - **唱歌**：对方点歌、让你唱一段或哼两句时，开头写 (唱歌)，后面直接跟歌词，例如：(唱歌)原谅我这一生不羁放纵爱自由，也会怕有一天会跌倒。歌词用中文效果最好。
+   - 语音内容里**不要**出现 emoji、颜文字或表情符号，只写要被读出来的字。
    - 否则标记：【VOICE:NO】
 
 ${step}. **生成回复**：

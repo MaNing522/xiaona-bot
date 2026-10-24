@@ -1,17 +1,24 @@
 // ============================================================
-// tts.js - 文本转语音（微软 Edge 朗读服务，与 edge-tts 同款协议，免密钥）
+// tts.js - 文本转语音，支持两种后端（TTS_PROVIDER 切换）
 //
-// 走 Edge 的「大声朗读」WebSocket 接口（speech.platform.bing.com），
-// 和 Python 的 edge-tts 用的是同一套协议：先发 speech.config，再发 SSML，
-// 服务端回来的二进制分片（每片前 2 字节是大端长度）拼起来就是 mp3。
+// 1) xiaomi（默认，配了 MIMO_API_KEY 时）：小米 MiMo TTS
+//    走 OpenAI 兼容的 POST https://api.xiaomimimo.com/v1/chat/completions，
+//    model=mimo-v2.5-tts；要合成的话放 role=assistant，风格标签写在文本开头，
+//    如 (慵懒)/(磁性)/(东北话)/(粤语)，想唱歌写 (唱歌) 后面跟歌词。
+//    返回 choices[0].message.audio.data（base64 音频，这里按 mp3 取）。
+// 2) edge（没配小米 key 时回退）：微软 Edge 朗读服务（与 edge-tts 同款协议，免密钥），
+//    走 WebSocket 接口：先发 speech.config，再发 SSML，二进制分片拼起来就是 mp3。
 //
 // 音色 / 语速 / 音量走 .env：
-//   TTS_VOICE  音色短名，默认 zh-CN-XiaoxiaoNeural（女声 XiaoXiao）
-//   TTS_RATE   语速增减
-//   TTS_VOLUME 音量增减（SSML prosody volume，Edge 常用 -100% ~ +100%）
-//   完整音色表：edge-tts --list-voices（或看名字规律 zh-CN-<名>Neural）
+//   TTS_PROVIDER     xiaomi / edge（不填时有 MIMO_API_KEY 就用小米，否则 Edge）
+//   MIMO_API_KEY     小米 MiMo API Key
+//   TTS_XIAOMI_VOICE 小米音色名，默认 冰糖（女声）；另可选 茉莉 / 苏打 / 白桦 等
+//   TTS_VOICE        Edge 音色短名，默认 zh-CN-XiaoxiaoNeural（女声 XiaoXiao）
+//   TTS_RATE         Edge 语速增减
+//   TTS_VOLUME       Edge 音量增减（SSML prosody volume，常用 -100% ~ +100%）
+//   完整 Edge 音色表：edge-tts --list-voices
 //
-// 说明：接口免密钥、无需安装任何东西（只用到项目已有的 ws 依赖）。
+// 说明：两种后端都只用到项目已有的 ws / fetch，无需安装额外东西。
 //       微软偶尔会换校验参数，若哪天报「被拒绝 (403)」，把 EDGE_VERSION 换成
 //       新版 Edge 的版本号即可（见下方注释）。
 // ============================================================
@@ -34,6 +41,12 @@ const DEFAULT_RATE = '+8%';
 const DEFAULT_VOLUME = '+0%';
 const SYNTH_TIMEOUT_MS = 20000;
 
+// 小米 MiMo TTS（OpenAI 兼容的 chat/completions，音频在 message.audio.data）
+const XIAOMI_URL = String(process.env.TTS_XIAOMI_URL || 'https://api.xiaomimimo.com/v1/chat/completions').trim();
+const XIAOMI_MODEL = String(process.env.TTS_XIAOMI_MODEL || 'mimo-v2.5-tts').trim();
+const DEFAULT_XIAOMI_VOICE = '冰糖';              // 中文女声；另可选 茉莉（女）/苏打/白桦（男）
+const XIAOMI_TIMEOUT_MS = 60000;                  // 唱歌可能合成得久一些
+
 // Edge 朗读接口的固定参数（与 edge-tts 保持一致）
 const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const EDGE_VERSION = '143.0.3650.75';             // 被 403 时换成当前 Edge 版本号
@@ -52,6 +65,68 @@ function voiceName() {
 function rateValue() { return String(process.env.TTS_RATE || DEFAULT_RATE).trim(); }
 /** 音量（SSML prosody volume）：相对默认音量的增减，如 +50% / -30%；Edge 一般只接受 -100%~+100% */
 function volumeValue() { return String(process.env.TTS_VOLUME || DEFAULT_VOLUME).trim(); }
+
+/** 当前 TTS 后端：显式配了 TTS_PROVIDER 就听它的，否则有小米 key 就用小米，没有就回退 Edge */
+export function ttsProvider() {
+    const p = String(process.env.TTS_PROVIDER || '').trim().toLowerCase();
+    if (p === 'xiaomi' || p === 'edge') return p;
+    return String(process.env.MIMO_API_KEY || '').trim() ? 'xiaomi' : 'edge';
+}
+
+/** 小米音色名（中文名直接传，如 冰糖 / 茉莉） */
+function xiaomiVoice() {
+    const v = String(process.env.TTS_XIAOMI_VOICE || DEFAULT_XIAOMI_VOICE).trim().replace(/[\r\n'"]/g, '');
+    return v || DEFAULT_XIAOMI_VOICE;
+}
+
+// emoji / 颜文字里的符号：语音里不要带，读出来会很怪
+/* eslint-disable no-misleading-character-class */
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{200D}\u{20E3}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]+/gu;
+/* eslint-enable no-misleading-character-class */
+
+/** 去掉文本里的 emoji（保留 (风格标签)，那是小米 TTS 的指令） */
+export function stripEmoji(text) {
+    return String(text || '').replace(EMOJI_RE, '').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+/**
+ * 拼小米 MiMo TTS 的请求体（导出给单测）。
+ * 目标文本必须放 assistant，风格标签（如 (唱歌)）也写在文本开头；
+ * user 里可以放一句自然语言指令，内容不会被读出来。
+ */
+export function buildXiaomiRequest(text, voice, model = XIAOMI_MODEL, instruct = '') {
+    const messages = [];
+    const inst = String(instruct || '').trim();
+    if (inst) messages.push({ role: 'user', content: inst });
+    messages.push({ role: 'assistant', content: String(text) });
+    return { model, messages, audio: { format: 'mp3', voice } };
+}
+
+/** 调一次小米 MiMo TTS，返回 mp3 字节 */
+async function synthesizeXiaomi(text, voice) {
+    const key = String(process.env.MIMO_API_KEY || '').trim();
+    if (!key) throw new Error('没配 MIMO_API_KEY，无法使用小米 TTS');
+    const res = await fetch(XIAOMI_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'api-key': key,
+            'Authorization': `Bearer ${key}`,   // OpenAI 兼容客户端走 Bearer，两个都带上最稳
+        },
+        body: JSON.stringify(buildXiaomiRequest(text, voice, XIAOMI_MODEL, process.env.TTS_XIAOMI_INSTRUCT)),
+        signal: AbortSignal.timeout(XIAOMI_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+        let detail = '';
+        try { detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 200); } catch { /* 读不出就算了 */ }
+        throw new Error(`小米 TTS 返回 ${res.status}${detail ? '：' + detail : ''}`);
+    }
+    const data = await res.json();
+    const b64 = data && data.choices && data.choices[0] && data.choices[0].message
+        && data.choices[0].message.audio && data.choices[0].message.audio.data;
+    if (!b64) throw new Error('小米 TTS 没返回音频');
+    return Buffer.from(String(b64), 'base64');
+}
 
 /** Edge 的 Sec-MS-GEC 校验值（v2 格式，见 edgeDrm.js）：时间戳拼上固定 token 后的两段哈希 */
 export function secMsGec(nowMs = Date.now()) {
@@ -181,19 +256,34 @@ async function synthesize(text, voice, rate, volume) {
 
 /**
  * 文本转语音，落到 voice_cache 目录，返回文件路径。
- * @param {string} text 要朗读的文本
- * @param {string|null} voiceId 覆盖音色（短名，如 zh-CN-XiaoxiaoNeural）；不传用 .env 的 TTS_VOICE
- * @returns {Promise<string>} 生成的 mp3 路径
+ * 语音里不带 emoji：先统一清掉，再交给当前后端合成。
+ * @param {string} text 要朗读的文本（可带 (风格) 标签，小米 TTS 会当指令）
+ * @param {string|null} voiceId 覆盖音色；不传用 .env 里的默认音色
+ * @returns {Promise<string>} 生成的音频路径（.mp3）
  */
 export async function textToSpeech(text, voiceId = null) {
-    const body = String(text || '').trim();
+    const body = stripEmoji(text);
     if (!body) throw new Error('没有可朗读的文本');
+
+    if (ttsProvider() === 'xiaomi') {
+        const voice = String(voiceId || '').trim() || xiaomiVoice();
+        logger.info(`🔊 请求 TTS（小米 MiMo ${voice}）`);
+        const buffer = await synthesizeXiaomi(body, voice);
+        if (!buffer || !buffer.length) throw new Error('小米 TTS 没返回音频');
+        const filepath = path.join(VOICE_DIR, `tts_${Date.now()}.mp3`);
+        fs.writeFileSync(filepath, buffer);
+        logger.info(`✅ TTS 生成成功: ${filepath}`);
+        return filepath;
+    }
+
     const voice = String(voiceId || '').trim() || voiceName();
     const rate = rateValue();
     const volume = volumeValue();
+    // Edge 不认 (风格) 标签，念出来会很怪，去掉开头那一个
+    const edgeText = body.replace(/^\s*[(（[]\s*[^)）\]]{1,20}\s*[)）\]]\s*/, '') || body;
 
     logger.info(`🔊 请求 TTS（Edge ${voice} 语速 ${rate} 音量 ${volume}）`);
-    const buffer = await synthesize(body, voice, rate, volume);
+    const buffer = await synthesize(edgeText, voice, rate, volume);
     if (!buffer || !buffer.length) throw new Error('Edge TTS 没返回音频');
 
     const filepath = path.join(VOICE_DIR, `tts_${Date.now()}.mp3`);
