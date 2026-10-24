@@ -212,7 +212,7 @@ const PANEL_USER = process.env.WEBUI_USER || 'admin';
 // 密码只从 .env 读，代码里不留任何默认值：没配就直接拒绝启动（fail-closed），
 // 避免出现"忘了配密码 → 面板用一个人所共知的默认密码裸奔"的情况
 const PANEL_PASS = process.env.WEBUI_PASSWORD || '';
-const SESSION_TTL = 12 * 60 * 60 * 1000;   // 登录有效期 12 小时
+const SESSION_TTL = 120 * 60 * 1000;       // 登录有效期 120 分钟
 const CAPTCHA_TTL = 3 * 60 * 1000;         // 验证码 3 分钟
 const CAPTCHA_AFTER_FAILS = 5;             // 连续输错密码达到这个次数后，才要求人机验证
 const LOGIN_MAX_FAIL = 10;                 // 连续失败上限（含验证码错误），超过则封 5 分钟
