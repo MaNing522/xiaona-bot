@@ -36,14 +36,14 @@ describe('toolsForRole（对应身份对应调用）', () => {
     }
   });
 
-  it('sing 工具把歌词/风格/歌名交给 ctx.sing', async () => {
+  it('sing 工具把歌词/歌名交给 ctx.sing', async () => {
     const tool = AGENT_TOOLS.find((t) => t.function.name === 'sing');
     const calls = [];
     const out = await tool.run(
-      { lyrics: '原谅我这一生不羁放纵爱自由', style: '磁性', song: '海阔天空' },
+      { lyrics: '原谅我这一生不羁放纵爱自由', song: '海阔天空' },
       { sing: async (...a) => { calls.push(a); return '唱好了'; } },
     );
-    expect(calls[0]).toEqual(['原谅我这一生不羁放纵爱自由', '磁性', '海阔天空']);
+    expect(calls[0]).toEqual(['原谅我这一生不羁放纵爱自由', '海阔天空']);
     expect(out).toBe('唱好了');
   });
 });

@@ -673,18 +673,18 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
-        // 唱歌：模型给歌词，这里拼上风格标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
-        sing: async (lyrics, style = '', song = '') => {
+        // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
+        sing: async (lyrics, song = '') => {
             if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';
             if (!lyrics) return '没给歌词，唱不了；不知道歌词就先调用 web_search 搜「歌名 歌词」。';
-            // (唱歌) 必须精确放在最开头才会进入唱歌模式，标签里多写别的词会退化成朗读；
-            // 所以 style 不拼进标签，改走 user 指令（只影响唱法，不会被读出来）
-            const clean = lyrics.replace(/^\s*[(（[]\s*(唱歌|sing|singing)\s*[)）\]]\s*/i, '');
-            const instruct = style
-                ? `用${style}的感觉演绎，保持旋律和节奏，唱出来而不是朗读。`
-                : '保持旋律和节奏，唱出来而不是朗读。';
+            // 小米 MiMo 的唱歌模式要求：文本必须**一整行**、且**精确以 (唱歌) 开头**。
+            // 歌词分行或用 user 指令描述唱法，都会退化成朗读，所以这里压成一行、不加任何指令。
+            const clean = lyrics
+                .replace(/\s*\n+\s*/g, '，')
+                .replace(/^\s*[(（[]\s*(唱歌|sing|singing)\s*[)）\]]\s*/i, '')
+                .trim();
             try {
-                await sendVoice(`(唱歌)${clean}`, instruct);
+                await sendVoice(`(唱歌)${clean}`);
                 return `已经把${song ? `《${song}》` : '这段歌'}唱出去了，不用在最终回复里再重复歌词，简短说一句就好。`;
             } catch (e) {
                 return `唱歌失败：${e.message}。可以把歌词用文字发出来。`;
@@ -794,7 +794,7 @@ function sanitizeOutgoing(text) {
 }
 
 // ---------- 发送 ----------
-async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false, ttsInstruct = '') {
+async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false) {
     // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
     if (Array.isArray(event.__replySink)) {
         const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
@@ -843,7 +843,7 @@ async function sendReply(event, message, wantVoice = false, withAt = false, mark
     const isSinging = typeof message === 'string' && /^\s*[(（[]\s*唱歌/.test(message);
     if (wantVoice && typeof message === 'string' && (message.length <= 300 || (isSinging && message.length <= 800))) {
         try {
-            const voicePath = await textToSpeech(message, null, ttsInstruct);
+            const voicePath = await textToSpeech(message);
             const vid = await doSend([segRecord(voicePath)]);
             cleanVoiceCache(50);
             logger.info('🎵 语音已发送');
@@ -2749,8 +2749,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
                     return t ? sendReply(event, t) : Promise.resolve();
                 },
                 // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
-                sendVoice: async (text, instruct = '') => {
-                    const ids = await sendReply(event, text, true, false, true, instruct);
+                sendVoice: async (text) => {
+                    const ids = await sendReply(event, text, true, false, true);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
                 },

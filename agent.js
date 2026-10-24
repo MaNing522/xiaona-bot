@@ -118,13 +118,12 @@ export const AGENT_TOOLS = [
         type: 'object',
         properties: {
           song: { type: 'string', description: '歌名（可选，如《海阔天空》）' },
-          lyrics: { type: 'string', description: '要唱的歌词，4~8 句；不知道就先搜索，不要瞎编' },
-          style: { type: 'string', description: '唱法/情绪修饰（可选），如 温柔、磁性、粤语、慵懒。系统会自动在开头加 (唱歌) 标签，你不需要在 lyrics 里自己写 (唱歌)' },
+          lyrics: { type: 'string', description: '要唱的歌词，4~8 句；不知道就先搜索，不要瞎编。分行写也没关系，系统会合成一整行' },
         },
         required: ['lyrics'],
       },
     },
-    run: async (args, ctx) => ctx.sing(String(args.lyrics || '').trim(), String(args.style || '').trim(), String(args.song || '').trim()),
+    run: async (args, ctx) => ctx.sing(String(args.lyrics || '').trim(), String(args.song || '').trim()),
   },
   {
     minRole: 'guest',
