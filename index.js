@@ -677,9 +677,14 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         sing: async (lyrics, style = '', song = '') => {
             if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';
             if (!lyrics) return '没给歌词，唱不了；不知道歌词就先调用 web_search 搜「歌名 歌词」。';
-            const tag = style ? `(${style})` : '(唱歌)';
+            // (唱歌) 必须精确放在最开头才会进入唱歌模式，标签里多写别的词会退化成朗读；
+            // 所以 style 不拼进标签，改走 user 指令（只影响唱法，不会被读出来）
+            const clean = lyrics.replace(/^\s*[(（[]\s*(唱歌|sing|singing)\s*[)）\]]\s*/i, '');
+            const instruct = style
+                ? `用${style}的感觉演绎，保持旋律和节奏，唱出来而不是朗读。`
+                : '保持旋律和节奏，唱出来而不是朗读。';
             try {
-                await sendVoice(`${tag}${lyrics}`);
+                await sendVoice(`(唱歌)${clean}`, instruct);
                 return `已经把${song ? `《${song}》` : '这段歌'}唱出去了，不用在最终回复里再重复歌词，简短说一句就好。`;
             } catch (e) {
                 return `唱歌失败：${e.message}。可以把歌词用文字发出来。`;
@@ -789,7 +794,7 @@ function sanitizeOutgoing(text) {
 }
 
 // ---------- 发送 ----------
-async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false) {
+async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false, ttsInstruct = '') {
     // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
     if (Array.isArray(event.__replySink)) {
         const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
@@ -838,7 +843,7 @@ async function sendReply(event, message, wantVoice = false, withAt = false, mark
     const isSinging = typeof message === 'string' && /^\s*[(（[]\s*唱歌/.test(message);
     if (wantVoice && typeof message === 'string' && (message.length <= 300 || (isSinging && message.length <= 800))) {
         try {
-            const voicePath = await textToSpeech(message);
+            const voicePath = await textToSpeech(message, null, ttsInstruct);
             const vid = await doSend([segRecord(voicePath)]);
             cleanVoiceCache(50);
             logger.info('🎵 语音已发送');
@@ -2744,8 +2749,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
                     return t ? sendReply(event, t) : Promise.resolve();
                 },
                 // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
-                sendVoice: async (text) => {
-                    const ids = await sendReply(event, text, true, false, true);
+                sendVoice: async (text, instruct = '') => {
+                    const ids = await sendReply(event, text, true, false, true, instruct);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
                 },

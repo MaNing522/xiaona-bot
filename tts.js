@@ -102,8 +102,8 @@ export function buildXiaomiRequest(text, voice, model = XIAOMI_MODEL, instruct =
     return { model, messages, audio: { format: 'mp3', voice } };
 }
 
-/** 调一次小米 MiMo TTS，返回 mp3 字节 */
-async function synthesizeXiaomi(text, voice) {
+/** 调一次小米 MiMo TTS，返回 mp3 字节。instruct 会放进 user 消息，只影响语气，不会被读出来 */
+async function synthesizeXiaomi(text, voice, instruct = '') {
     const key = String(process.env.MIMO_API_KEY || '').trim();
     if (!key) throw new Error('没配 MIMO_API_KEY，无法使用小米 TTS');
     const res = await fetch(XIAOMI_URL, {
@@ -113,7 +113,7 @@ async function synthesizeXiaomi(text, voice) {
             'api-key': key,
             'Authorization': `Bearer ${key}`,   // OpenAI 兼容客户端走 Bearer，两个都带上最稳
         },
-        body: JSON.stringify(buildXiaomiRequest(text, voice, XIAOMI_MODEL, process.env.TTS_XIAOMI_INSTRUCT)),
+        body: JSON.stringify(buildXiaomiRequest(text, voice, XIAOMI_MODEL, instruct || process.env.TTS_XIAOMI_INSTRUCT)),
         signal: AbortSignal.timeout(XIAOMI_TIMEOUT_MS),
     });
     if (!res.ok) {
@@ -259,16 +259,17 @@ async function synthesize(text, voice, rate, volume) {
  * 语音里不带 emoji：先统一清掉，再交给当前后端合成。
  * @param {string} text 要朗读的文本（可带 (风格) 标签，小米 TTS 会当指令）
  * @param {string|null} voiceId 覆盖音色；不传用 .env 里的默认音色
+ * @param {string} [instruct] 给小米 TTS 的自然语言指令（如"用温柔的感觉唱"），只影响语气、不会被读出来
  * @returns {Promise<string>} 生成的音频路径（.mp3）
  */
-export async function textToSpeech(text, voiceId = null) {
+export async function textToSpeech(text, voiceId = null, instruct = '') {
     const body = stripEmoji(text);
     if (!body) throw new Error('没有可朗读的文本');
 
     if (ttsProvider() === 'xiaomi') {
         const voice = String(voiceId || '').trim() || xiaomiVoice();
         logger.info(`🔊 请求 TTS（小米 MiMo ${voice}）`);
-        const buffer = await synthesizeXiaomi(body, voice);
+        const buffer = await synthesizeXiaomi(body, voice, instruct);
         if (!buffer || !buffer.length) throw new Error('小米 TTS 没返回音频');
         const filepath = path.join(VOICE_DIR, `tts_${Date.now()}.mp3`);
         fs.writeFileSync(filepath, buffer);

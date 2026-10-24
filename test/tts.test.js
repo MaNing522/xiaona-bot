@@ -137,4 +137,16 @@ describe('textToSpeech（小米后端，mock fetch）', () => {
     expect(file.endsWith('.mp3')).toBe(true);
     expect(fs.readFileSync(file).equals(mp3)).toBe(true);
   });
+
+  it('唱歌的风格指令放进 user，不污染 (唱歌) 标签', async () => {
+    let body = null;
+    vi.stubGlobal('fetch', vi.fn(async (_url, opt) => {
+      body = JSON.parse(opt.body);
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { audio: { data: Buffer.from('x').toString('base64') } } }] }) };
+    }));
+
+    file = await textToSpeech('(唱歌)原谅我这一生', null, '用温柔的感觉唱');
+    expect(body.messages[0]).toEqual({ role: 'user', content: '用温柔的感觉唱' });
+    expect(body.messages.at(-1).content).toBe('(唱歌)原谅我这一生');
+  });
 });
