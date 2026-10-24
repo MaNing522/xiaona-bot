@@ -112,6 +112,23 @@ export const AGENT_TOOLS = [
   {
     minRole: 'guest',
     function: {
+      name: 'sing',
+      description: '唱一段歌给对方听：系统会把歌声合成语音并直接发出去（只有 QQ 聊天有语音，游戏内、网页试用不行）。歌词必须放在 lyrics；如果你记不全歌词，**先调用 web_search 搜「歌名 歌词」**，拿到歌词后再调用本工具；搜不到就直说不会唱这首，别瞎编歌词。唱 4~8 句就好，别整首唱完。歌词里不要带 emoji。',
+      parameters: {
+        type: 'object',
+        properties: {
+          song: { type: 'string', description: '歌名（可选，如《海阔天空》）' },
+          lyrics: { type: 'string', description: '要唱的歌词，4~8 句；不知道就先搜索，不要瞎编' },
+          style: { type: 'string', description: '唱法/情绪标签（可选），如 温柔、磁性、粤语、慵懒；不填默认用 (唱歌)' },
+        },
+        required: ['lyrics'],
+      },
+    },
+    run: async (args, ctx) => ctx.sing(String(args.lyrics || '').trim(), String(args.style || '').trim(), String(args.song || '').trim()),
+  },
+  {
+    minRole: 'guest',
+    function: {
       name: 'remember',
       description: '把一条值得长期记住的信息存入记忆（以后对话会用到）。仅当对方明确要求记住、或确实值得长期保存时使用。',
       parameters: {

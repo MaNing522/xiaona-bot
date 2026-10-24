@@ -457,7 +457,6 @@ ${step++}. **语音发送判断**：
    - 如果回复内容适合语音朗读（简短、自然、口语化），且用户有语音意图，标记：【VOICE:YES】
    - **重要**：当【VOICE:YES】时，回复文本必须是纯语音内容，不要添加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
    - **风格标签**：语音内容开头用一对括号写一个风格词，用来指定语气，例如 (温柔) (开心) (俏皮) (慵懒) (磁性) (怅然) (怅然 低沉) (东北话) (粤语)。标签只是给语音引擎的指令，不会被读出来；可以写多个风格词。
-   - **唱歌**：对方点歌、让你唱一段或哼两句时，开头写 (唱歌)，后面直接跟歌词，例如：(唱歌)原谅我这一生不羁放纵爱自由，也会怕有一天会跌倒。歌词用中文效果最好。
    - 语音内容里**不要**出现 emoji、颜文字或表情符号，只写要被读出来的字。
    - 否则标记：【VOICE:NO】
 
@@ -487,11 +486,13 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, userId = '', sessionNote = '', ctx = {} }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {} }) {
     let tools = toolsForRole(role);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
     // 图片识别工具只在"本条消息真的带图片"时才给模型，免得它对着纯文字消息瞎调
     if (!allowImage) tools = tools.filter((t) => t.function.name !== 'analyze_image');
+    // 唱歌工具只在会话允许语音时开放（关闭语音后模型看不到，免得唱了发不出去）
+    if (!allowVoice) tools = tools.filter((t) => t.function.name !== 'sing');
 
     const sys = getSystemPrompt();
     const messages = [
@@ -648,9 +649,9 @@ async function analyzeImages(segs, question) {
  * 组装当前会话的工具上下文。
  * @param {string} key  记忆/会话键
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
- * @param {object} [o]  { images, notify }：本条消息的图片段，以及"给用户发中间消息"的回调
+ * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
@@ -672,6 +673,18 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null } = {}) {
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
+        // 唱歌：模型给歌词，这里拼上风格标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
+        sing: async (lyrics, style = '', song = '') => {
+            if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';
+            if (!lyrics) return '没给歌词，唱不了；不知道歌词就先调用 web_search 搜「歌名 歌词」。';
+            const tag = style ? `(${style})` : '(唱歌)';
+            try {
+                await sendVoice(`${tag}${lyrics}`);
+                return `已经把${song ? `《${song}》` : '这段歌'}唱出去了，不用在最终回复里再重复歌词，简短说一句就好。`;
+            } catch (e) {
+                return `唱歌失败：${e.message}。可以把歌词用文字发出来。`;
+            }
+        },
         // AI 累积好感度：默认 50%，按表现增减，受档位上限约束（主人固定 100%）
         adjustFavor: (delta, reason) => {
             if (!uid) return '（当前是试用会话，不记录好感度。）';
@@ -821,8 +834,9 @@ async function sendReply(event, message, wantVoice = false, withAt = false, mark
         }
     }
 
-    // 语音
-    if (wantVoice && typeof message === 'string' && message.length <= 300) {
+    // 语音：唱歌（带 (唱歌) 标签）放宽长度限制，一段歌词往往超过 300 字
+    const isSinging = typeof message === 'string' && /^\s*[(（[]\s*唱歌/.test(message);
+    if (wantVoice && typeof message === 'string' && (message.length <= 300 || (isSinging && message.length <= 800))) {
         try {
             const voicePath = await textToSpeech(message);
             const vid = await doSend([segRecord(voicePath)]);
@@ -2710,6 +2724,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
         // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别（工具里会先告诉用户"稍等"）
         const imgs = imageSegmentsOf(event.message);
+        // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
+        let voiceSent = false;
         const result = await aiReply({
             metaLine,
             memory: mem,
@@ -2717,6 +2733,7 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             allowSkip,
             allowSearch: searchEnabled(),
             allowImage: imgs.length > 0 && visionEnabled(),
+            allowVoice: cs.voice,
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             ctx: buildAgentCtx(convKey(event), String(event.user_id), {
@@ -2725,6 +2742,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
                 notify: (text) => {
                     const t = stripToolTags(String(text)).trim();
                     return t ? sendReply(event, t) : Promise.resolve();
+                },
+                // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
+                sendVoice: async (text) => {
+                    const ids = await sendReply(event, text, true, false, true);
+                    if (Array.isArray(ids) && ids.length) voiceSent = true;
+                    return ids;
                 },
             }),
         });
@@ -2743,7 +2766,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         let parts = splitReplies(reply)
             .map((t) => t.trim())
             .filter(Boolean);
-        if (!parts.length) { parts = ['嗯？我没听懂，能再说一遍吗？']; wantVoice = false; }
+        if (!parts.length) {
+            // 歌已经用语音发出去了，模型没再补文字就别再发"没听懂"
+            if (voiceSent) { logger.info('✅ 语音已通过工具发送，无补充文字'); return; }
+            parts = ['嗯？我没听懂，能再说一遍吗？'];
+            wantVoice = false;
+        }
 
         // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
         const withAt = event.message_type === 'group';
