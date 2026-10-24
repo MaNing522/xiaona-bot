@@ -111,6 +111,14 @@ function waitPort(port, timeoutMs) {
 }
 
 // ---------- 本地语音识别服务（FunASR） ----------
+// 后台隐藏运行时控制台输出看不到，ASR 的启动过程单独记一份文件日志，方便排查
+const ASR_LOG = path.join(__dirname, 'logs', 'asr-service.log');
+function asrLog(msg) {
+  const line = `${stamp()} ${msg}`;
+  console.log(`[启动器] ${msg}`);
+  try { fs.appendFileSync(ASR_LOG, line + '\r\n'); } catch { /* 日志写不了就算了 */ }
+}
+
 /** 端口是否已被监听（ASR 已由别人/上次启动拉起来时就不用再起一个） */
 function portIsOpen(port, timeoutMs = 1200) {
   return new Promise((resolve) => {
@@ -147,26 +155,28 @@ function asrLocalPort() {
 async function ensureAsrService() {
   if (!ASR_ENABLED) return null;
   const port = asrLocalPort();
-  if (!port) return null;
+  if (!port) { asrLog('语音识别指向外部地址，启动器不拉起本地服务'); return null; }
   if (await portIsOpen(port)) {
-    console.log(`[启动器] 语音识别服务已在运行（127.0.0.1:${port}）`);
+    asrLog(`语音识别服务已在运行（127.0.0.1:${port}）`);
     return null;
   }
   const exe = path.join(__dirname, 'asr-venv', 'Scripts', 'funasr-server.exe');
   if (!fs.existsSync(exe)) {
-    console.log('[启动器] 未找到本地语音识别服务（asr-venv\\Scripts\\funasr-server.exe），语音消息将只显示 [语音]');
+    asrLog('未找到本地语音识别服务（asr-venv\\Scripts\\funasr-server.exe），语音消息将只显示 [语音]');
     return null;
   }
-  console.log(`[启动器] 启动本地语音识别服务（FunASR SenseVoice，端口 ${port}），模型加载需要十几秒...`);
+  asrLog(`启动本地语音识别服务（FunASR SenseVoice，端口 ${port}），模型加载需要十几秒...`);
   const proc = spawn(
     exe,
     ['--host', '127.0.0.1', '--port', String(port), '--model', 'sensevoice', '--device', 'cpu'],
     { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
   );
-  const pipe = (chunk) => String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [ASR] ${l.trim()}`));
+  asrLog(`语音识别服务进程已拉起（pid=${proc.pid || '未知'}）`);
+  const pipe = (chunk) => String(chunk).split(/\r?\n/).forEach((l) => l.trim() && asrLog(`[ASR] ${l.trim()}`));
   proc.stdout.on('data', pipe);
   proc.stderr.on('data', pipe);
-  proc.on('exit', (code) => console.log(`[启动器] 语音识别服务已退出（code=${code}），语音消息将只显示 [语音]`));
+  proc.on('error', (e) => asrLog(`语音识别服务启动失败：${e.message}`));
+  proc.on('exit', (code) => asrLog(`语音识别服务已退出（code=${code}），语音消息将只显示 [语音]`));
   return proc;
 }
 

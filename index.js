@@ -131,7 +131,8 @@ function logFeatureStates() {
 async function checkAsrService() {
     if (!asrEnabled()) return;
     const url = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions');
-    for (let i = 0; i < 6; i++) {
+    // 启动器刚拉起 FunASR 时模型要加载 1~3 分钟（首次还要下载），10 秒一轮、最多等 3 分钟
+    for (let i = 0; i < 18; i++) {
         try {
             // 该接口只收 POST，GET 会回 405——能拿到任何 HTTP 响应就说明服务活着
             await fetch(url, { signal: AbortSignal.timeout(3000) });
