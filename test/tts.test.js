@@ -35,6 +35,11 @@ describe('buildSsml', () => {
     expect(s).toContain("rate='+8%'");
   });
 
+  it('带上音量，不传时默认 +0%', () => {
+    expect(buildSsml('你好', 'zh-CN-XiaoxiaoNeural', '+0%', '+100%')).toContain("volume='+100%'");
+    expect(buildSsml('你好', 'zh-CN-XiaoxiaoNeural', '+0%')).toContain("volume='+0%'");
+  });
+
   it('对文本里的 XML 特殊字符做转义', () => {
     const s = buildSsml('a < b & c > d', 'zh-CN-XiaoxiaoNeural', '+0%');
     expect(s).toContain('a &lt; b &amp; c &gt; d');

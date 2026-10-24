@@ -5,9 +5,10 @@
 // 和 Python 的 edge-tts 用的是同一套协议：先发 speech.config，再发 SSML，
 // 服务端回来的二进制分片（每片前 2 字节是大端长度）拼起来就是 mp3。
 //
-// 音色 / 语速走 .env：
+// 音色 / 语速 / 音量走 .env：
 //   TTS_VOICE  音色短名，默认 zh-CN-XiaoxiaoNeural（女声 XiaoXiao）
 //   TTS_RATE   语速增减
+//   TTS_VOLUME 音量增减（SSML prosody volume，Edge 常用 -100% ~ +100%）
 //   完整音色表：edge-tts --list-voices（或看名字规律 zh-CN-<名>Neural）
 //
 // 说明：接口免密钥、无需安装任何东西（只用到项目已有的 ws 依赖）。
@@ -30,6 +31,7 @@ if (!fs.existsSync(VOICE_DIR)) fs.mkdirSync(VOICE_DIR, { recursive: true });
 
 const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';   // 女声 XiaoXiao
 const DEFAULT_RATE = '+8%';
+const DEFAULT_VOLUME = '+0%';
 const SYNTH_TIMEOUT_MS = 20000;
 
 // Edge 朗读接口的固定参数（与 edge-tts 保持一致）
@@ -48,6 +50,8 @@ function voiceName() {
     return /^[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+Neural$/.test(v) ? v : DEFAULT_VOICE;
 }
 function rateValue() { return String(process.env.TTS_RATE || DEFAULT_RATE).trim(); }
+/** 音量（SSML prosody volume）：相对默认音量的增减，如 +50% / -30%；Edge 一般只接受 -100%~+100% */
+function volumeValue() { return String(process.env.TTS_VOLUME || DEFAULT_VOLUME).trim(); }
 
 /** Edge 的 Sec-MS-GEC 校验值（v2 格式，见 edgeDrm.js）：时间戳拼上固定 token 后的两段哈希 */
 export function secMsGec(nowMs = Date.now()) {
@@ -72,9 +76,9 @@ function escXml(s) {
 }
 
 /** 拼 SSML（导出是为了单测能验证转义） */
-export function buildSsml(text, voice, rate) {
+export function buildSsml(text, voice, rate, volume = DEFAULT_VOLUME) {
     return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>`
-        + `<voice name='${voice}'><prosody pitch='+0Hz' rate='${rate}' volume='+0%'>`
+        + `<voice name='${voice}'><prosody pitch='+0Hz' rate='${rate}' volume='${volume}'>`
         + `${escXml(text)}</prosody></voice></speak>`;
 }
 
@@ -93,15 +97,15 @@ function configMessage() {
         });
 }
 
-function ssmlMessage(text, voice, rate) {
+function ssmlMessage(text, voice, rate, volume) {
     return `X-RequestId:${crypto.randomUUID().replace(/-/g, '')}\r\n`
         + 'Content-Type:application/ssml+xml\r\n'
         + `X-Timestamp:${edgeTimestamp()}Z\r\nPath:ssml\r\n\r\n`   // 末尾这个 Z 是 Edge 的老毛病，得照抄
-        + buildSsml(text, voice, rate);
+        + buildSsml(text, voice, rate, volume);
 }
 
 /** 连一次 Edge 朗读接口，把文本合成 mp3 字节 */
-function synthesizeOnce(text, voice, rate) {
+function synthesizeOnce(text, voice, rate, volume) {
     const url = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'
         + `?TrustedClientToken=${TRUSTED_TOKEN}`
         + `&ConnectionId=${crypto.randomUUID().replace(/-/g, '')}`
@@ -134,7 +138,7 @@ function synthesizeOnce(text, voice, rate) {
 
         ws.on('open', () => {
             ws.send(configMessage());
-            ws.send(ssmlMessage(text, voice, rate));
+            ws.send(ssmlMessage(text, voice, rate, volume));
         });
         ws.on('message', (data, isBinary) => {
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -162,16 +166,16 @@ function synthesizeOnce(text, voice, rate) {
 }
 
 /** 连一次不行就校准时钟再试一次（本机时间偏差会让 Sec-MS-GEC 直接过期） */
-async function synthesize(text, voice, rate) {
+async function synthesize(text, voice, rate, volume) {
     try {
-        return await synthesizeOnce(text, voice, rate);
+        return await synthesizeOnce(text, voice, rate, volume);
     } catch (e) {
         if (e.statusCode !== 403 || !e.serverDate) throw e;
         const serverMs = Date.parse(e.serverDate);
         if (!Number.isFinite(serverMs)) throw e;
         clockSkewMs = serverMs - Date.now();
         logger.warn(`⚠️ Edge TTS 返回 403，按服务器时间校准本机时钟 ${Math.round(clockSkewMs / 1000)} 秒后重试`);
-        return await synthesizeOnce(text, voice, rate);
+        return await synthesizeOnce(text, voice, rate, volume);
     }
 }
 
@@ -186,9 +190,10 @@ export async function textToSpeech(text, voiceId = null) {
     if (!body) throw new Error('没有可朗读的文本');
     const voice = String(voiceId || '').trim() || voiceName();
     const rate = rateValue();
+    const volume = volumeValue();
 
-    logger.info(`🔊 请求 TTS（Edge ${voice} ${rate}）`);
-    const buffer = await synthesize(body, voice, rate);
+    logger.info(`🔊 请求 TTS（Edge ${voice} 语速 ${rate} 音量 ${volume}）`);
+    const buffer = await synthesize(body, voice, rate, volume);
     if (!buffer || !buffer.length) throw new Error('Edge TTS 没返回音频');
 
     const filepath = path.join(VOICE_DIR, `tts_${Date.now()}.mp3`);
