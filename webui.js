@@ -212,21 +212,37 @@ const PANEL_USER = process.env.WEBUI_USER || 'admin';
 // 密码只从 .env 读，代码里不留任何默认值：没配就直接拒绝启动（fail-closed），
 // 避免出现"忘了配密码 → 面板用一个人所共知的默认密码裸奔"的情况
 const PANEL_PASS = process.env.WEBUI_PASSWORD || '';
-const SESSION_TTL = 120 * 60 * 1000;       // 登录有效期 120 分钟
+const SESSION_TTL = 24 * 60 * 60 * 1000;    // 登录有效期 24 小时（非正常退出也按这个保留）
+const SESSION_FILE = path.join(__dirname, 'data', 'webui-sessions.json');
 const CAPTCHA_TTL = 3 * 60 * 1000;         // 验证码 3 分钟
 const CAPTCHA_AFTER_FAILS = 5;             // 连续输错密码达到这个次数后，才要求人机验证
 const LOGIN_MAX_FAIL = 10;                 // 连续失败上限（含验证码错误），超过则封 5 分钟
 const LOGIN_BLOCK_MS = 5 * 60 * 1000;      // 超过上限封 5 分钟
 
-const sessions = new Map();    // token → 过期时间
+// token → 过期时间。落盘保存：机器人重启、浏览器异常关闭（没点退出登录）都不会丢会话，
+// 只有主动调用 /api/logout 或超过 24 小时才失效。
+const sessions = new Map();
 const preAuth = new Map();     // 预登录 id → { answer, exp }
 const failLog = new Map();     // ip → { n, until }
 
+// 启动时恢复上次的登录会话（只认格式正确且未过期的）
+for (const [token, exp] of Object.entries(readJsonSafe(SESSION_FILE, {}, 'webui-sessions.json') || {})) {
+  if (/^[0-9a-f]{64}$/.test(token) && Number(exp) > Date.now()) sessions.set(token, Number(exp));
+}
+
+function saveSessions() {
+  const obj = {};
+  for (const [token, exp] of sessions) obj[token] = exp;
+  writeJsonAtomic(SESSION_FILE, obj);
+}
+
 function sweepAuth() {
   const now = Date.now();
-  for (const [k, exp] of sessions) if (now > exp) sessions.delete(k);
+  let changed = false;
+  for (const [k, exp] of sessions) if (now > exp) { sessions.delete(k); changed = true; }
   for (const [k, v] of preAuth) if (now > v.exp) preAuth.delete(k);
   for (const [k, v] of failLog) if (v.until && now > v.until) failLog.delete(k);
+  if (changed) saveSessions();
 }
 
 function parseCookies(req) {
@@ -263,7 +279,10 @@ function authed(req) {
   const token = parseCookies(req).xn_sess;
   if (!/^[0-9a-f]{64}$/.test(token || '')) return false;
   const exp = sessions.get(token);
-  if (!exp || Date.now() > exp) { sessions.delete(token); return false; }
+  if (!exp || Date.now() > exp) {
+    if (sessions.delete(token)) saveSessions();
+    return false;
+  }
   return true;
 }
 
@@ -676,6 +695,7 @@ async function route(req, res, url) {
     failLog.delete(ip);
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, Date.now() + SESSION_TTL);
+    saveSessions();
     logger.info(`🔓 面板登录成功（${ip}）`);
     res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`);
     return sendJSON(res, 200, { ok: true });
@@ -683,7 +703,7 @@ async function route(req, res, url) {
 
   if (url.pathname === '/api/logout') {
     const token = parseCookies(req).xn_sess;
-    if (token) sessions.delete(token);
+    if (token && sessions.delete(token)) saveSessions();
     // 退出登录也丢弃**本客户端**的试用会话（不落盘），并清掉试用客户端 Cookie
     if (trialReset) trialReset(parseCookies(req)[TRIAL_COOKIE]);
     res.setHeader('Set-Cookie', [
