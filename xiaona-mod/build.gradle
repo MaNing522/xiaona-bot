@@ -2,7 +2,7 @@ plugins {
     id 'fabric-loom' version '1.14.4'
 }
 
-version = '2.8.0'
+version = '2.9.0'
 group = 'com.xiaona'
 
 repositories {
@@ -46,3 +46,5 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+// 注：`gradlew build` 会同时构建根项目（1.21.11）与各子项目（1.21.1 / 1.21.8）；
+// 只构建某一个版本时用 `gradlew :fabric-1.21.1:build`。

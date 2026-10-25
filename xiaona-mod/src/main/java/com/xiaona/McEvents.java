@@ -343,10 +343,6 @@ public class McEvents {
     }
 
     public static boolean isOp(MinecraftServer server, ServerPlayerEntity p) {
-        try {
-            return server.getPlayerManager().isOperator(p.getPlayerConfigEntry());
-        } catch (Exception e) {
-            return false;
-        }
+        return Compat.isOp(server, p);
     }
 }

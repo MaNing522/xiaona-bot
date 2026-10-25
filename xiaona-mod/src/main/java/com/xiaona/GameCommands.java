@@ -49,7 +49,7 @@ public final class GameCommands {
             server.execute(() -> {
                 try {
                     ServerCommandSource src = server.getCommandSource().withOutput(out);
-                    server.getCommandManager().parseAndExecute(src, command);
+                    Compat.executeCommand(server, src, command);
                 } catch (Throwable t) {
                     sb.append("执行出错：").append(t.getMessage());
                 } finally {

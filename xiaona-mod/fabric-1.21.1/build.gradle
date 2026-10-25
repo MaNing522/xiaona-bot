@@ -1,0 +1,70 @@
+plugins {
+    id 'fabric-loom' version '1.14.4'
+}
+
+// 1.21.1 构建：用旧版 Yarn 映射，把根项目的共享源码 + legacy 覆盖层合起来编译。
+// 覆盖层里是与 1.21.11 写法不同、但 1.21.1 / 1.21.8 都通用的文件（GameProfile、executeWithPrefix 等）。
+def mcVersion = '1.21.1'
+def yarnVersion = '1.21.1+build.3'
+def loaderVersion = '0.19.5'
+def fabricApiVersion = '0.116.17+1.21.1'
+
+version = rootProject.version
+group = 'com.xiaona'
+
+base {
+    archivesName = "xiaona-mod-${mcVersion}"
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://maven.fabricmc.net/' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${mcVersion}"
+    mappings "net.fabricmc:yarn:${yarnVersion}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+    // 只读 Paradigm 的 SQLite 封禁库，和主 jar 一样嵌进 mod
+    implementation 'org.xerial:sqlite-jdbc:3.46.1.3'
+    include 'org.xerial:sqlite-jdbc:3.46.1.3'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// 共享源码 + 覆盖层合成一份再编译：同名文件由 legacy 覆盖层胜出
+def mergedJava = file("$buildDir/merged-src/java")
+def mergedRes = file("$buildDir/merged-src/resources")
+
+def mergeSources = tasks.register('mergeSources', Sync) {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE   // 先共享、后覆盖层，同名文件后者胜出
+    from(rootProject.file('src/main/java'))
+    from(rootProject.file('legacy/src/main/java'))
+    into(mergedJava)
+}
+def mergeResources = tasks.register('mergeResources', Sync) {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE   // 本版本的 fabric.mod.json 覆盖共享那份
+    from(rootProject.file('src/main/resources'))
+    from(file('src/main/resources'))
+    into(mergedRes)
+}
+
+sourceSets.main.java.setSrcDirs([mergedJava])
+sourceSets.main.resources.setSrcDirs([mergedRes])
+tasks.named('compileJava') { dependsOn mergeSources }
+tasks.named('processResources') { dependsOn mergeResources }
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}

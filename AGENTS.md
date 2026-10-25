@@ -23,7 +23,7 @@
 | 部分 | 位置 | 说明 |
 |---|---|---|
 | QQ 机器人 | `c:\QQBot`（Node） | NapCat + OneBot 11。AI 对话、游戏ID绑定、MC 桥接 |
-| MC 服务端 mod | `c:\QQBot\xiaona-mod` | Fabric 1.21.11 / Java 21，跑在 Minecraft 服务器上 |
+| MC 服务端 mod | `c:\QQBot\xiaona-mod` | Fabric 多版本（1.21.11 / 1.21.8 / 1.21.1），Java 21，跑在 Minecraft 服务器上 |
 
 ## 3. 架构与数据流（理解这个才不会做错设计）
 
@@ -57,8 +57,10 @@ bot 侧：[binding.js](file:///c:/QQBot/binding.js) 绑定/解绑后 `notifyChan
 ## 5. 常用命令
 
 ```powershell
-# mod：构建（产物 build\libs\xiaona-mod-<ver>.jar）/ 跑测试
-cd c:\QQBot\xiaona-mod; .\gradlew.bat build; .\gradlew.bat test
+# mod：构建全部 Fabric 版本（根项目 1.21.11 + 子项目 1.21.1 / 1.21.8）
+cd c:\QQBot\xiaona-mod; .\gradlew.bat build
+# 只构建某个版本：.\gradlew.bat :fabric-1.21.1:build（或 :fabric-1.21.8:build）
+# 根项目单测：.\gradlew.bat test
 
 # bot：测试（vitest，约 112 用例）/ 静态检查
 cd c:\QQBot; npm test; npx eslint <file>
@@ -80,6 +82,10 @@ cd c:\QQBot; .\restart.bat
 ## 6. 约定与文件地图
 
 - 版本号在 [xiaona-mod/build.gradle](file:///c:/QQBot/xiaona-mod/build.gradle)，**每次加功能递增**。
+- **多版本构建（Fabric）**：根项目仍是 1.21.11（源码在 `src/main/java`，产物 `build/libs/xiaona-mod-<ver>.jar`）；`fabric-1.21.1` / `fabric-1.21.8` 是子项目，构建时用 `Sync` 把「根项目共享源码 + `legacy/src/main/java` 覆盖层」合成到各自的 `build/merged-src` 再编译，产物 `fabric-<ver>/build/libs/xiaona-mod-<mc>-<ver>.jar`。
+  - `legacy/` 只放旧版（1.21.1 / 1.21.8 同代 API）确有差异的文件：`WhitelistGate`（`GameProfile` 版）、`VanillaBanProvider`（反射读 `ServerConfigEntry#getKey`）、`mixin/PlayerManagerMixin`（`checkCanJoin(SocketAddress, GameProfile)`）、`Compat`（`executeWithPrefix` / `isOperator(GameProfile)`）。
+  - 共享代码里凡涉及这些差异的，一律走 `Compat`，不要直接写版本专属 API。
+  - **26.x 还没支持**：Yarn 映射止于 1.21.11；26.x 用 Mojang 官方名（没有 intermediary）且要求 Java 25，需要单独做映射改写与 JDK 25 构建环境。
 - 注释、日志、提交信息一律用**中文**（用户偏好）。
 - bot：`index.js` 入口与命令分发、`agent.js`（AI 工具调用 agent：工具注册 + 按身份过滤 + 循环；工具含 web_search/analyze_image/mc_status/player_query/ai_balance/mc_command/adjust_favor/sing/remember/recall_memory。**sing 是普通工具**，模型给歌词后由 `index.js` 的 `ctx.sing` 把歌词**压成一行**、拼 `(唱歌)` 标签后合成语音直接发出，QQ 场景才开放；记不住歌词时模型应先 web_search 搜歌词）、`aiService.js`（服务商/模型/请求，含 `chatCompletionRaw`）、`binding.js` 游戏ID绑定、`permission.js` 授权与等级、`mcbridge.js` MC 桥客户端、`chatSettings.js`（会话级设置：群/私聊各自覆盖全局，落盘 `data/chat-settings.json`）、`asr.js`（语音识别：调**本地 FunASR/SenseVoice** 的 OpenAI 兼容接口，服务由 `start.js` 自动拉起（venv 在 `asr-venv`，也可手动跑 `startASR.bat` 看日志）；**amr/silk 会先经 `setAudioConverter` 注入的 NapCat `get_record(out_format=wav)` 转码**，识别结果再按 config.json 的 `asr.homophones` 做**同音纠正**把小娜/小纳改回小钠）、`tts.js`（语音合成：`TTS_PROVIDER` 切换后端。默认 **小米 MiMo TTS**（`mimo-v2.5-tts`，OpenAI 兼容 `POST https://api.xiaomimimo.com/v1/chat/completions`，目标文本放 `role=assistant`，文本开头写 `(风格)` 标签控制语气；**唱歌必须精确用 `(唱歌)` 开头，且整段歌词不能有换行**——标签里多写别的词（如 `(唱歌 温柔)`）、歌词分行、或额外带 `role=user` 的风格指令，都会退化成朗读（实测同段歌词：一行 43s 真唱 vs 分行+指令 26.7s 朗读），返回 `choices[0].message.audio.data` base64；密钥 `.env` 的 `MIMO_API_KEY`，音色 `TTS_XIAOMI_VOICE` 默认 `冰糖`）；配不到 key 或 `TTS_PROVIDER=edge` 时回退**微软 Edge 朗读服务**（协议同 Python 的 `edge-tts`，音色/语速/音量读 `TTS_VOICE`/`TTS_RATE`/`TTS_VOLUME`，`edgeDrm.js` 是它的 Sec-MS-GEC v2 令牌算法）。送进 TTS 前统一用 `stripEmoji` 去掉 emoji/颜文字，语音里不带表情）、`edgeDrm.js`（**Edge TTS 的 DRM 令牌**：v2 格式为「16 位 CS64-64 位 SHA256」，两段哈希都是微软魔改版，逐位移植自 edge-tts 的 `drm.py`；改这里要拿 Python `edge-tts` 的 `generate_sec_ms_gec_v2` 对拍）、`help.js` 帮助文案、`prompt.txt` AI 人设、`push.bat` 推送、`restart.bat` 重启（自提权 + 注册计划任务 + 隐藏启动）、`background.vbs` 隐藏窗口启动器（开机自启任务调用它）。
 - **配置分工**：`.env` 放密钥/账号/开关等部署项；**数值类可调项（限速、冷却、唤起会话）与「会话层全局默认（chat：是否回复/关键词/语音/补充提示词）放 `config.json`**，由 `config.js` 读取（支持 `//` 注释，缺字段自动兜底）。改这些数值请改 config.json，不要再往 .env 加 `RL_*` / `FORWARD_*`。

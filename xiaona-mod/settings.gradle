@@ -7,3 +7,8 @@ pluginManagement {
 }
 
 rootProject.name = 'xiaona-mod'
+
+// 多版本：根项目继续是 1.21.11（映射最新，源码在 src/main/java）；
+// 旧版 1.21.x 作为子项目，用同一份共享源码 + legacy 覆盖层重新编译。
+include 'fabric-1.21.1'
+include 'fabric-1.21.8'
