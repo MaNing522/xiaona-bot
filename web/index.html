@@ -416,16 +416,39 @@ function rollNum(el,to){
 }
 // 日志渲染：逐行成 div，只给"新出现的尾部行"加淡入动画（避免每次刷新整块重放）
 const _logSeen=new Map();
+// 距离底部多少像素内算"贴在底部"：只有贴底才自动跟随
+const LOG_BOTTOM_GAP=32;
+function logAtBottom(el){
+  return el.scrollHeight-el.scrollTop-el.clientHeight<=LOG_BOTTOM_GAP;
+}
 function renderLog(id,lines){
   const el=$(id); if(!el) return;
+  const visible=el.clientHeight>0;              // 面板隐藏时 clientHeight 为 0
+  const wasVisible=el.__logVisible===true;
+  el.__logVisible=visible;
+  // 用户往上翻看历史时暂停刷新：不重建 DOM、不抢滚动位置，滑动不会被定时刷新打断；
+  // 回到底部后下一轮自动补齐并继续跟随。面板从隐藏切回可见时也恢复自动跟随。
+  if(visible && wasVisible && !logAtBottom(el)) return;
   const prev=_logSeen.get(id)||[];
   let p=0; while(p<prev.length&&p<lines.length&&prev[p]===lines[p])p++;
   const onlyAppended = prev.length>0 && p===prev.length && lines.length>=prev.length;
-  el.innerHTML=lines.map((l,i)=>{
-    const esc=String(l).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-    return '<div class="ln'+(onlyAppended&&i>=prev.length?' ln-new':'')+'">'+esc+'</div>';
-  }).join('');
-  el.scrollTop=el.scrollHeight;
+  if(onlyAppended){
+    // 只追加新行，不重建已有 DOM：不会打断正在进行的滑动或文本选中
+    const frag=document.createDocumentFragment();
+    for(let i=prev.length;i<lines.length;i++){
+      const d=document.createElement('div');
+      d.className='ln ln-new';
+      d.textContent=String(lines[i]);
+      frag.appendChild(d);
+    }
+    el.appendChild(frag);
+  }else{
+    el.innerHTML=lines.map((l)=>{
+      const esc=String(l).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      return '<div class="ln">'+esc+'</div>';
+    }).join('');
+  }
+  if(visible) el.scrollTop=el.scrollHeight;   // 贴底时继续自动滑动
   _logSeen.set(id,lines.slice());
 }
 
