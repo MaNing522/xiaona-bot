@@ -692,6 +692,7 @@ async function route(req, res, url) {
   if (url.pathname === '/api/perms') {
     return sendJSON(res, 200, {
       owner: perm.getOwner(),
+      ownerBackup: perm.getOwnerBackup(),
       admins: (process.env.BOT_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean),
       authorized: perm.listAuthorized(),
       pending: perm.listPending(),

@@ -141,7 +141,7 @@ gradlew.bat build
 |---|---|---|
 | SnowLuma | `ONEBOT_WS` / `ONEBOT_TOKEN` | OneBot11 连接地址与 token（会自动写进 `snowluma/config/onebot.json`） |
 | SnowLuma | `QQ_PATH` / `QQ_AUTOLAUNCH` | 桌面 QQ 路径（留空用默认安装位置）、QQ 未运行时是否自动拉起 |
-| 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
+| 身份 | `BOT_OWNER` / `BOT_OWNER_BACKUP` / `BOT_ADMINS` | 主人（可执行 `/授权`）、主人备用账号（预留，填了同权）、管理员 |
 | AI | `AI_PROVIDER` / `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 服务商（`deepseek`/`openai`/`custom`，默认 deepseek）；URL 与模型留空则用所选服务商的默认值 |
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
 | 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
@@ -180,13 +180,13 @@ gradlew.bat build
 
 | 档位 | 来源 | 能用 |
 |---|---|---|
-| 👑 主人 | `BOT_OWNER` 或 `#授权 <QQ> 0` | 全部命令 + 主人专属 |
+| 👑 主人 | `BOT_OWNER` / `BOT_OWNER_BACKUP`（预留）或 `#授权 <QQ> 0` | 全部命令 + 主人专属 |
 | 🛡️ 管理员 | `BOT_ADMINS` 或 `#授权 <QQ> 1` | 授权用户全部 + 群管、定时、`#余额`、`#强制解绑` |
 | ✅ 授权用户 | `#申请授权` 由主人审批（或 `#授权 <QQ> 2`） | 普通用户全部 + 工具（`#截图` / `#shot`、`#聊天记录`） |
 | 👤 普通用户 | 默认（未授权），或 `#授权 <QQ> 3` | 公开命令：帮助 / 状态 / 查询 / mc / 申请授权、绑定、记忆 |
 | 🚫 黑名单 | `#授权 <QQ> 4` | 不响应其消息（命令、AI、验证码都不理），但群里消息照常转发进游戏 |
 
-> `#授权 <@或QQ号> [等级]`：等级 0主人 / 1管理员 / 2授权用户 / 3普通 / 4黑名单，**不填为 2**。`.env` 的 `BOT_OWNER` / `BOT_ADMINS` 是写死的最高身份，命令无法降级它们。
+> `#授权 <@或QQ号> [等级]`：等级 0主人 / 1管理员 / 2授权用户 / 3普通 / 4黑名单，**不填为 2**。`.env` 的 `BOT_OWNER` / `BOT_OWNER_BACKUP`（主人备用账号，预留） / `BOT_ADMINS` 是写死的最高身份，命令无法降级它们。
 
 **主人专属**（不下放给管理员）：`#授权` / `#拒绝授权` / `#取消授权`、`#换名` / `#换头像`、`#接管` / `#恢复AI`、`#同意` / `#拒绝`（审批）。
 

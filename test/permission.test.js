@@ -3,18 +3,21 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { init, role, setLevel, setLevelBy, canManage, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners } from '../src/permission.js';
+import { init, role, setLevel, setLevelBy, canManage, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners, getOwnerBackup } from '../src/permission.js';
 
 const ENV_OWNER = '1000';
 const ENV_ADMIN = '2000';
 let dir;
 let savedOwner;
+let savedBackup;
 let savedAdmins;
 
 beforeEach(() => {
   savedOwner = process.env.BOT_OWNER;
+  savedBackup = process.env.BOT_OWNER_BACKUP;
   savedAdmins = process.env.BOT_ADMINS;
   process.env.BOT_OWNER = ENV_OWNER;
+  process.env.BOT_OWNER_BACKUP = '';
   process.env.BOT_ADMINS = ENV_ADMIN;
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-perm-'));
   init(dir);
@@ -22,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env.BOT_OWNER = savedOwner;
+  process.env.BOT_OWNER_BACKUP = savedBackup;
   process.env.BOT_ADMINS = savedAdmins;
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -119,5 +123,21 @@ describe('setLevelBy / canManage（管理员及以上受限放权）', () => {
   it('授权用户/普通用户无权执行', () => {
     expect(setLevelBy('3001', '3002', 2).ok).toBe(false); // 普通用户
     expect(canManage('3001', '3002').ok).toBe(false);
+  });
+});
+
+describe('主人备用账号（预留）', () => {
+  it('留空时不生效', () => {
+    expect(getOwnerBackup()).toBe('');
+    expect(role('4000')).toBe('guest');
+  });
+
+  it('填写后与主人同权，且不能被命令降级', () => {
+    process.env.BOT_OWNER_BACKUP = '4000';
+    init(dir);
+    expect(getOwnerBackup()).toBe('4000');
+    expect(role('4000')).toBe('owner');
+    expect(setLevel('4000', 2).ok).toBe(false);
+    expect(role('4000')).toBe('owner');
   });
 });

@@ -6,7 +6,8 @@
 //
 // 等级式管理（#授权 <@或QQ> <等级>）：
 //   0 主人 / 1 管理员 / 2 授权用户 / 3 普通用户 / 4 黑名单（不响应，转发除外），默认 2
-// .env 里的 BOT_OWNER / BOT_ADMINS 是「写死」的最高身份，命令改不动它们（需改 .env）。
+// .env 里的 BOT_OWNER / BOT_OWNER_BACKUP / BOT_ADMINS 是「写死」的最高身份，命令改不动它们（需改 .env）。
+// BOT_OWNER_BACKUP 是主人备用账号（预留）：填了同样拥有主人权限，留空则不生效。
 // 命令能管理的是：额外主人 / 额外管理员 / 授权用户 / 黑名单（均持久化到 auth.json）。
 // ============================================================
 import path from 'path';
@@ -23,6 +24,7 @@ let AUTH_FILE = '';
 let PENDING_FILE = '';
 
 let owner = '';         // 来自 .env BOT_OWNER
+let ownerBackup = '';   // 来自 .env BOT_OWNER_BACKUP（主人备用账号，预留；留空不启用）
 let admins = [];        // 来自 .env BOT_ADMINS
 let extraOwners = [];   // 命令授予的主人（持久化）
 let extraAdmins = [];   // 命令授予的管理员（持久化）
@@ -50,6 +52,7 @@ export function init(dir) {
   AUTH_FILE = path.join(dataDir, 'auth.json');
   PENDING_FILE = path.join(dataDir, 'pending.json');
   owner = String(process.env.BOT_OWNER || '').trim();
+  ownerBackup = String(process.env.BOT_OWNER_BACKUP || '').trim();
   admins = (process.env.BOT_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
   const a = readJsonSafe(AUTH_FILE, {}, 'auth.json');
   authorized = Array.isArray(a.authorized) ? a.authorized.map(String) : [];
@@ -65,6 +68,7 @@ export function init(dir) {
 export function role(userId) {
   const id = String(userId);
   if (owner && id === owner) return 'owner';
+  if (ownerBackup && id === ownerBackup) return 'owner';
   if (extraOwners.includes(id)) return 'owner';
   if (admins.includes(id)) return 'admin';
   if (extraAdmins.includes(id)) return 'admin';
@@ -183,6 +187,7 @@ export function revoke(userId) {
 function envLocked(userId) {
   const id = String(userId);
   if (owner && id === owner) return '主人';
+  if (ownerBackup && id === ownerBackup) return '主人';
   if (admins.includes(id)) return '管理员';
   return '';
 }
@@ -207,7 +212,8 @@ export function setLevel(userId, level) {
     return { ok: true, msg: `ℹ️ QQ ${id} 本就是 .env 里写死的${lock}。`, level: lv };
   }
   if (lock) {
-    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的${lock}，不能通过命令降级（请改 BOT_${lock === '主人' ? 'OWNER' : 'ADMINS'}）` };
+    const envKey = lock === '管理员' ? 'BOT_ADMINS' : (ownerBackup && id === ownerBackup ? 'BOT_OWNER_BACKUP' : 'BOT_OWNER');
+    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的${lock}，不能通过命令降级（请改 ${envKey}）` };
   }
   // 先从所有「命令可管理」的名单里清掉，再加入目标名单
   extraOwners = extraOwners.filter((q) => q !== id);
@@ -291,7 +297,7 @@ function emitLevel(id, level) {
 // ---------- 申请 / 审批 ----------
 export function requestAuth(userId) {
   const id = String(userId);
-  if (owner && id === owner) return { ok: true, msg: '你是主人，无需申请。' };
+  if (role(id) === 'owner') return { ok: true, msg: '你是主人，无需申请。' };
   if (admins.includes(id)) return { ok: true, msg: '你是管理员，无需申请。' };
   if (authorized.includes(id)) return { ok: false, msg: '你已在授权列表中。' };
   if (pending.includes(id)) return { ok: false, msg: '你的申请已提交，等待主人审批。' };
@@ -323,5 +329,7 @@ export function rejectAuth(userId) {
 export function listAuthorized() { return authorized.slice(); }
 export function listPending() { return pending.slice(); }
 export function getOwner() { return owner; }
+/** 主人备用账号（预留）：未填写时返回空字符串 */
+export function getOwnerBackup() { return ownerBackup; }
 
 init();

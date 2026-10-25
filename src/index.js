@@ -86,7 +86,7 @@ const MC_PREFIX = String(process.env.MC_BRIDGE_PREFIX_MC || '[MC]');
 // ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
 const AI_ENABLED = isAiEnabled();
 const WEBUI_ENABLED = !!String(process.env.WEBUI_PASSWORD || '').trim();
-const OWNER_ENABLED = !!String(process.env.BOT_OWNER || '').trim();
+const OWNER_ENABLED = !!(String(process.env.BOT_OWNER || '').trim() || String(process.env.BOT_OWNER_BACKUP || '').trim());
 // 联网搜索：后端与开关在 config.json 的 search 段（off/baidu/deepseek/custom），实时判定、热切换
 function searchEnabled() { return isSearchEnabled(); }
 // 图片识别：后端在 config.json 的 vision 段（ai 用主模型 / custom / off）
@@ -123,7 +123,7 @@ function logFeatureStates() {
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
     const bt = getBridgeTarget();
     logger.info(`   MC 服务器桥    ${on(isMcConfigured())}${isMcConfigured() ? `  ${bt.base}（模式 ${bt.mode || 'env'}）` : `  模式 ${bt.mode || 'env'} 未配置`}`);
-    logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER，授权/审批等不可用'}`);
+    logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER / BOT_OWNER_BACKUP，授权/审批等不可用'}`);
 }
 
 /**
@@ -1314,7 +1314,7 @@ async function handleCommand(event, text) {
                 const bl = perm.listBlacklist();
                 const exOwners = perm.listExtraOwners();
                 const exAdmins = perm.listExtraAdmins();
-                const owners = [perm.getOwner(), ...exOwners].filter(Boolean);
+                const owners = [perm.getOwner(), perm.getOwnerBackup(), ...exOwners].filter(Boolean);
                 return sendReply(event,
                     `👑 主人(${owners.length}): ${owners.join('、') || '无'}\n`
                     + `🛡️ 管理员(${exAdmins.length}): ${exAdmins.join('、') || '无'}\n`

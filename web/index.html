@@ -239,6 +239,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     <div class="card">
       <h2>👑 主人 / 管理员</h2>
       <div class="stat"><span>主人(QQ)</span><b id="pmOwner">—</b></div>
+      <div class="stat"><span>主人备用账号（预留）</span><b id="pmOwnerBackup">—</b></div>
       <div class="stat"><span>管理员</span><b id="pmAdmins">—</b></div>
     </div>
     <div class="card">
@@ -475,7 +476,7 @@ async function load(){try{const s=await api('/api/status');
 }catch(e){set('stUp','离线','red');set('lvUp','服务离线','red');}}
 
 async function perms(){try{const d=await api('/api/perms');
-  $('pmOwner').textContent=d.owner||'未设置';$('pmAdmins').textContent=d.admins.join('、')||'无';
+  $('pmOwner').textContent=d.owner||'未设置';$('pmOwnerBackup').textContent=d.ownerBackup||'未设置';$('pmAdmins').textContent=d.admins.join('、')||'无';
   $('pmList').innerHTML=d.authorized.length?d.authorized.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
   $('pmPending').innerHTML=d.pending.length?d.pending.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
   rollNum($('pmListN'), d.authorized.length); rollNum($('pmPendingN'), d.pending.length);
