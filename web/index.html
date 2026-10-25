@@ -31,7 +31,7 @@ h1{font-size:17px;margin:0}
 .grid{display:block}
 .span2{grid-column:1/-1}
 
-/* ---------- 布局：左侧栏 + 顶栏 + 右内容（NapCat 风格） ---------- */
+/* ---------- 布局：左侧栏 + 顶栏 + 右内容 ---------- */
 .app{display:flex;gap:16px;align-items:flex-start;margin:0 auto}
 .side{position:sticky;top:16px;flex:0 0 232px;width:232px;padding:16px;
   background:var(--card);border:1px solid #f0f0f0;border-radius:var(--radius);box-shadow:0 1px 2px rgba(0,0,0,.03)}
@@ -187,7 +187,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       </div>
     </div>
     <nav class="nav">
-      <button class="nav-item active" data-tab="login"><span class="ico">📊</span>登录状态</button>
+      <button class="nav-item active" data-tab="login"><span class="ico">📊</span>连接状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
       <button class="nav-item" data-tab="features"><span class="ico">🧩</span>功能</button>
@@ -208,45 +208,29 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 
   <main class="main">
     <header class="topbar">
-      <div class="tb-title" id="tbTitle">登录状态</div>
+      <div class="tb-title" id="tbTitle">连接状态</div>
       <div class="tb-sub" id="tbSub">小钠控制面板</div>
     </header>
     <div class="grid" id="main">
-      <!-- 登录状态 -->
+      <!-- 连接状态 -->
   <div class="panel active" data-panel="login">
     <div class="card">
-      <h2>📊 登录状态</h2>
-      <div class="stat"><span>NapCat 在线</span><span id="stNpUp" class="pill warn">…</span></div>
-      <div class="stat"><span>登录进程</span><b id="stLoginProc">—</b></div>
-      <div class="stat"><span>登录方式</span><b id="stLoginMode">—</b></div>
+      <h2>📊 连接状态</h2>
+      <div class="stat"><span>SnowLuma 在线</span><span id="stSlUp" class="pill warn">…</span></div>
+      <div class="stat"><span>QQ 客户端</span><span id="stQq" class="pill warn">…</span></div>
       <div class="stat"><span>登录状态</span><span id="stLoginState" class="pill warn">…</span></div>
-      <div class="stat"><span>机器人 ↔ NapCat</span><span id="stNpBot" class="pill warn">…</span></div>
+      <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stSlBot" class="pill warn">…</span></div>
+      <div class="stat"><span>SnowLuma 控制台</span><b id="stSlWebui">—</b></div>
     </div>
     <div class="card">
-      <h2 id="qrTitle">🔳 二维码</h2>
-      <div class="qr"><img id="qrImg" alt="二维码" style="display:none"><div class="hint" id="qrHint">启动登录后显示二维码</div></div>
-      <div class="hint" id="captchaHint"></div>
-      <button class="btn ghost" id="openVerify" style="display:none">🔗 打开验证链接（验证码/滑块）</button>
-      <button class="btn ghost" id="openWebui">打开 NapCat WebUI（验证码/滑块）</button>
-    </div>
-    <div class="card">
-      <h2>🔑 手动登录（备用）</h2>
-      <div class="hint" style="margin-top:0">一般由启动脚本自动登录；仅当自动登录失败时才需要手动操作。</div>
-      <label>登录方式</label>
-      <select id="lgMode">
-        <option value="qrcode">二维码登录（推荐）</option>
-        <option value="password">账号密码 + 验证码</option>
-      </select>
-      <div id="pwdFields" style="display:none">
-        <input id="lgQq" type="text" inputmode="numeric" placeholder="QQ 号（自动填充上次成功登录的账号）" autocomplete="off">
-        <input id="lgPwd" type="password" placeholder="密码（不回显、不保存到磁盘）" autocomplete="new-password">
-      </div>
-      <button class="btn green" id="lgStart">▶ 启动登录</button>
-      <button class="btn red" id="lgStop">■ 停止登录进程</button>
+      <h2>🔐 QQ 登录</h2>
+      <div class="hint" style="margin-top:0">SnowLuma 通过注入真实 QQ 进程工作，<b>只能扫码登录</b>：首次使用请在服务器桌面上打开 QQ 扫码，登录后自动注入，无需其它操作。</div>
+      <div class="hint">启动器会自动拉起 QQ 与 SnowLuma；QQ 未登录时 OneBot 端口不会就绪，机器人会持续自动重连。</div>
+      <div class="hint">SnowLuma 自带控制台只监听服务器本机（默认 127.0.0.1:5099），需要时在服务器上打开。</div>
     </div>
     <div class="card span2">
-      <h2>📄 NapCat 登录日志</h2>
-      <div class="log" id="lgNpLog"></div>
+      <h2>📄 SnowLuma 日志</h2>
+      <div class="log" id="lgSlLog"></div>
     </div>
   </div>
 
@@ -364,15 +348,15 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     <div class="card">
       <h2>⚙️ 运行状态</h2>
       <div class="stat"><span>控制面板服务</span><span id="stUp" class="pill warn">…</span></div>
-      <div class="stat"><span>机器人 ↔ NapCat</span><span id="stBot" class="pill warn">…</span></div>
-      <div class="stat"><span>NapCat 在线</span><span id="stNapcat" class="pill warn">…</span></div>
+      <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stBot" class="pill warn">…</span></div>
+      <div class="stat"><span>SnowLuma 在线</span><span id="stSnowluma" class="pill warn">…</span></div>
       <div class="stat"><span>AI 模型</span><b id="stModel">—</b></div>
       <div class="stat"><span>联网搜索</span><b id="stSearch">—</b></div>
       <div class="stat"><span>图像识别</span><b id="stVision">—</b></div>
       <div class="stat"><span>MC 服务器桥</span><b id="stBridge">—</b></div>
-      <div class="stat"><span>NapCat 地址</span><b id="stWs">—</b></div>
+      <div class="stat"><span>OneBot 地址</span><b id="stWs">—</b></div>
       <div class="stat"><span>WebUI 端口</span><b id="stWebuiPort">—</b></div>
-      <div class="stat"><span>登录进程</span><b id="stLogin">—</b></div>
+      <div class="stat"><span>QQ 客户端</span><b id="stQqClient">—</b></div>
     </div>
     <div class="card span2">
       <h2>📄 终端实时日志（与终端同步）</h2>
@@ -467,14 +451,7 @@ function showTab(name){
 document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 showTab((location.hash||'').replace('#','')||'login');
 
-// 登录
-$('lgMode').onchange=()=>{$('pwdFields').style.display=$('lgMode').value==='password'?'block':'none';};
-$('lgStart').onclick=async()=>{try{const mode=$('lgMode').value,qq=$('lgQq').value.trim(),password=$('lgPwd').value;
-  await api('/api/login/start',{method:'POST',body:JSON.stringify({mode,qq,password})});refresh();}catch(e){alert('启动失败: '+e.message);}};
-$('lgStop').onclick=async()=>{try{await api('/api/login/stop',{method:'POST'});}catch(e){}refresh();};
-$('openWebui').onclick=()=>window.open(`http://${location.hostname}:6099/webui`,'_blank');
-let verifyUrl='';
-$('openVerify').onclick=()=>{if(verifyUrl)window.open(verifyUrl,'_blank');};
+
 
 // 申请授权
 $('pmReq').onclick=async()=>{const qq=$('pmApply').value.trim();if(!qq)return;
@@ -483,8 +460,7 @@ $('pmReq').onclick=async()=>{const qq=$('pmApply').value.trim();if(!qq)return;
 
 async function load(){try{const s=await api('/api/status');
   set('stUp','正常','ok');set('stBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
-  set('stNapcat',s.napcatUp?'在线':'离线',s.napcatUp?'ok':'warn');
-  set('stNpBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
+  set('stSnowluma',s.snowlumaUp?'在线':'离线',s.snowlumaUp?'ok':'warn');
   $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
   // 搜索 / 图像识别 / MC 桥：显示当前切在哪个后端
   const se=s.search||{}, vi=s.vision||{}, mc=s.mcBridge||{};
@@ -492,7 +468,7 @@ async function load(){try{const s=await api('/api/status');
   $('stVision').textContent=(VISION_NAMES[vi.provider]||vi.provider||'AI 主模型');
   $('stBridge').textContent=(mc.base?(mc.connected?'已连接 · ':'未连接 · ')+(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'):(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'));
   if($('stWebuiPort'))$('stWebuiPort').textContent=s.webuiPort||'—';
-  $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
+  $('stQqClient').textContent=s.qqRunning?'运行中':'未运行';
   $('sub').textContent=s.wsUrl+' · 授权由主人管理'+(s.botError?' · '+s.botError:'');
   set('lvUp','服务在线','ok');set('lvBot',s.botConnected?'机器人已连接':'机器人未连接',s.botConnected?'ok':'warn');
   set('lvAuth','授权由主人管理','warn');
@@ -505,26 +481,20 @@ async function perms(){try{const d=await api('/api/perms');
   rollNum($('pmListN'), d.authorized.length); rollNum($('pmPendingN'), d.pending.length);
 }catch(e){}}
 
-async function refresh(){try{const s=await api('/api/login/status');
-  const lgOk=s.running?s.success:!!s.napcatUp;
-  const lgTxt=s.running?(s.success?'已登录':(s.captcha?'需验证码':'登录中…')):(s.napcatUp?'NapCat在线(外部)':'未运行');
-  $('stLogin').textContent=s.running?'运行中':(s.external?'外部运行':(s.napcatUp?'NapCat在线':'未运行'));
-  set('lvLogin',lgTxt,lgOk?'ok':'warn');
-  // 登录状态详情
-  set('stNpUp',s.napcatUp?(s.running?'在线(面板)':'在线(外部)'):'离线',s.napcatUp?'ok':'warn');
-  $('stLoginProc').textContent=s.running?'运行中':'未运行';
-  $('stLoginMode').textContent=s.mode==='password'?'账密登录':(s.mode==='qrcode'?'二维码/快速登录':'—');
-  // 自动填充上次成功登录的账号（不覆盖用户已输入的内容；密码永不落盘，需重新输入）
-  if(s.savedQq&&!$('lgQq').value)$('lgQq').value=s.savedQq;
-  set('stLoginState',s.running?(s.success?'已登录':(s.captcha?'需验证码':'登录中…')):'未运行',s.running?(s.success?'ok':'warn'):'ok');
-  renderLog('lgNpLog', (s.logs&&s.logs.length)?s.logs:['(无日志)']);
-  if(s.running&&s.qrExists){$('qrImg').src='/api/qrcode?t='+Date.now();$('qrImg').style.display='';$('qrHint').textContent='手机 QQ 扫码授权，自动刷新';}
-  else{$('qrImg').style.display='none';$('qrHint').textContent='启动登录后显示二维码';}
-  const cap=s.captcha, vu=s.verifyUrl||'';
-  verifyUrl=vu;
-  $('openVerify').style.display=(cap&&vu)?'':'none';
-  $('captchaHint').textContent=cap?(vu?('检测到需要验证码/滑块，请点击下方"打开验证链接"完成验证。'):'检测到需要验证码/滑块：请点击"打开 NapCat WebUI"完成验证。'):'';
-  $('qrTitle').textContent='🔳 二维码（'+(s.running?(s.success?'已就绪':'启动中'):(s.napcatUp?'外部运行':'未启动'))+'）';
+async function refresh(){try{const s=await api('/api/connection/status');
+  // SnowLuma 只有 QQ 登录成功后才会监听 OneBot WS，所以端口在线 ≈ 已登录
+  const up=!!s.snowlumaUp;
+  const lgTxt=up?'已登录':(s.qqRunning?'等待扫码登录':'QQ 未运行');
+  set('lvLogin',lgTxt,up?'ok':'warn');
+  set('stSlUp',up?'在线':'离线',up?'ok':'warn');
+  set('stQq',s.qqRunning?'运行中':'未运行',s.qqRunning?'ok':'warn');
+  set('stLoginState',lgTxt,up?'ok':'warn');
+  set('stSlBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
+  if(s.botError)$('stSlBot').title=s.botError;
+  $('stSlWebui').textContent=(s.snowlumaWebui||'—').replace(/^https?:\/\//,'');
+  try{const d=await api('/api/snowluma/logs');
+    renderLog('lgSlLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
+  }catch(e){}
 }catch(e){}}
 
 // 终端实时日志（与终端输出一致）
@@ -667,8 +637,8 @@ function cvRenderList(){
   $('convList').innerHTML =
     ('<div class="hint" style="margin:10px 0 4px">群聊 ('+grp.length+')</div>'+(grp.length?grp.map(cvItem).join(''):'<span class="hint">暂无</span>')+
      '<div class="hint" style="margin:14px 0 4px">好友 ('+pri.length+')</div>'+(pri.length?pri.map(cvItem).join(''):'<span class="hint">暂无</span>'))+
-    (cvErr?('<div class="hint" style="margin-top:10px;color:var(--danger)">❌ 会话列表获取失败：'+esc(cvErr)+'（请确认机器人已连接 NapCat）</div>')
-          :(cvListOk?'':'<div class="hint" style="margin-top:10px;color:var(--warn)">⚠️ 未能从 NapCat 获取群/好友名单（机器人可能未连接）。</div>'));
+    (cvErr?('<div class="hint" style="margin-top:10px;color:var(--danger)">❌ 会话列表获取失败：'+esc(cvErr)+'（请确认机器人已连接 SnowLuma）</div>')
+          :(cvListOk?'':'<div class="hint" style="margin-top:10px;color:var(--warn)">⚠️ 未能从 SnowLuma 获取群/好友名单（机器人可能未连接）。</div>'));
   document.querySelectorAll('#convList [data-sel]').forEach(b=>b.onclick=()=>{cvSel=b.dataset.sel;cvRenderList();cvRenderForm();});
   document.querySelectorAll('#convList [data-pin]').forEach(b=>b.onclick=async()=>{
     const k=b.dataset.pin;

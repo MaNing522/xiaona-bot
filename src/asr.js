@@ -12,7 +12,7 @@
 //
 // 两个「补偿」都在这里做，因为语音识别本身不可靠：
 //   1) 转码：QQ 语音多半是 amr / silk，FunASR 吃不下。挂上 setAudioConverter 后，
-//      先让 NapCat 用自己的 get_record(out_format=wav) 转成 wav 再上传（NapCat 内部带 silk 解码）。
+//      先让 SnowLuma 用自己的 get_record(out_format=wav) 转成 wav 再上传（SnowLuma 内部带 silk 解码）。
 //   2) 同音纠正：SenseVoice 不认字，常把「小钠」听成「小娜」。按 config.json 的 asr 段把错字改回来，
 //      否则既读着别扭，也匹配不上触发关键词（见 fixText）。
 //
@@ -52,7 +52,7 @@ export function asrEnabled() {
 }
 
 // ---------- 转码：amr/silk → wav ----------
-// 由 index.js 注入（那里才拿得到 NapCat 的 callApi）；本模块只管调用，不关心怎么转。
+// 由 index.js 注入（那里才拿得到 SnowLuma 的 callApi）；本模块只管调用，不关心怎么转。
 let audioConverter = null;
 /**
  * 注入音频转码器。入参是 record 段数据，返回转好的 wav 字节（Buffer）或 null。
@@ -99,7 +99,7 @@ function mimeOf(ext) {
 /**
  * 把 record 段解析成音频字节。
  * 依次尝试：本地文件（path/file 存在于磁盘）→ http(s) 地址（url/file 是链接）。
- * 拿不到返回 null（NapCat 一般会在 record 段里带 url，可直接下到音频）。
+ * 拿不到返回 null（SnowLuma 一般会在 record 段里带 url，可直接下到音频）。
  */
 async function resolveAudio(data) {
     const ext = extOf(data);
@@ -184,7 +184,7 @@ export function transcribe(data) {
 async function doTranscribe(data) {
     if (!asrEnabled()) return null;
 
-    // QQ 语音多是非原生格式（amr/silk 且常查不出扩展名）：优先让 NapCat 转成 wav，
+    // QQ 语音多是非原生格式（amr/silk 且常查不出扩展名）：优先让 SnowLuma 转成 wav，
     // 转不动再退回原格式上传（此时多半会被服务端拒绝，返回 null → [语音] 占位）。
     const ext = extOf(data);
     let audio = null;

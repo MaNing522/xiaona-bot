@@ -1,99 +1,181 @@
 // ============================================================
-// start.js - 合并启动器：先尝试自动登录(快速登录)，不行再让用户选择登录方式
-// 由 启动.bat 调用（node start.js）
+// start.js - 合并启动器（SnowLuma 版）
+// 由 启动.bat / background.vbs 调用（node start.js）
+//
+// 流程：准备 SnowLuma 配置 → 确保 QQ 在跑（未登录由桌面扫码）→ 启动 SnowLuma
+//       → 启动机器人（机器人自己会反复重连 OneBot WS，不必等登录完成）
+//
+// 说明：SnowLuma 是注入真实 QQ.exe 的 OneBot v11 框架，只能扫码登录；
+//       它只有在 QQ 登录成功后才会监听 OneBot WS 端口，所以面板可能先显示"未登录"。
 // ============================================================
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import net from 'net';
-import readline from 'readline';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { writeJsonAtomic, readJsonSafe } from './src/datafile.js';
+import { writeJsonAtomic } from './src/datafile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-const NAPCAT_DIR = path.join(__dirname, 'napcat');
-const NODE_BIN = path.join(NAPCAT_DIR, 'node.exe');
-const QR_FILE = path.join(NAPCAT_DIR, 'napcat', 'cache', 'qrcode.png');
-const LOGIN_FILE = path.join(__dirname, 'data', 'login.json');
-const WS_PORT = Number((process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').match(/:(\d+)/)?.[1] || 3001);
+// ---------- SnowLuma / OneBot 连接参数 ----------
+const SNOWLUMA_DIR = path.join(__dirname, 'snowluma');
+const SNOWLUMA_ENTRY = path.join(SNOWLUMA_DIR, 'index.mjs');
+const SNOWLUMA_CONFIG_DIR = path.join(SNOWLUMA_DIR, 'config');
+const SNOWLUMA_GLOBAL_CONFIG = path.join(SNOWLUMA_CONFIG_DIR, 'onebot.json');
+
+// ONEBOT_WS 是机器人侧的连接地址；旧版 .env 里的 NAPCAT_WS 仍兼容
+const ONEBOT_WS = String(process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').trim();
+const WS_PORT = Number((ONEBOT_WS.match(/:(\d+)/) || [])[1] || 3001);
+let onebotToken = String(process.env.ONEBOT_TOKEN || process.env.NAPCAT_TOKEN || '').trim();
+
+// .env 未指定 QQ 路径时用 Windows 默认安装位置
+const QQ_PATH_DEFAULT = 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe';
 
 // 本地语音识别服务（FunASR）：默认 http://127.0.0.1:8899/v1/audio/transcriptions
 const ASR_ENABLED = String(process.env.ASR_ENABLED || 'true').trim().toLowerCase() !== 'false';
 const ASR_URL = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions').trim();
 
-const AUTO_TIMEOUT = 25000; // 自动登录最长等待
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 // ---------- 控制台时间戳 ----------
 // 启动器自己的提示不加（交互提示加时间反而碍事），
-// 但从子进程管道过来的运行日志（[NapCat] / [Bot]）要带时间，方便和日志文件对齐。
+// 从子进程管道过来的运行日志（[SnowLuma] / [Bot]）要带时间，方便和日志文件对齐。
 function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// ---------- 历史登录账号（供自动登录） ----------
-function readSaved() {
-  const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
-  return d && /^\d{5,14}$/.test(String(d.qq)) ? d : null;
-}
-function saveLogin(qq) {
-  writeJsonAtomic(LOGIN_FILE, { qq: String(qq), at: Date.now() });
-}
-
-// ---------- 启动 NapCat（日志带前缀输出到终端） ----------
-function spawnNapcat(env) {
-  // 固定 NapCat 面板（6099）的登录 token 与会话密钥：
-  // - NAPCAT_WEBUI_SECRET_KEY：面板登录密码（账号固定是 napcat）；NapCat 检测到它会写回 webui.json
-  // - NAPCAT_WEBUI_JWT_SECRET_KEY：面板会话签名密钥。**不固定的话 NapCat 每次启动都用
-  //   Math.random() 现生成一个**，一重启所有登录会话就失效 —— 表现就是"每次都得重新输 token"
-  if (process.env.NAPCAT_WEBUI_TOKEN) env.NAPCAT_WEBUI_SECRET_KEY = process.env.NAPCAT_WEBUI_TOKEN;
-  if (process.env.NAPCAT_WEBUI_JWT_SECRET) env.NAPCAT_WEBUI_JWT_SECRET_KEY = process.env.NAPCAT_WEBUI_JWT_SECRET;
-  const args = ['./index.js'];
-  const qq = env.NAPCAT_QUICK_ACCOUNT;
-  if (qq) args.push('-q', String(qq));
-  const proc = spawn(NODE_BIN, args, { cwd: NAPCAT_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const pipe = (chunk) => {
-    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [NapCat] ${l.trim()}`));
-  };
-  proc.stdout.on('data', pipe);
-  proc.stderr.on('data', pipe);
-  return proc;
+// ---------- SnowLuma 配置：固定 WS 端口 / token ----------
+/**
+ * 读写 SnowLuma 的 OneBot 配置：
+ * - 全局 config/onebot.json 里固定 ws-default 的 host/port/token/messageFormat
+ * - 已存在的按账号配置（onebot_<uin>.json，snapshot 模式会完全覆盖全局）也同步一份，
+ *   否则换号后旧的端口/token 会把机器人挡在门外
+ *
+ * token 优先级：.env 的 ONEBOT_TOKEN > 配置里已有的 > 随机生成（写回配置，重启不变）
+ */
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
-// ---------- 监听登录结果：成功 / 需要验证 / 出二维码 / 超时 / 退出 ----------
-function watchAutoLogin(proc, timeoutMs) {
+function ensureNetworks(cfg) {
+  if (!cfg.networks || typeof cfg.networks !== 'object') cfg.networks = {};
+  if (!Array.isArray(cfg.networks.wsServers)) cfg.networks.wsServers = [];
+  if (!Array.isArray(cfg.networks.httpServers)) cfg.networks.httpServers = [];
+  return cfg.networks;
+}
+
+function applyWsEntry(entry) {
+  entry.name = 'ws-default';
+  entry.host = '127.0.0.1';
+  entry.port = WS_PORT;
+  entry.path = '/';
+  entry.role = 'Universal';
+  entry.messageFormat = 'array';
+  entry.accessToken = onebotToken;
+}
+
+function ensureOneBotConfig() {
+  fs.mkdirSync(SNOWLUMA_CONFIG_DIR, { recursive: true });
+
+  // 1) 全局配置：确定 token
+  const rawGlobal = readJson(SNOWLUMA_GLOBAL_CONFIG);
+  const original = rawGlobal ? JSON.stringify(rawGlobal) : '';
+  const global = rawGlobal || {};
+  const nets = ensureNetworks(global);
+  let ws = nets.wsServers.find((s) => s && s.name === 'ws-default');
+  if (!ws) {
+    ws = {};
+    nets.wsServers.push(ws);
+  }
+  // .env 配了就用 .env；没配则沿用配置里已有的；都没有才生成
+  if (!onebotToken) onebotToken = String(ws.accessToken || '').trim();
+  if (!onebotToken) onebotToken = crypto.randomBytes(32).toString('base64url');
+
+  applyWsEntry(ws);
+  if (JSON.stringify(global) !== original) writeJsonAtomic(SNOWLUMA_GLOBAL_CONFIG, global);
+
+  // 2) 按账号的覆盖配置：只同步 ws-default，别的设置不动
+  let files = [];
+  try {
+    files = fs.readdirSync(SNOWLUMA_CONFIG_DIR).filter((f) => /^onebot_\d+\.json$/.test(f));
+  } catch { /* 目录读不了就算了 */ }
+  for (const f of files) {
+    const file = path.join(SNOWLUMA_CONFIG_DIR, f);
+    const cfg = readJson(file);
+    if (!cfg) continue;
+    const wsList = cfg.networks && Array.isArray(cfg.networks.wsServers) ? cfg.networks.wsServers : null;
+    if (!wsList) continue;
+    const item = wsList.find((s) => s && s.name === 'ws-default');
+    if (!item) continue;
+    const beforeUin = JSON.stringify(cfg);
+    applyWsEntry(item);
+    if (JSON.stringify(cfg) !== beforeUin) writeJsonAtomic(file, cfg);
+  }
+
+  console.log(`[启动器] SnowLuma 配置已就绪：WS 127.0.0.1:${WS_PORT}（token ${onebotToken ? '已设置' : '未设置'}）`);
+}
+
+// ---------- 确认 QQ 进程 ----------
+function qqPath() {
+  return String(process.env.QQ_PATH || '').trim() || QQ_PATH_DEFAULT;
+}
+
+/** tasklist 判断 QQ.exe 是否在跑（不依赖进程权限，普通用户也能查） */
+function isQQRunning() {
   return new Promise((resolve) => {
-    let buf = '';
-    let settled = false;
-    const finish = (r) => {
-      if (settled) return;
-      settled = true;
-      clearInterval(iv);
-      proc.stdout.removeAllListeners('data');
-      proc.stderr.removeAllListeners('data');
-      resolve(r);
-    };
-    const feed = (chunk) => {
-      buf += chunk;
-      if (buf.length > 300000) buf = buf.slice(-300000);
-      if (/登录成功|快速登录成功|密码回退登录成功|已登录/.test(buf)) finish({ ok: true, reason: 'success' });
-      else if (/需要验证|验证码|滑块|异常设备|新设备|登录失败|扫码|二维码/.test(buf)) finish({ ok: false, reason: 'verify' });
-    };
-    proc.stdout.on('data', feed);
-    proc.stderr.on('data', feed);
-    // 出现二维码文件也视为自动登录未成功（回退到扫码）
-    const iv = setInterval(() => { if (fs.existsSync(QR_FILE)) finish({ ok: false, reason: 'qr' }); }, 800);
-    setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
-    proc.on('exit', () => finish({ ok: false, reason: 'exit' }));
+    execFile('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/NH'], { windowsHide: true }, (err, stdout) => {
+      resolve(!err && /QQ\.exe/i.test(String(stdout || '')));
+    });
   });
 }
 
-// ---------- 等待 WS 端口就绪 ----------
+/**
+ * 确保桌面 QQ 在跑：SnowLuma 靠注入 QQ.exe 工作，没有 QQ 就没有 OneBot。
+ * 不负责登录（扫码只能在桌面完成），登录后 SnowLuma 会自动注入。
+ * QQ_AUTOLAUNCH=false 时只提示、不代启。
+ */
+async function ensureQQ() {
+  if (await isQQRunning()) {
+    console.log('[启动器] QQ 已在运行，等待 SnowLuma 注入…');
+    return;
+  }
+  if (String(process.env.QQ_AUTOLAUNCH || 'true').trim().toLowerCase() === 'false') {
+    console.log('[启动器] QQ 未运行，且 QQ_AUTOLAUNCH=false：请手动启动 QQ 并登录。');
+    return;
+  }
+  const exe = qqPath();
+  if (!fs.existsSync(exe)) {
+    console.log(`[启动器] 未找到 QQ：${exe}（可在 .env 里用 QQ_PATH 指定）`);
+    return;
+  }
+  console.log(`[启动器] QQ 未运行，正在启动：${exe}`);
+  const proc = spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore' });
+  proc.on('error', (e) => console.log(`[启动器] 启动 QQ 失败：${e.message}`));
+  proc.unref();
+}
+
+// ---------- 启动 SnowLuma ----------
+function spawnSnowluma() {
+  // HOOK_AUTOLOAD 保证 QQ 一登录就注入，不必在 SnowLuma 控制台手动点
+  const env = { ...process.env, SNOWLUMA_HOOK_AUTOLOAD: '1' };
+  const proc = spawn(process.execPath, ['index.mjs'], { cwd: SNOWLUMA_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const pipe = (chunk) => {
+    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`${stamp()} [SnowLuma] ${l.trim()}`));
+  };
+  proc.stdout.on('data', pipe);
+  proc.stderr.on('data', pipe);
+  console.log(`[启动器] SnowLuma 已启动（pid=${proc.pid || '未知'}）`);
+  return proc;
+}
+
+// ---------- 等待 WS 端口就绪（仅用于日志提示，机器人自己会重连） ----------
 function waitPort(port, timeoutMs) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
@@ -103,7 +185,7 @@ function waitPort(port, timeoutMs) {
       s.on('error', () => {
         s.destroy();
         if (Date.now() > deadline) reject(new Error('timeout'));
-        else setTimeout(tryConn, 1000);
+        else setTimeout(tryConn, 1500);
       });
     };
     tryConn();
@@ -182,7 +264,9 @@ async function ensureAsrService() {
 
 // ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
 function spawnBot() {
-  const bot = spawn(process.execPath, ['src/index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
+  // OneBot 连接参数直接注给机器人，避免它去猜 SnowLuma 配置里的 token
+  const env = { ...process.env, ONEBOT_WS, ONEBOT_TOKEN: onebotToken };
+  const bot = spawn(process.execPath, ['src/index.js'], { cwd: __dirname, env, stdio: ['ignore', 'pipe', 'pipe'] });
   // 机器人自己的日志已经带时间戳（logger.js），这里只加来源前缀，避免出现两个时间
   const pipe = (chunk) => {
     String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[Bot] ${l.trim()}`));
@@ -193,246 +277,47 @@ function spawnBot() {
 }
 
 // ---------- 进程联动：任一退出则关闭另一个并退出 ----------
-function linkExit(bot, napcat) {
+function linkExit(bot, snowluma) {
   bot.on('exit', (code) => {
-    console.log(`[启动器] 机器人已退出（code=${code}），关闭 NapCat...`);
-    try { napcat.kill(); } catch {}
+    console.log(`[启动器] 机器人已退出（code=${code}），关闭 SnowLuma...`);
+    try { snowluma.kill(); } catch {}
     process.exit(code || 0);
   });
-  napcat.on('exit', (code) => {
-    console.log(`[启动器] NapCat 已退出（code=${code}），关闭机器人...`);
+  snowluma.on('exit', (code) => {
+    console.log(`[启动器] SnowLuma 已退出（code=${code}），关闭机器人...`);
     try { bot.kill(); } catch {}
     process.exit(code || 0);
   });
 }
 
-// ---------- 启动机器人并联动退出（先等 NapCat WS 就绪） ----------
-async function startBot(napcat) {
-  try {
-    await waitPort(WS_PORT, 120000);
-    console.log(`[启动器] NapCat WS 端口 ${WS_PORT} 已就绪，启动机器人...`);
-  } catch {
-    console.log('[启动器] 等待 NapCat WS 超时，仍尝试启动机器人（机器人会自动重连）。');
-  }
-  const bot = spawnBot();
-  linkExit(bot, napcat);
-}
-
-// ---------- 自动登录尝试 ----------
-// 只负责把 NapCat 跑起来并判断登录结果；拿到进程句柄后由调用方决定何时起机器人。
-// 返回 { ok, proc }：proc 不为空 = NapCat 进程仍然活着（已登录，或正在等扫码/验证）。
-async function tryAutoLoginNapcat(qq) {
-  // 快速登录失败时常见两种可继续的状态：
-  //   qr     已经出了二维码，进程在等人扫
-  //   verify 需要验证码/滑块，进程在等人操作
-  // 这两种都**不能杀进程**——留着让用户在网页面板处理，杀了就等于把服务弄断。
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    console.log(`🔄 尝试自动登录（QQ ${qq} 快速登录${attempt > 1 ? '，第 ' + attempt + ' 次' : ''}）...`);
-    // 上一次手动登录留下的二维码图片会让 watchAutoLogin 里的"出现二维码即视为失败"
-    // 立刻误判（文件本来就在），快速登录还没开始就被打断、直接掉进手动登录。
-    // 每次尝试前先清掉，只认本次真正新生成的二维码。
-    try { fs.unlinkSync(QR_FILE); } catch { /* 本来就没有 */ }
-    const proc = spawnNapcat({ ...process.env, NAPCAT_QUICK_ACCOUNT: String(qq) });
-    const res = await watchAutoLogin(proc, AUTO_TIMEOUT);
-    if (res.ok) {
-      console.log('✅ 自动登录成功。');
-      saveLogin(qq);
-      return { ok: true, proc };
-    }
-    if (res.reason === 'qr' || res.reason === 'verify') {
-      console.log(`⚠️ 自动登录未完成（${res.reason === 'qr' ? '已出二维码，等待扫码' : '需要验证码/滑块'}）：NapCat 保持运行，请到网页面板完成登录。`);
-      return { ok: false, proc };
-    }
-    console.log(`⚠️ 自动登录未成功（${res.reason}）。`);
-    try { proc.kill(); } catch { /* 可能已退出 */ }
-    // 刚重启时旧 QQ 进程可能还没完全退出，隔几秒重试一次
-    if (attempt === 1 && res.reason === 'exit') {
-      console.log('   旧进程可能还在退出中，6 秒后重试一次…');
-      await sleep(6000);
-      continue;
-    }
-    return { ok: false, proc: null };
-  }
-  return { ok: false, proc: null };
-}
-
-async function tryAutoLogin(qq) {
-  const r = await tryAutoLoginNapcat(qq);
-  if (!r.proc) return false;
-  await startBot(r.proc);
-  return true;
-}
-
-// ---------- 手动登录（账密 / 二维码） ----------
-/**
- * 读取隐藏输入（密码）：逐字符读，回显 * 而不是明文。
- * 非交互环境（重定向/管道）无法关闭回显，退化为普通输入。
- */
-function askHidden(prompt) {
-  return new Promise((resolve) => {
-    const stdin = process.stdin;
-    if (!stdin.isTTY) {
-      const rl2 = readline.createInterface({ input: stdin, output: process.stdout });
-      return rl2.question(prompt, (a) => { rl2.close(); resolve(a); });
-    }
-    const wasRaw = stdin.isRaw;
-    process.stdout.write(prompt);
-    stdin.setRawMode(true);
-    stdin.resume();
-
-    let buf = '';
-    let done = false;
-    const finish = (val) => {
-      if (done) return;
-      done = true;
-      stdin.removeListener('data', onData);
-      try { stdin.setRawMode(!!wasRaw); } catch {}
-      stdin.pause();
-      process.stdout.write('\n');
-      resolve(val);
-    };
-    const onData = (chunk) => {
-      for (const ch of String(chunk)) {
-        if (ch === '\r' || ch === '\n') return finish(buf);
-        if (ch === '\u0003') {            // Ctrl+C：raw 模式下不会自动触发 SIGINT，这里自己处理
-          finish('');
-          console.log('[启动器] 已取消。');
-          process.exit(1);
-        }
-        if (ch === '\u007f' || ch === '\b') {   // 退格
-          if (buf) { buf = buf.slice(0, -1); process.stdout.write('\b \b'); }
-          continue;
-        }
-        if (ch < ' ') continue;            // 其它控制字符
-        buf += ch;
-        process.stdout.write('*');
-      }
-    };
-    stdin.on('data', onData);
-  });
-}
-
-/** 登录真正成功后才记录账号（避免把输错的账号记成"上次成功登录"） */
-function watchLoginSuccess(proc, qq) {
-  if (!qq) return;
-  let buf = '';
-  let saved = false;
-  const feed = (chunk) => {
-    if (saved) return;
-    buf = (buf + chunk).slice(-20000);
-    if (/登录成功|快速登录成功|密码回退登录成功|已登录/.test(buf)) {
-      saved = true;
-      saveLogin(qq);
-      console.log(`[启动器] 已记住本次登录账号 ${qq}，下次会自动填充。`);
-    }
-  };
-  proc.stdout.on('data', feed);
-  proc.stderr.on('data', feed);
-}
-
-// 只负责拿到 NapCat 登录进程（含终端交互），返回进程句柄；机器人由调用方决定何时起。
-async function manualLoginNapcat() {
-  const saved = readSaved();
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise((res) => rl.question(q, res));
-  const closeRl = () => { try { rl.close(); } catch {} };
-  // 账号提示：有历史账号就作为默认值（直接回车即可）
-  const qqHint = saved ? `（回车默认上次成功登录的 ${saved.qq}）` : '';
-
-  console.log('请选择登录方式：');
-  console.log('  1) 账密登录（配合验证码，日志会提示验证链接）');
-  console.log('  2) 二维码登录（手机 QQ 扫码）');
-  const choice = (await ask('请输入 1 或 2：')).trim();
-
-  let qq = '', password = '';
-  if (choice === '2') {
-    qq = (await ask(`请输入要登录的 QQ 号${saved ? qqHint : '（留空则纯扫码）'}：`)).trim() || (saved ? saved.qq : '');
-  } else if (choice === '1') {
-    qq = (await ask(`请输入 QQ 号${qqHint}：`)).trim() || (saved ? saved.qq : '');
-    closeRl();  // 先释放 stdin，才能接管回显
-    if (!/^\d{5,14}$/.test(qq)) {
-      console.log('❌ QQ 号格式不对（应为 5-14 位数字）。');
-      process.exit(1);
-    }
-    password = (await askHidden('请输入密码（输入时不显示，不保存到磁盘）：')).trim();
-    if (!password) {
-      console.log('❌ 密码不能为空。');
-      process.exit(1);
-    }
-  } else {
-    console.log('无效选择，退出。');
-    closeRl();
-    process.exit(1);
-  }
-  closeRl();
-
-  const env = { ...process.env };
-  if (choice === '2' && qq) env.NAPCAT_QUICK_ACCOUNT = String(qq);
-  if (choice === '1') {
-    env.ACCOUNT = String(qq);
-    env.NAPCAT_QUICK_ACCOUNT = String(qq);
-    env.NAPCAT_QUICK_PASSWORD = password;   // 只经环境变量传给子进程，不落盘、不回显
-  }
-
-  console.log(`[启动器] 正在启动 NapCat（${choice === '1' ? '账密登录' : '二维码登录'}${qq ? '，QQ=' + qq : ''}）...`);
-  const napcat = spawnNapcat(env);
-  watchLoginSuccess(napcat, qq);
-  return napcat;
-}
-
-async function manualLogin() {
-  const napcat = await manualLoginNapcat();
-  await startBot(napcat);
-}
-
 async function main() {
   console.log('==========================================');
-  console.log('     小钠 QQ 机器人 · 启动器');
+  console.log('     小钠 QQ 机器人 · 启动器（SnowLuma）');
   console.log('==========================================');
-  const saved = readSaved();
-  if (saved) {
-    console.log(`ℹ️ 上次成功登录的账号：${saved.qq}（手动登录时直接回车即可沿用）`);
-  } else {
-    console.log('ℹ️ 未找到历史登录账号，进入手动登录。');
+
+  if (!fs.existsSync(SNOWLUMA_ENTRY)) {
+    console.error(`[启动器] 缺少 ${SNOWLUMA_ENTRY}，请先下载 SnowLuma 并放到项目根的 snowluma/ 目录。`);
+    process.exit(1);
   }
 
-  // 语音识别服务如果不主动拉起，重启/开机后就一直没人启动，语音全变 [语音]。
-  // 放在最前面异步启动，模型加载十几秒，不阻塞 NapCat 与机器人的启动。
+  // 语音识别服务模型加载十几秒，先异步拉起来，不阻塞 QQ / 机器人
   ensureAsrService().catch(() => {});
 
-  // 网页控制面板启用时：先起机器人（面板立即可用），再进入 NapCat 登录。
-  // 这样即使登录要扫码 / 验证码，用户也能先打开面板查看二维码、操作登录，
-  // 而不是先被终端登录流程挡住。机器人起来后会自动重连 NapCat，无需担心先后。
-  const webuiEnabled = !!String(process.env.WEBUI_PASSWORD || '').trim();
-  if (webuiEnabled) {
-    console.log('ℹ️ 已启用网页控制面板：先启动面板（机器人），再处理 NapCat 登录。');
-    const bot = spawnBot();
-    let napcat = null;
-    if (saved) {
-      const auto = await tryAutoLoginNapcat(saved.qq);
-      if (auto.proc) napcat = auto.proc;   // 登录成功，或正在等扫码/验证：进程都留着
-    }
-    if (!napcat) {
-      if (process.stdin.isTTY) {
-        napcat = await manualLoginNapcat();
-      } else {
-        // 后台隐藏运行（计划任务 / background.vbs）没有可交互终端：
-        // 绝不能在 stdin 上等输入，否则会一直卡着、NapCat 起不来，机器人连不上 3001。
-        // 直接按二维码模式把 NapCat 跑起来，二维码在网页面板里显示。
-        console.log('[启动器] 无交互终端（后台运行）：改用二维码登录，NapCat 保持运行，可在网页面板扫码。');
-        const qq = saved ? String(saved.qq) : '';
-        napcat = spawnNapcat({ ...process.env, ...(qq ? { NAPCAT_QUICK_ACCOUNT: qq } : {}) });
-        watchLoginSuccess(napcat, qq);
-      }
-    }
-    linkExit(bot, napcat);
-    return;
-  }
+  ensureOneBotConfig();
+  await ensureQQ();
 
-  if (saved) {
-    if (await tryAutoLogin(saved.qq)) return;
+  const snowluma = spawnSnowluma();
+  // 机器人先起来：面板立刻可用，且 MC 桥/定时任务不必等 QQ 登录。
+  // 它自己每 3 秒重连一次 OneBot WS，SnowLuma 登录成功后自然连上。
+  const bot = spawnBot();
+  linkExit(bot, snowluma);
+
+  try {
+    await waitPort(WS_PORT, 180000);
+    console.log(`[启动器] SnowLuma OneBot WS 端口 ${WS_PORT} 已就绪。`);
+  } catch {
+    console.log('[启动器] 等待 SnowLuma WS 超时（可能还没扫码登录），机器人会继续自动重连。');
   }
-  await manualLogin();
 }
 
 main().catch((e) => { console.error('[启动器] 出错:', e.message); process.exit(1); });

@@ -2,10 +2,10 @@
 
 基于**真实 QQ 账号**的群聊机器人，外加一个 **Minecraft Fabric 服务端模组**，把 QQ 群和游戏内聊天双向打通。
 
-- **本机（Windows）**：QQ 登录（NapCat / OneBot11）、AI 回复、联网搜索、语音、截图、网页控制面板、QQ ↔ 游戏ID 绑定、完整的命令系统。
+- **本机（Windows）**：QQ 登录（SnowLuma / OneBot11，注入桌面 QQ）、AI 回复、联网搜索、语音、截图、网页控制面板、QQ ↔ 游戏ID 绑定、完整的命令系统。
 - **服务端（Fabric 1.21.11）**：把游戏事件（聊天 / 进出服 / 死亡 / 成就）推给本机，接收本机投递的文本；**与 MC 共用同一个端口**（端口复用），即使服务商只放行一个端口也能用。
 
-> 本仓库不含 NapCat 本体（体积大，已在 `.gitignore` 中排除），需自行下载后放到 `napcat/` 目录。
+> 本仓库不含 SnowLuma 本体（体积大，已在 `.gitignore` 中排除），需自行下载后放到 `snowluma/` 目录；它依赖**桌面 QQ 客户端**，并且只能扫码登录。
 
 ---
 
@@ -15,7 +15,7 @@
         QQ 群 / 私聊                          游戏内玩家
              │                                     │
              ▼                                     ▼
-   NapCat (OneBot11, ws://127.0.0.1:3001)   Fabric 模组 xiaona（服务端）
+   SnowLuma (OneBot11, ws://127.0.0.1:3001) Fabric 模组 xiaona（服务端）
              │                                     │
              └──────────────┬──────────────────────┘
                             ▼
@@ -55,7 +55,7 @@
 
 ```
 QQBot/
-├─ start.js             启动器（拉起 NapCat + 机器人 + WebUI）
+├─ start.js             启动器（拉起 QQ + SnowLuma + 机器人 + WebUI）
 ├─ src/                 机器人源码（主程序 index.js + 各功能模块）
 │  ├─ index.js          机器人主程序（消息处理、AI、命令）
 │  ├─ paths.js          项目根路径（运行时资源都相对它，整目录复制即可迁移）
@@ -83,7 +83,7 @@ QQBot/
    └─ src/main/java/com/xiaona/  ·  src/main/resources/
 ```
 
-> **迁移**：整个 `QQBot/` 目录可直接复制到别处运行。`.env`、`config.json`、`data/`、`logs/`、`voice_cache/`、`web/`、`napcat/` 都相对项目根定位，不写死盘符。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
+> **迁移**：整个 `QQBot/` 目录可直接复制到别处运行。`.env`、`config.json`、`data/`、`logs/`、`voice_cache/`、`web/`、`snowluma/` 都相对项目根定位，不写死盘符。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
 
 ---
 
@@ -93,7 +93,7 @@ QQBot/
 |---|---|
 | 系统 | Windows 10 / 11 |
 | 运行时 | **Node.js ≥ 22**（记忆存储用内置 `node:sqlite`，无需编译原生依赖） |
-| QQ | 一个真实 QQ 账号（作机器人）；NapCat 自备 |
+| QQ | 一个真实 QQ 账号（作机器人）+ 桌面 QQ 客户端；SnowLuma 自备 |
 | 服务端桥 | Java 21 · Fabric Loader ≥ 0.18.1 · Fabric API · Minecraft 1.21.11 |
 
 ---
@@ -115,7 +115,7 @@ copy .env.example .env
 启动.bat
 ```
 
-或 `npm start`。首次启动会提示登录 QQ：**密码登录用 ANDROID_PAD，扫码登录用 ANDROID_WATCH**。
+或 `npm start`。启动器会自动拉起 QQ 与 SnowLuma；**首次使用请在服务器桌面上的 QQ 扫码登录**，登录后 SnowLuma 自动注入，OneBot 端口随之上线。
 
 ### 2) 服务端桥（Fabric mod）
 
@@ -139,8 +139,8 @@ gradlew.bat build
 
 | 分组 | 关键项 | 说明 |
 |---|---|---|
-| NapCat | `NAPCAT_WS` / `NAPCAT_TOKEN` | OneBot11 连接地址与 token |
-| NapCat 面板 | `NAPCAT_WEBUI_TOKEN` / `NAPCAT_WEBUI_JWT_SECRET` | 固定面板密码与会话密钥，避免重启掉登录 |
+| SnowLuma | `ONEBOT_WS` / `ONEBOT_TOKEN` | OneBot11 连接地址与 token（会自动写进 `snowluma/config/onebot.json`） |
+| SnowLuma | `QQ_PATH` / `QQ_AUTOLAUNCH` | 桌面 QQ 路径（留空用默认安装位置）、QQ 未运行时是否自动拉起 |
 | 身份 | `BOT_OWNER` / `BOT_ADMINS` | 主人（可执行 `/授权`）、管理员 |
 | AI | `AI_PROVIDER` / `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | 服务商（`deepseek`/`openai`/`custom`，默认 deepseek）；URL 与模型留空则用所选服务商的默认值 |
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |

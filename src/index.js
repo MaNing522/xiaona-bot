@@ -1,5 +1,5 @@
 // ============================================================
-// index.js - 小钠 QQ机器人（真实QQ账号 · NapCat OneBot11）
+// index.js - 小钠 QQ机器人（真实QQ账号 · SnowLuma OneBot11）
 // AI Agent（工具调用：联网搜索 / MC状态 / 玩家查询 / 余额 / 记忆，按身份开放） + 语音 + 截图指令
 // ============================================================
 import WebSocket from 'ws';
@@ -66,8 +66,9 @@ function cacheSet(map, key, max, val) {
     map.set(key, val);
 }
 
-const WS_URL = process.env.NAPCAT_WS || 'ws://127.0.0.1:3001';
-const WS_TOKEN = process.env.NAPCAT_TOKEN || '';
+// SnowLuma（注入真实 QQ 的 OneBot v11）连接参数；旧 NAPCAT_* 命名仍兼容
+const WS_URL = process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1:3001';
+const WS_TOKEN = process.env.ONEBOT_TOKEN || process.env.NAPCAT_TOKEN || '';
 const SAVE_DIR = process.env.SAVE_DIR || path.join(ROOT, 'data');
 // MC 桥（服务器侧 mod）：桥接群号，以及是否把群消息转发进游戏
 const MC_BRIDGE_GROUP = String(process.env.MC_BRIDGE_GROUP || '');
@@ -1409,7 +1410,7 @@ async function handleCommand(event, text) {
                 });
             } catch (e) {
                 logger.error('[合并转发] 发送失败:', e.message);
-                return sendReply(event, `❌ 发送失败：${e.message.slice(0, 80)}\n（也可能是当前 NapCat 不支持合并转发）`);
+                return sendReply(event, `❌ 发送失败：${e.message.slice(0, 80)}\n（也可能是当前 SnowLuma 不支持合并转发）`);
             }
 
             forwardSentAt.set(gid, Date.now());
@@ -1541,7 +1542,14 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
         } else if (cmd === '/群公告') {
             const content = arg.trim();
             if (!content) return sendReply(event, '❌ 用法：#群公告 要发布的内容');
-            await callApi('send_group_notice', { group_id: gid, content });
+            // NapCat 叫 send_group_notice，SnowLuma 里叫 _send_group_notice：先按标准名调，未知 action 再换名重试
+            try {
+                await callApi('send_group_notice', { group_id: gid, content });
+            } catch (e) {
+                const s = String((e && e.message) || '');
+                if (!/1404|unknown action|未知/i.test(s)) throw e;
+                await callApi('_send_group_notice', { group_id: gid, content });
+            }
             await sendReply(event, '📢 群公告已发布。');
         }
     } catch (e) {
@@ -3292,13 +3300,13 @@ function formatStatus(d, admin) {
     }
 
     out.push('', '🤖 机器人');
-    out.push(`· NapCat：${d.bot.connected ? '已连接' : '未连接'}${d.bot.error ? '（' + String(d.bot.error).slice(0, 40) + '）' : ''}`);
+    out.push(`· SnowLuma：${d.bot.connected ? '已连接' : '未连接'}${d.bot.error ? '（' + String(d.bot.error).slice(0, 40) + '）' : ''}`);
     out.push(`· 模型：${d.bot.model}`);
     out.push(`· 已绑定游戏ID：${d.bot.boundGameIds} 个`);
     out.push(`· 运行：${uptimeText(d.bot.uptimeSec)}`);
     if (d.bot.ownerHome) out.push(`· 主人主页：${d.bot.ownerHome}`);
     if (admin) {
-        out.push(`· NapCat 地址：${d.bot.wsUrl}`);
+        out.push(`· OneBot 地址：${d.bot.wsUrl}`);
         out.push(`· 主人：${d.bot.owner || '未设置'}｜已授权 ${d.bot.authorized} 人`);
         out.push(`· 面板：http://${d.bot.webuiHost}:${d.bot.webuiPort}`);
     }
@@ -3327,7 +3335,7 @@ async function doStatus(role) {
             model: getProviderInfo().model,
             boundGameIds,
             uptimeSec: process.uptime(),
-            wsUrl: process.env.NAPCAT_WS || 'ws://127.0.0.1:3001',
+            wsUrl: WS_URL,
             owner: perm.getOwner(),
             ownerHome: (process.env.BOT_OWNER_HOME || '').trim(),
             authorized,
@@ -3454,7 +3462,7 @@ function handleMemoryCmd(event, cmd, arg) {
     return sendReply(event, '🗑️ 已清空本会话的全部记忆。');
 }
 
-// ---------- 主人改昵称 / 换头像（NapCat 扩展接口 set_qq_profile / set_qq_avatar） ----------
+// ---------- 主人改昵称 / 换头像（OneBot/NapCat 扩展接口 set_qq_profile / set_qq_avatar） ----------
 async function handleProfile(event, cmd, arg, r) {
     if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行该操作。');
     try {
@@ -3488,7 +3496,7 @@ async function handleProfile(event, cmd, arg, r) {
     } catch (e) {
         const msg = String(e.message || '');
         if (/不支持|未实现|未知|not support|unknown/i.test(msg)) {
-            return sendReply(event, '❌ 当前 NapCat/QQ 版本不支持该功能。');
+            return sendReply(event, '❌ 当前 SnowLuma/QQ 版本不支持该功能。');
         }
         return sendReply(event, `❌ 操作失败：${msg.slice(0, 200)}`);
     }
@@ -3521,7 +3529,7 @@ function connect() {
     const headers = WS_TOKEN ? { Authorization: `Bearer ${WS_TOKEN}` } : {};
     ws = new WebSocket(WS_URL, { headers });
 
-    ws.on('open', () => { setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 NapCat: ${WS_URL}`); });
+    ws.on('open', () => { setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 SnowLuma: ${WS_URL}`); });
 
     ws.on('message', (raw) => {
         let data;
@@ -3551,7 +3559,7 @@ function connect() {
 }
 
 if (WS_TOKEN === 'your_napcat_token') {
-    logger.warn('⚠️  请确认 .env 中 NAPCAT_TOKEN 与 NapCat WS 设置一致（当前未启用 token）。');
+    logger.warn('⚠️  请确认 .env 中 ONEBOT_TOKEN 与 SnowLuma 的 WS accessToken 一致（当前未启用 token）。');
 }
 logProviderInfo();
 logFeatureStates();
@@ -3564,8 +3572,8 @@ setOwnerNotifier(notifyOwner);
 setTrialChat(runTrialChat);
 // 浏览器关闭（断开连接）时丢弃试用会话，不落盘
 setTrialReset(resetTrialChat);
-// 语音识别：QQ 语音多为 amr/silk，FunASR 吃不下，交给 NapCat 自己的 get_record 转成 wav
-// （NapCat 内部带 silk 解码；record 段的 file 是它自己编码的引用，直接回传即可）
+// 语音识别：QQ 语音多为 amr/silk，FunASR 吃不下，交给 SnowLuma 的 get_record 转成 wav
+// （SnowLuma 自带 silk 解码；record 段的 file 是它自己编码的引用，直接回传即可）
 setAudioConverter(async (data) => {
     const ref = String((data && (data.file || data.file_id)) || '').trim();
     if (!ref) return null;

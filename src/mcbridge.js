@@ -682,8 +682,8 @@ function stripImageCodes(text) {
 
 /**
  * 把游戏里的图片地址变成 QQ 能发的形式。
- * - http(s)：直接把地址交给 NapCat 去取（唯一对所有人通用的形式）
- * - data:image/...;base64,xxx：转成 NapCat 的 base64://
+ * - http(s)：直接把地址交给 OneBot 客户端去取（唯一对所有人通用的形式）
+ * - data:image/...;base64,xxx：转成 OneBot 的 base64://
  * - file:/// 或裸路径：只有当本机机器人恰好也在那台机器上（自己在本地玩）才读得到，
  *   读不到就返回空，由调用方跳过（不会把转发搞挂）
  */

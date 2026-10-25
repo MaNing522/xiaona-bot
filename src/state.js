@@ -2,7 +2,7 @@
 // state.js - 跨模块共享运行时状态（供 WebUI 展示）
 // ============================================================
 export const bot = {
-  connected: false, // 是否已连接 NapCat(OneBot WS)
+  connected: false, // 是否已连接 SnowLuma(OneBot WS)
   lastError: '',
 };
 

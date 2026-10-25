@@ -7,7 +7,7 @@
 - 提交：`git add <具体文件…>` —— **不要用 `git add -A` / `git add .`**，仓库里有 `_tk_repro.mjs` 之类的临时文件，不该进版本库
 - 推送：在 `c:\QQBot` 目录下执行 `.\push.bat`（读 `.env` 里的 `GITHUB_TOKEN` / `GITHUB_REPO` 推到 GitHub）
 - 提交信息：`git commit -m "标题" -m "正文"`
-- **改完重启机器人**：在 `c:\QQBot` 执行 `.\restart.bat`。它会自提权、结束旧的 `start.js` 进程树（连同 NapCat / bot），注册并运行计划任务 `XiaonaBot`，以**隐藏窗口**在后台启动 —— 不需要用户再开控制台。
+- **改完重启机器人**：在 `c:\QQBot` 执行 `.\restart.bat`。它会自提权、结束旧的 `start.js` 进程树（连同 SnowLuma / bot），注册并运行计划任务 `XiaonaBot`，以**隐藏窗口**在后台启动 —— 不需要用户再开控制台。
 
 ## 1. 环境坑（先看，能省很多时间）
 
@@ -22,7 +22,7 @@
 
 | 部分 | 位置 | 说明 |
 |---|---|---|
-| QQ 机器人 | `c:\QQBot`（Node） | NapCat + OneBot 11。AI 对话、游戏ID绑定、MC 桥接 |
+| QQ 机器人 | `c:\QQBot`（Node） | SnowLuma（注入桌面 QQ）+ OneBot 11。AI 对话、游戏ID绑定、MC 桥接 |
 | MC 服务端 mod | `c:\QQBot\xiaona-mod` | Fabric 多版本（1.21.11 / 1.21.8 / 1.21.1），Java 21，跑在 Minecraft 服务器上 |
 
 ## 3. 架构与数据流（理解这个才不会做错设计）
@@ -73,22 +73,25 @@ cd c:\QQBot; .\restart.bat
 ```
 
 - 后台隐藏启动：`background.vbs`（wscript 调用，未提权会自动弹一次 UAC；`restart.bat` 与计划任务都走它）。
-- **后台隐藏运行没有可交互终端**：`start.js` 检测到 `stdin` 不是 TTY 时**不会**进手动登录（否则会永远卡在等待输入，NapCat 起不来 → 面板一直显示连不上 3001），而是直接用二维码模式把 NapCat 跑起来，二维码在网页面板看。快速登录失败但已出二维码/需要验证时也**不杀** NapCat 进程。
+- **SnowLuma（2026-10 起替代 NapCat）**：它是注入**真实桌面 QQ.exe** 的 OneBot v11 框架，**只能扫码登录**，二维码显示在 QQ 自己的窗口里（不在网页）。启动器 `start.js` 会自动拉起 QQ（`QQ_PATH`，默认 `C:\Program Files\Tencent\QQNT\QQ.exe`；`QQ_AUTOLAUNCH=false` 可关）和 `snowluma/index.mjs`（cwd 必须是 `snowluma/`，配置目录相对 cwd），并设置 `SNOWLUMA_HOOK_AUTOLOAD=1` 让 QQ 登录后自动注入。QQ 没登录时 OneBot WS 不会监听，机器人会一直自动重连，属正常现象。
+- **SnowLuma 配置与 token**：`start.js` 会确保 `snowluma/config/onebot.json` 的 `ws-default` 为 `127.0.0.1:<ONEBOT_WS 端口>`、`messageFormat: array`、token = `.env` 的 `ONEBOT_TOKEN`（留空则沿用已有/自动生成并持久化）。已存在的 `onebot_<uin>.json`（snapshot 模式会完全覆盖全局）也会被同步同样的 host/port/token，否则换号后旧的端口/token 会把机器人挡在门外。SnowLuma 自己的控制台默认 `http://127.0.0.1:5099`（端口在 `snowluma/config/runtime.json`）。
+- **OneBot action 差异**：SnowLuma 把群公告叫 `_send_group_notice`（NapCat 是 `send_group_notice`），`index.js` 已做未知 action 时自动换名重试；其余用到的 action（`send_group_msg`/`get_record(out_format=wav)`/`set_group_ban`/`get_group_member_list` 等）均已确认存在。
+- **权限一致性**：SnowLuma 与 QQ 的进程权限级别要尽量一致。当前启动链（`restart.bat` → 计划任务 `/rl highest` → `background.vbs`）是管理员权限，`start.js` 代拉的 QQ 也会是管理员；如果用户手动开的普通权限 QQ 注入失败，先检查这一点。
 - **语音识别服务（FunASR）现在由启动器自动拉起**：`start.js` 启动时检查 `ASR_URL` 的端口（默认 8899），没在跑就用 `asr-venv\Scripts\funasr-server.exe --host 127.0.0.1 --port 8899 --model sensevoice --device cpu` 隐藏启动；端口已被占用（手动跑了 `startASR.bat`）就跳过。venv 在项目内 `asr-venv`（已 gitignore），依赖：CPU 版 torch/torchaudio + funasr/fastapi/uvicorn/python-multipart。**FunASR 1.4+ 的模型名必须写它自己注册的 `sensevoice`（或 `paraformer` 等），写 ModelScope 的 `iic/SenseVoiceSmall` 会被 400 拒绝**。首次运行会下载约 1GB 模型到 `~/.cache/modelscope`。
-- `restart.bat` 除了结束 `start.js` 进程树，还会清理**残留的 NapCat**（手动启动或上次没退干净的）。残留进程占着 3001 时，新 NapCat 绑不上端口，机器人就会一直 `ECONNREFUSED 127.0.0.1:3001`。
+- `restart.bat` 除了结束 `start.js` 进程树，还会清理**残留的 SnowLuma**（手动启动或上次没退干净的，按 3001 端口的 node 进程识别）。残留进程占着 3001 时，新 SnowLuma 绑不上端口，机器人就会一直 `ECONNREFUSED 127.0.0.1:3001`。**不要杀 QQ 进程**（保留登录态）。
 - 开机自启：计划任务 **`XiaonaBot`**（登录时触发，延迟 30 秒，最高权限），动作为 `wscript.exe "C:\QQBot\background.vbs"`。
   排查：`schtasks /query /tn "XiaonaBot" /v /fo LIST`（需管理员）；删除：`schtasks /delete /tn "XiaonaBot" /f`。
 
 ## 6. 约定与文件地图
 
-- **目录布局（2026-10 整理）**：`start.js` 是唯一入口、留在根目录；机器人模块全部在 `src/`（主程序 `src/index.js`）。`src/paths.js` 导出 `ROOT`，所有运行时资源（`.env`、`config.json`、`prompt.txt`、`data/`、`logs/`、`voice_cache/`、`web/`、`napcat/`）都从 `ROOT` 定位，**不写死盘符 —— 复制整个 QQBot 目录即可迁移**。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
+- **目录布局（2026-10 整理）**：`start.js` 是唯一入口、留在根目录；机器人模块全部在 `src/`（主程序 `src/index.js`）。`src/paths.js` 导出 `ROOT`，所有运行时资源（`.env`、`config.json`、`prompt.txt`、`data/`、`logs/`、`voice_cache/`、`web/`、`snowluma/`）都从 `ROOT` 定位，**不写死盘符 —— 复制整个 QQBot 目录即可迁移**。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
 - 版本号在 [xiaona-mod/build.gradle](file:///c:/QQBot/xiaona-mod/build.gradle)，**每次加功能递增**。
 - **多版本构建（Fabric）**：根项目仍是 1.21.11（源码在 `src/main/java`，产物 `build/libs/xiaona-mod-<ver>.jar`）；`fabric-1.21.1` / `fabric-1.21.8` 是子项目，构建时用 `Sync` 把「根项目共享源码 + `legacy/src/main/java` 覆盖层」合成到各自的 `build/merged-src` 再编译，产物 `fabric-<ver>/build/libs/xiaona-mod-<mc>-<ver>.jar`。
   - `legacy/` 只放旧版（1.21.1 / 1.21.8 同代 API）确有差异的文件：`WhitelistGate`（`GameProfile` 版）、`VanillaBanProvider`（反射读 `ServerConfigEntry#getKey`）、`mixin/PlayerManagerMixin`（`checkCanJoin(SocketAddress, GameProfile)`）、`Compat`（`executeWithPrefix` / `isOperator(GameProfile)`）。
   - 共享代码里凡涉及这些差异的，一律走 `Compat`，不要直接写版本专属 API。
   - **26.x 还没支持**：Yarn 映射止于 1.21.11；26.x 用 Mojang 官方名（没有 intermediary）且要求 Java 25，需要单独做映射改写与 JDK 25 构建环境。
 - 注释、日志、提交信息一律用**中文**（用户偏好）。
-- bot（模块都在 `src/`）：`index.js` 入口与命令分发、`agent.js`（AI 工具调用 agent：工具注册 + 按身份过滤 + 循环；工具含 web_search/analyze_image/mc_status/player_query/ai_balance/mc_command/adjust_favor/sing/remember/recall_memory。**sing 是普通工具**，模型给歌词后由 `index.js` 的 `ctx.sing` 把歌词**压成一行**、拼 `(唱歌)` 标签后合成语音直接发出，QQ 场景才开放；记不住歌词时模型应先 web_search 搜歌词）、`aiService.js`（服务商/模型/请求，含 `chatCompletionRaw`）、`binding.js` 游戏ID绑定、`permission.js` 授权与等级、`mcbridge.js` MC 桥客户端、`chatSettings.js`（会话级设置：群/私聊各自覆盖全局，落盘 `data/chat-settings.json`）、`asr.js`（语音识别：调**本地 FunASR/SenseVoice** 的 OpenAI 兼容接口，服务由 `start.js` 自动拉起（venv 在 `asr-venv`，也可手动跑 `startASR.bat` 看日志）；**amr/silk 会先经 `setAudioConverter` 注入的 NapCat `get_record(out_format=wav)` 转码**，识别结果再按 config.json 的 `asr.homophones` 做**同音纠正**把小娜/小纳改回小钠）、`tts.js`（语音合成：`TTS_PROVIDER` 切换后端。默认 **小米 MiMo TTS**（`mimo-v2.5-tts`，OpenAI 兼容 `POST https://api.xiaomimimo.com/v1/chat/completions`，目标文本放 `role=assistant`，文本开头写 `(风格)` 标签控制语气；**唱歌必须精确用 `(唱歌)` 开头，且整段歌词不能有换行**——标签里多写别的词（如 `(唱歌 温柔)`）、歌词分行、或额外带 `role=user` 的风格指令，都会退化成朗读（实测同段歌词：一行 43s 真唱 vs 分行+指令 26.7s 朗读），返回 `choices[0].message.audio.data` base64；密钥 `.env` 的 `MIMO_API_KEY`，音色 `TTS_XIAOMI_VOICE` 默认 `冰糖`）；配不到 key 或 `TTS_PROVIDER=edge` 时回退**微软 Edge 朗读服务**（协议同 Python 的 `edge-tts`，音色/语速/音量读 `TTS_VOICE`/`TTS_RATE`/`TTS_VOLUME`，`edgeDrm.js` 是它的 Sec-MS-GEC v2 令牌算法）。送进 TTS 前统一用 `stripEmoji` 去掉 emoji/颜文字，语音里不带表情）、`edgeDrm.js`（**Edge TTS 的 DRM 令牌**：v2 格式为「16 位 CS64-64 位 SHA256」，两段哈希都是微软魔改版，逐位移植自 edge-tts 的 `drm.py`；改这里要拿 Python `edge-tts` 的 `generate_sec_ms_gec_v2` 对拍）、`help.js` 帮助文案、根目录 `prompt.txt` AI 人设、`push.bat` 推送、`restart.bat` 重启（自提权 + 注册计划任务 + 隐藏启动）、`background.vbs` 隐藏窗口启动器（开机自启任务调用它）。
+- bot（模块都在 `src/`）：`index.js` 入口与命令分发、`agent.js`（AI 工具调用 agent：工具注册 + 按身份过滤 + 循环；工具含 web_search/analyze_image/mc_status/player_query/ai_balance/mc_command/adjust_favor/sing/remember/recall_memory。**sing 是普通工具**，模型给歌词后由 `index.js` 的 `ctx.sing` 把歌词**压成一行**、拼 `(唱歌)` 标签后合成语音直接发出，QQ 场景才开放；记不住歌词时模型应先 web_search 搜歌词）、`aiService.js`（服务商/模型/请求，含 `chatCompletionRaw`）、`binding.js` 游戏ID绑定、`permission.js` 授权与等级、`mcbridge.js` MC 桥客户端、`chatSettings.js`（会话级设置：群/私聊各自覆盖全局，落盘 `data/chat-settings.json`）、`asr.js`（语音识别：调**本地 FunASR/SenseVoice** 的 OpenAI 兼容接口，服务由 `start.js` 自动拉起（venv 在 `asr-venv`，也可手动跑 `startASR.bat` 看日志）；**amr/silk 会先经 `setAudioConverter` 注入的 SnowLuma `get_record(out_format=wav)` 转码**，识别结果再按 config.json 的 `asr.homophones` 做**同音纠正**把小娜/小纳改回小钠）、`tts.js`（语音合成：`TTS_PROVIDER` 切换后端。默认 **小米 MiMo TTS**（`mimo-v2.5-tts`，OpenAI 兼容 `POST https://api.xiaomimimo.com/v1/chat/completions`，目标文本放 `role=assistant`，文本开头写 `(风格)` 标签控制语气；**唱歌必须精确用 `(唱歌)` 开头，且整段歌词不能有换行**——标签里多写别的词（如 `(唱歌 温柔)`）、歌词分行、或额外带 `role=user` 的风格指令，都会退化成朗读（实测同段歌词：一行 43s 真唱 vs 分行+指令 26.7s 朗读），返回 `choices[0].message.audio.data` base64；密钥 `.env` 的 `MIMO_API_KEY`，音色 `TTS_XIAOMI_VOICE` 默认 `冰糖`）；配不到 key 或 `TTS_PROVIDER=edge` 时回退**微软 Edge 朗读服务**（协议同 Python 的 `edge-tts`，音色/语速/音量读 `TTS_VOICE`/`TTS_RATE`/`TTS_VOLUME`，`edgeDrm.js` 是它的 Sec-MS-GEC v2 令牌算法）。送进 TTS 前统一用 `stripEmoji` 去掉 emoji/颜文字，语音里不带表情）、`edgeDrm.js`（**Edge TTS 的 DRM 令牌**：v2 格式为「16 位 CS64-64 位 SHA256」，两段哈希都是微软魔改版，逐位移植自 edge-tts 的 `drm.py`；改这里要拿 Python `edge-tts` 的 `generate_sec_ms_gec_v2` 对拍）、`help.js` 帮助文案、根目录 `prompt.txt` AI 人设、`push.bat` 推送、`restart.bat` 重启（自提权 + 注册计划任务 + 隐藏启动）、`background.vbs` 隐藏窗口启动器（开机自启任务调用它）。
 - **配置分工**：`.env` 放密钥/账号/开关等部署项；**数值类可调项（限速、冷却、唤起会话）与「会话层全局默认（chat：是否回复/关键词/语音/补充提示词）放 `config.json`**，由 `src/config.js` 读取（支持 `//` 注释，缺字段自动兜底）。改这些数值请改 config.json，不要再往 .env 加 `RL_*` / `FORWARD_*`。
 - **可切换后端（都在 config.json，网页「全局设置」可改，热加载即生效）**：
   - `search`：`provider` = `off`/`baidu`/`deepseek`/`custom`，`limit`、`customUrl`。deepseek 复用 `.env` 的 `AI_API_KEY`（`POST https://api.deepseek.com/v1/tools/search`，{query,count}）；baidu 用 `BAIDU_SEARCH_KEY`（千帆 ai_search，**不要传 model**，否则走没权限的智能总结模式）；custom 用 `SEARCH_CUSTOM_KEY`。

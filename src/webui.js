@@ -1,6 +1,6 @@
 // ============================================================
 // webui.js - 响应式网页控制面板（Node 内置 http，无第三方依赖）
-// 功能：NapCat 登录管理(二维码/账密/验证码)、授权管理、状态监控、日志流
+// 功能：SnowLuma / QQ 连接状态、授权管理、状态监控、日志流
 // ============================================================
 import http from 'http';
 import fs from 'fs';
@@ -8,7 +8,7 @@ import path from 'path';
 import net from 'net';
 import os from 'os';
 import crypto from 'crypto';
-import { spawn } from 'child_process';
+import { execFile } from 'child_process';
 import * as perm from './permission.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
@@ -26,25 +26,14 @@ import {
 } from './binding.js';
 import { ROOT } from './paths.js';
 
-const NAPCAT_DIR = path.join(ROOT, 'napcat');
-const NODE_BIN = path.join(NAPCAT_DIR, 'node.exe');
-const QR_FILE = path.join(NAPCAT_DIR, 'napcat', 'cache', 'qrcode.png');
-const LOGIN_FILE = path.join(ROOT, 'data', 'login.json');
+const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 
-const MAX_LOG = 300;
+// OneBot 连接参数（与 index.js 保持一致；旧 NAPCAT_* 仍兼容）
+const ONEBOT_WS = String(process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').trim();
 
 // WebUI 实际监听的端口（配置端口被占用时会自动顺延，这里记录真实值供状态页展示）
 let webuiPort = 0;
-
-// ---------- 记住上次成功登录的账号（面板与启动脚本共用同一个文件） ----------
-function readSavedQq() {
-  const d = readJsonSafe(LOGIN_FILE, null, 'login.json');
-  return d && /^\d{5,14}$/.test(String(d.qq)) ? String(d.qq) : '';
-}
-function saveLoginQq(qq) {
-  writeJsonAtomic(LOGIN_FILE, { qq: String(qq), at: Date.now() });
-}
 
 // 主人通知回调（由 index.js 注入，用于 QQ 通知主人审批）
 let notifyOwner = null;
@@ -63,129 +52,86 @@ export function setTrialReset(cb) {
   trialReset = cb;
 }
 
-// ---------- 登录子进程管理 ----------
-const login = {
-  proc: null,
-  mode: '',
-  qq: '',
-  saved: false,
-  logs: [],
-  startedAt: 0,
-};
+// ---------- SnowLuma / QQ 连接状态 ----------
+// SnowLuma 注入真实 QQ.exe；只有 QQ 登录成功后它才会监听 OneBot WS（默认 3001）。
+// 所以「WS 端口在监听」≈「QQ 已登录且 SnowLuma 已就绪」，面板据此展示。
+const ONEBOT_PORT = Number((ONEBOT_WS.match(/:(\d+)/) || [])[1] || 3001);
 
-function bufLog(line) {
-  login.logs.push(line);
-  if (login.logs.length > MAX_LOG) login.logs.shift();
-}
+let slUp = false;
+let slProbeAt = 0;
 
-function detectSuccess() {
-  const s = login.logs.join('\n');
-  return /登录成功|密码回退登录成功|快速登录成功|READY|已登录|CoreVersion|QQLoginStatus/.test(s);
-}
-function detectCaptcha() {
-  const s = login.logs.join('\n');
-  return /验证码|proofWater|需要验证|异常设备|新设备|滑块/.test(s);
-}
-// 从日志中提取验证链接（NapCat 需要验证码/滑块时会打印验证 URL）
-function extractVerifyUrl() {
-  const lines = login.logs.filter((l) => /验证|安全|滑块|verify|captcha/i.test(l));
-  for (const l of lines) {
-    const m = l.match(/https?:\/\/[^\s"'）)]+/);
-    if (m) return m[0];
-  }
-  return '';
-}
-
-// ---------- NapCat 在线探测（无论是否由面板启动，与终端一致） ----------
-let napcatUp = false;
-let napcatProbeAt = 0;
-function wsPort() {
-  const m = (process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').match(/:(\d+)/);
-  return m ? +m[1] : 3001;
-}
-async function probeNapCat() {
-  const now = Date.now();
-  if (now - napcatProbeAt < 2000) return napcatUp; // 2s 缓存，避免高频探测
-  napcatProbeAt = now;
-  const port = wsPort();
-  napcatUp = await new Promise((resolve) => {
+function probePort(port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
     const s = net.connect(port, '127.0.0.1');
-    const done = (v) => { s.destroy(); resolve(v); };
-    s.on('connect', () => done(true));
-    s.on('error', () => done(false));
-    s.setTimeout(1500, () => done(false));
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      s.destroy();
+      resolve(ok);
+    };
+    s.setTimeout(timeoutMs, () => finish(false));
+    s.once('connect', () => finish(true));
+    s.once('error', () => finish(false));
   });
-  return napcatUp;
 }
 
-async function startLogin({ mode, qq, password }) {
-  if (login.proc) return { error: '已有登录进程在运行，请先停止。' };
-  if (mode === 'password' && (!qq || !password)) return { error: '账密登录需要账号和密码。' };
-  // NapCat 已在外部运行（如 启动.bat 拉起）时，避免重复启动两个 NapCat
-  if (await probeNapCat()) return { error: '检测到 NapCat 已在运行（可能由启动脚本外部启动），请勿重复启动。' };
+async function probeSnowLuma() {
+  const now = Date.now();
+  if (now - slProbeAt < 2000) return slUp; // 2s 缓存，避免高频探测
+  slProbeAt = now;
+  slUp = await probePort(ONEBOT_PORT);
+  return slUp;
+}
 
-  const args = ['./index.js'];
-  if (qq) args.push('-q', String(qq));
-  const env = { ...process.env };
-  if (mode === 'password') {
-    env.ACCOUNT = String(qq);
-    env.NAPCAT_QUICK_ACCOUNT = String(qq);
-    env.NAPCAT_QUICK_PASSWORD = String(password);
-  } else if (qq) {
-    env.NAPCAT_QUICK_ACCOUNT = String(qq);
-  }
-
-  login.mode = mode;
-  login.qq = qq ? String(qq) : '';
-  login.saved = false;          // 只有真的登录成功才落盘（避免记住输错的账号）
-  login.logs = [];
-  login.startedAt = Date.now();
-
-  const proc = spawn(NODE_BIN, args, { cwd: NAPCAT_DIR, env, windowsHide: true });
-  login.proc = proc;
-
-  const onData = (chunk) => {
-    String(chunk).split(/\r?\n/).forEach((l) => l.trim() && bufLog(l.trim()));
-    if (!login.saved && login.qq && detectSuccess()) {
-      login.saved = true;
-      saveLoginQq(login.qq);
-      bufLog(`[进程] 已记住账号 ${login.qq}，下次登录自动填充。`);
-    }
-  };
-  proc.stdout.on('data', onData);
-  proc.stderr.on('data', onData);
-  proc.on('exit', (code) => {
-    bufLog(`[进程] NapCat 已退出 (code=${code})`);
-    login.proc = null;
+// QQ.exe 是否在跑（5 秒缓存；tasklist 查询不贵，但面板轮询很频繁）
+let qqUp = false;
+let qqProbeAt = 0;
+function probeQQ() {
+  const now = Date.now();
+  if (now - qqProbeAt < 5000) return Promise.resolve(qqUp);
+  qqProbeAt = now;
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/NH'], { windowsHide: true }, (err, stdout) => {
+      qqUp = !err && /QQ\.exe/i.test(String(stdout || ''));
+      resolve(qqUp);
+    });
   });
-  bufLog(`[进程] 已启动 NapCat，登录方式: ${mode}${qq ? `，账号 ${qq}` : ''}`);
-  return { ok: true };
 }
 
-function stopLogin() {
-  if (login.proc) {
-    try { login.proc.kill(); } catch {}
-    login.proc = null;
-  }
-  login.logs = [];
-  return { ok: true };
+/** SnowLuma 控制台端口（可在 snowluma/config/runtime.json 改） */
+function snowlumaWebuiPort() {
+  const d = readJsonSafe(path.join(SNOWLUMA_DIR, 'config', 'runtime.json'), null, 'runtime.json');
+  const p = Number(d && d.webuiPort);
+  return Number.isFinite(p) && p > 0 ? p : 5099;
 }
 
-async function loginStatus() {
-  const up = await probeNapCat(); // NapCat 实际在线（含外部启动）
+async function connectionStatus() {
+  const up = await probeSnowLuma();
+  const slPort = snowlumaWebuiPort();
   return {
-    running: !!login.proc,
-    mode: login.mode,
-    startedAt: login.startedAt,
-    qrExists: fs.existsSync(QR_FILE),
-    success: detectSuccess(),
-    captcha: detectCaptcha(),
-    verifyUrl: extractVerifyUrl(),
-    napcatUp: up,
-    external: !login.proc && up, // 外部启动（非面板启动）
-    savedQq: readSavedQq(),      // 上次成功登录的账号，供面板自动填充
-    logs: login.logs.slice(-80),
+    snowlumaUp: up,
+    qqRunning: await probeQQ(),
+    botConnected: bot.connected,
+    botError: bot.lastError || '',
+    wsUrl: ONEBOT_WS,
+    snowlumaWebui: `http://127.0.0.1:${slPort}`,
+    snowlumaWebuiPort: slPort,
   };
+}
+
+/** 最新一份 SnowLuma 日志的末尾若干行（日志文件在 snowluma/logs/） */
+function tailSnowlumaLog(maxLines = 80) {
+  try {
+    const dir = path.join(SNOWLUMA_DIR, 'logs');
+    const files = fs.readdirSync(dir).filter((f) => /^snowluma-.*\.log$/.test(f)).sort();
+    if (!files.length) return [];
+    const file = path.join(dir, files[files.length - 1]);
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+    return lines.slice(-maxLines);
+  } catch {
+    return [];
+  }
 }
 
 // ---------- HTTP 工具 ----------
@@ -206,7 +152,7 @@ function readBody(req) {
 }
 
 // ---------- 面板认证：账号密码 + 图形人机验证 + 会话 Cookie ----------
-// 面板能控制机器人（以机器人身份发消息、用 QQ 账密启动登录），公开到局域网后必须挡一层。
+// 面板能以机器人身份发消息、管理授权，公开到局域网后必须挡一层。
 const PANEL_USER = process.env.WEBUI_USER || 'admin';
 // 密码只从 .env 读，代码里不留任何默认值：没配就直接拒绝启动（fail-closed），
 // 避免出现"忘了配密码 → 面板用一个人所共知的默认密码裸奔"的情况
@@ -548,7 +494,7 @@ async function handleHealth(res) {
 }
 
 // ---------- 会话列表：所有群聊 + 所有好友（主人默认置顶） ----------
-// 群/好友名单从 NapCat 拉取（get_group_list / get_friend_list），缓存 60 秒避免频繁请求。
+// 群/好友名单从 SnowLuma 拉取（get_group_list / get_friend_list），缓存 60 秒避免频繁请求。
 const convCache = { at: 0, groups: [], friends: [], ok: false };
 const CONV_CACHE_MS = 60 * 1000;
 
@@ -714,26 +660,16 @@ async function route(req, res, url) {
 
   if (!url.pathname.startsWith('/api/')) return sendJSON(res, 404, { error: 'not found' });
 
-  // 其余所有接口一律要求登录（含二维码、日志、授权列表、接管）
+  // 其余所有接口一律要求登录（含日志、授权列表、接管）
   if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
 
-  // 登录二维码：等于账号的登录凭据，必须登录后才给
-  if (url.pathname === '/api/qrcode') {
-    if (!fs.existsSync(QR_FILE)) return sendJSON(res, 404, { error: '暂无二维码' });
-    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
-    return res.end(fs.readFileSync(QR_FILE));
-  }
-
   if (url.pathname === '/api/status') {
-    const ls = await loginStatus();
+    const ls = await connectionStatus();
     const bt = getBridgeTarget();
     return sendJSON(res, 200, {
       serviceUp: true,
       model: process.env.AI_MODEL || 'deepseek-flash',
-      wsUrl: process.env.NAPCAT_WS || 'ws://127.0.0.1:3001',
       webuiPort,
-      botConnected: bot.connected,
-      botError: bot.lastError,
       owner: perm.getOwner(),
       // 联网搜索 / 图像识别 / MC 桥：让状态页看得见当前切在哪个后端
       search: { enabled: isSearchEnabled(), provider: searchSettings().provider },
@@ -847,17 +783,14 @@ async function route(req, res, url) {
     return sendJSON(res, 400, { ok: false, error: '未知操作' });
   }
 
-  if (url.pathname === '/api/login/start' && req.method === 'POST') {
-    const { mode, qq, password } = await readBody(req);
-    return sendJSON(res, 200, await startLogin({ mode: mode || 'qrcode', qq, password }));
+  // 连接状态：SnowLuma 是否就绪、QQ 是否在跑、机器人是否连上
+  if (url.pathname === '/api/connection/status') {
+    return sendJSON(res, 200, await connectionStatus());
   }
 
-  if (url.pathname === '/api/login/stop' && req.method === 'POST') {
-    return sendJSON(res, 200, stopLogin());
-  }
-
-  if (url.pathname === '/api/login/status') {
-    return sendJSON(res, 200, await loginStatus());
+  // SnowLuma 自己的运行日志（末尾若干行）
+  if (url.pathname === '/api/snowluma/logs') {
+    return sendJSON(res, 200, { logs: tailSnowlumaLog(80) });
   }
 
   // 试用页聊天：以「小锂 · 普通用户」身份跑一轮私聊 AI，返回小钠的回复
@@ -966,7 +899,7 @@ async function route(req, res, url) {
   if (url.pathname === '/api/takeover/send' && req.method === 'POST') {
     const { key, text } = await readBody(req);
     const send = getSendMsg();
-    if (!send) return sendJSON(res, 200, { ok: false, error: '机器人未连接 NapCat' });
+    if (!send) return sendJSON(res, 200, { ok: false, error: '机器人未连接 SnowLuma' });
     const text2 = String(text || '').trim();
     if (!/^(p|g):\d{5,14}$/.test(String(key)) || !text2) return sendJSON(res, 400, { error: 'key 或内容格式错误' });
     const isGroup = String(key).startsWith('g:');

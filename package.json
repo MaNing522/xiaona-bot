@@ -1,7 +1,7 @@
 {
   "name": "qq-bot",
   "version": "1.0.0",
-  "description": "基于真实QQ账号(QQNT/NapCat OneBot11) 的小钠机器人：AI回复+语音+截图",
+  "description": "基于真实QQ账号(QQNT/SnowLuma OneBot11) 的小钠机器人：AI回复+语音+截图",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

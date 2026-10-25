@@ -10,6 +10,7 @@ export default [
     ignores: [
       'node_modules/**',
       'napcat/**',
+      'snowluma/**',
       'asr-venv/**',
       'tools/**',
       'xiaona-mod/**',

@@ -5,7 +5,7 @@ title Xiaona QQ Bot Restart
 rem ============================================================
 rem  Xiaona QQ Bot: restart in background + install autostart
 rem
-rem  1) stop the running launcher tree (start.js + NapCat + bot)
+rem  1) stop the running launcher tree (start.js + SnowLuma + bot)
 rem  2) register the logon task "XiaonaBot" (highest privileges)
 rem  3) start it again WITHOUT a console window
 rem
@@ -33,9 +33,10 @@ cd /d "%~dp0"
 echo [restart] Stopping the current Xiaona (start.js process tree)...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -match 'start\.js' -and $_.CommandLine -match 'QQBot' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }"
 
-rem Also stop stray NapCat instances (manually started, or left over from an earlier run).
-rem If port 3001 is still held, the fresh NapCat cannot bind and the bot can never connect.
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -match 'QQBot\\napcat' -or $_.CommandLine -match 'napcat\.mjs' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }"
+rem Also stop stray SnowLuma instances (manually started, or left over from an earlier run).
+rem SnowLuma must bind the OneBot WS port (3001); if it is still held, the fresh instance
+rem cannot bind and the bot keeps failing with ECONNREFUSED 127.0.0.1:3001.
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'node') { taskkill /PID $_.OwningProcess /T /F | Out-Null } }"
 
 rem Give Windows a moment to release ports 80 / 3001
 ping -n 5 127.0.0.1 >nul
