@@ -73,7 +73,7 @@ cd c:\QQBot; .\restart.bat
 ```
 
 - 后台隐藏启动：`background.vbs`（wscript 调用，未提权会自动弹一次 UAC；`restart.bat` 与计划任务都走它）。
-- **SnowLuma（2026-10 起替代 NapCat）**：它是注入**真实桌面 QQ.exe** 的 OneBot v11 框架，**只能扫码登录**，二维码显示在 QQ 自己的窗口里（不在网页）。启动器 `start.js` 会自动拉起 QQ（`QQ_PATH`，默认 `C:\Program Files\Tencent\QQNT\QQ.exe`；`QQ_AUTOLAUNCH=false` 可关）和 `snowluma/index.mjs`（cwd 必须是 `snowluma/`，配置目录相对 cwd），并设置 `SNOWLUMA_HOOK_AUTOLOAD=1` 让 QQ 登录后自动注入。QQ 没登录时 OneBot WS 不会监听，机器人会一直自动重连，属正常现象。
+- **SnowLuma（2026-10 起替代 NapCat）**：它是注入**真实桌面 QQ.exe** 的 OneBot v11 框架，**只能扫码登录**，二维码显示在 QQ 自己的窗口里（不在网页）。启动器 `start.js` 会自动拉起 QQ（`QQ_PATH`，默认 `C:\Program Files\Tencent\QQNT\QQ.exe`；`QQ_AUTOLAUNCH=false` 可关）和 `snowluma/index.mjs`（cwd 必须是 `snowluma/`，配置目录相对 cwd），并设置 `SNOWLUMA_HOOK_AUTOLOAD=1` 让 QQ 登录后自动注入。QQ 没登录时 OneBot WS 不会监听，机器人会一直自动重连，属正常现象。**注意**：桌面 QQ 必须保持在机器人账号上（别让它自动登录成主人号）；QQ 退出或被换号后，SnowLuma 不一定能自己重新注入新开的 QQ——若 3001 端口长时间不恢复，直接 `.\restart.bat`，不要手动单跑 SnowLuma。
 - **SnowLuma 配置与 token**：`start.js` 会确保 `snowluma/config/onebot.json` 的 `ws-default` 为 `127.0.0.1:<ONEBOT_WS 端口>`、`messageFormat: array`、token = `.env` 的 `ONEBOT_TOKEN`（留空则沿用已有/自动生成并持久化）。已存在的 `onebot_<uin>.json`（snapshot 模式会完全覆盖全局）也会被同步同样的 host/port/token，否则换号后旧的端口/token 会把机器人挡在门外。SnowLuma 自己的控制台默认 `http://127.0.0.1:5099`（端口在 `snowluma/config/runtime.json`）。
 - **OneBot action 差异**：SnowLuma 把群公告叫 `_send_group_notice`（NapCat 是 `send_group_notice`），`index.js` 已做未知 action 时自动换名重试；其余用到的 action（`send_group_msg`/`get_record(out_format=wav)`/`set_group_ban`/`get_group_member_list` 等）均已确认存在。
 - **权限一致性**：SnowLuma 与 QQ 的进程权限级别要尽量一致。当前启动链（`restart.bat` → 计划任务 `/rl highest` → `background.vbs`）是管理员权限，`start.js` 代拉的 QQ 也会是管理员；如果用户手动开的普通权限 QQ 注入失败，先检查这一点。
