@@ -972,6 +972,27 @@ async function onSelfMessage(event) {
 }
 
 /**
+ * 撤回失败时给用户看的人话，不把 OneBot 的原始错误 JSON（status/retcode/data）直接甩出来。
+ * 技术细节只通过 briefApiErr 写日志。
+ */
+function recallFailText(e) {
+    const raw = String((e && e.message) || e || '');
+    let detail = raw;
+    let retcode;
+    try {
+        const o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+            detail = String(o.message || '');
+            retcode = o.retcode;
+        }
+    } catch { /* 不是 JSON，按普通错误文本处理 */ }
+    if (Number(retcode) === 1200 || /timeout|超时/i.test(detail)) return 'QQ 响应超时';
+    if (/not\s*found|不存在|invalid|无效/i.test(detail)) return '消息不存在或已被撤回';
+    if (/permission|权限|denied|forbidden/i.test(detail)) return '没有撤回权限';
+    return '未知原因';
+}
+
+/**
  * #撤回：把机器人自己发过的消息撤回来（主人/管理员可用）。
  *   （引用我发的消息）#撤回            撤回被引用的那条
  *   （引用我发的消息）#撤回 <条数>     从被引用的那条起，连同它前面我发的共 <条数> 条
@@ -1019,7 +1040,10 @@ async function handleRecall(event, arg, roleName) {
             await callApi('delete_msg', { message_id: /^\d+$/.test(id) ? Number(id) : id });
             deleted.add(id);
         } catch (e) {
-            if (!failMsg) failMsg = String((e && e.message) || e).slice(0, 80);
+            if (!failMsg) {
+                failMsg = recallFailText(e);
+                logger.warn('[撤回] 失败:', briefApiErr(e));   // 原始错误只进日志，不发给用户
+            }
         }
     }
     // 撤掉的从记录里清掉，避免下次又去撤同一条
