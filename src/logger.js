@@ -14,13 +14,12 @@
 // ============================================================
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { Writable } from 'stream';
 import pino from 'pino';
 import { pushLog } from './state.js';
+import { ROOT } from './paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOG_DIR = path.join(__dirname, 'logs');
+const LOG_DIR = path.join(ROOT, 'logs');
 // 跑测试时不写文件：否则 npm test 会把用例输出灌进运行日志里（Vitest 会设 VITEST）
 const FILE_LOG = !process.env.VITEST;
 

@@ -5,7 +5,6 @@
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache, ttsProvider } from './tts.js';
 import { getSearchContext, isSearchEnabled, searchSettings } from './search.js';
@@ -31,12 +30,10 @@ import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { ROOT } from './paths.js';
 
 // 显式指定 .env 路径，避免受启动目录影响
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(ROOT, '.env') });
 
 // 日志统一走 logger.js（终端 termSafe + WebUI pushLog + 按天文件），不再挂钩 console
 setLogLevel(process.env.LOG_LEVEL);
@@ -71,7 +68,7 @@ function cacheSet(map, key, max, val) {
 
 const WS_URL = process.env.NAPCAT_WS || 'ws://127.0.0.1:3001';
 const WS_TOKEN = process.env.NAPCAT_TOKEN || '';
-const SAVE_DIR = process.env.SAVE_DIR || path.join(__dirname, 'data');
+const SAVE_DIR = process.env.SAVE_DIR || path.join(ROOT, 'data');
 // MC 桥（服务器侧 mod）：桥接群号，以及是否把群消息转发进游戏
 const MC_BRIDGE_GROUP = String(process.env.MC_BRIDGE_GROUP || '');
 // 图片/表情转发进游戏：只发文字占位（游戏里要显示真图得靠客户端模组，已决定不做）
@@ -299,7 +296,7 @@ const mutedGroups = new Set();
 // ---------- 提示词（动态加载） ----------
 // 按文件修改时间缓存：改了 prompt.txt，下一次对话就用新的，**不用重启机器人**。
 // 读不到（被删/被占/写一半）时继续用上一次的内容，绝不因为读文件失败把 AI 弄挂。
-const PROMPT_PATH = path.join(__dirname, 'prompt.txt');
+const PROMPT_PATH = path.join(ROOT, 'prompt.txt');
 let promptCache = { mtimeMs: 0, text: '' };
 
 /**

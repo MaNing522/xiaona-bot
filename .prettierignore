@@ -6,9 +6,9 @@
 # ---------- 新建文件白名单 ----------
 !/test
 !/test/**
-!/aiService.js
-!/db.js
-!/logger.js
-!/rateLimit.js
-!/idle.js
-!/forward.js
+!/src/aiService.js
+!/src/db.js
+!/src/logger.js
+!/src/rateLimit.js
+!/src/idle.js
+!/src/forward.js

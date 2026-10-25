@@ -12,7 +12,7 @@ import {
   memoryContext,
   searchMemory,
   closeMemory,
-} from '../memory.js';
+} from '../src/memory.js';
 
 let dir;
 

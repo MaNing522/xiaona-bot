@@ -9,7 +9,6 @@ import net from 'net';
 import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
 import * as perm from './permission.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
@@ -25,13 +24,13 @@ import {
   bindingOverview, forceUnbind, clearUnbinds, banUser, unbanUser,
   deleteUnbind, restoreUnbind,
 } from './binding.js';
+import { ROOT } from './paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const NAPCAT_DIR = path.join(__dirname, 'napcat');
+const NAPCAT_DIR = path.join(ROOT, 'napcat');
 const NODE_BIN = path.join(NAPCAT_DIR, 'node.exe');
 const QR_FILE = path.join(NAPCAT_DIR, 'napcat', 'cache', 'qrcode.png');
-const LOGIN_FILE = path.join(__dirname, 'data', 'login.json');
-const WEB_DIR = path.join(__dirname, 'web', 'index.html');
+const LOGIN_FILE = path.join(ROOT, 'data', 'login.json');
+const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 
 const MAX_LOG = 300;
 
@@ -213,7 +212,7 @@ const PANEL_USER = process.env.WEBUI_USER || 'admin';
 // 避免出现"忘了配密码 → 面板用一个人所共知的默认密码裸奔"的情况
 const PANEL_PASS = process.env.WEBUI_PASSWORD || '';
 const SESSION_TTL = 24 * 60 * 60 * 1000;    // 登录有效期 24 小时（非正常退出也按这个保留）
-const SESSION_FILE = path.join(__dirname, 'data', 'webui-sessions.json');
+const SESSION_FILE = path.join(ROOT, 'data', 'webui-sessions.json');
 const CAPTCHA_TTL = 3 * 60 * 1000;         // 验证码 3 分钟
 const CAPTCHA_AFTER_FAILS = 5;             // 连续输错密码达到这个次数后，才要求人机验证
 const LOGIN_MAX_FAIL = 10;                 // 连续失败上限（含验证码错误），超过则封 5 分钟

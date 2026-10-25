@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initBindings, startBind, answerCaptcha, unbind, forceUnbind, getQqOf } from '../binding.js';
+import { initBindings, startBind, answerCaptcha, unbind, forceUnbind, getQqOf } from '../src/binding.js';
 
 let dir;
 /** 回调收到的游戏ID（按调用顺序累积） */

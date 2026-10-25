@@ -10,14 +10,13 @@
 // 命令能管理的是：额外主人 / 额外管理员 / 授权用户 / 黑名单（均持久化到 auth.json）。
 // ============================================================
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { ROOT } from './paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 保证在 init() 之前 process.env 已从 .env 加载（本模块可能在 index.js 的 dotenv.config() 之前被 import）
 // 显式指定路径，避免受启动目录影响
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(ROOT, '.env') });
 
 // 存档路径在 init() 里确定（默认 SAVE_DIR 或项目下 data/，测试可传临时目录）
 let AUTH_FILE = '';
@@ -47,7 +46,7 @@ function savePending() {
  * @param {string} [dir] 存档目录（留空则用 SAVE_DIR 或项目下 data/）
  */
 export function init(dir) {
-  const dataDir = dir || process.env.SAVE_DIR || path.join(__dirname, 'data');
+  const dataDir = dir || process.env.SAVE_DIR || path.join(ROOT, 'data');
   AUTH_FILE = path.join(dataDir, 'auth.json');
   PENDING_FILE = path.join(dataDir, 'pending.json');
   owner = String(process.env.BOT_OWNER || '').trim();

@@ -1,6 +1,6 @@
 // agent.js 的单测：工具按身份过滤（对应身份对应调用）+ 工具调用循环 + 越权拒绝。
 import { describe, it, expect } from 'vitest';
-import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, decideSkip } from '../agent.js';
+import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, decideSkip } from '../src/agent.js';
 
 const names = (role) => toolsForRole(role).map((t) => t.function.name);
 

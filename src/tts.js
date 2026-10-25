@@ -26,14 +26,12 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
 import { logger } from './logger.js';
 import { generateSecMsGec } from './edgeDrm.js';
+import { ROOT } from './paths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const VOICE_DIR = path.join(__dirname, 'voice_cache');
+const VOICE_DIR = path.join(ROOT, 'voice_cache');
 if (!fs.existsSync(VOICE_DIR)) fs.mkdirSync(VOICE_DIR, { recursive: true });
 
 const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';   // 女声 XiaoXiao

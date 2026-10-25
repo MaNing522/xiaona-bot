@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initBindings, startBind, answerCaptcha, banUser, unbanUser, isBanned, parseBanTime, humanDuration, getGameIdsOf } from '../binding.js';
+import { initBindings, startBind, answerCaptcha, banUser, unbanUser, isBanned, parseBanTime, humanDuration, getGameIdsOf } from '../src/binding.js';
 
 const YEAR = 365 * 24 * 3600 * 1000;
 

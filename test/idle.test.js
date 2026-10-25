@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { isPeakHour, msUntilIdle, startIdleMaintenance } from '../idle.js';
+import { isPeakHour, msUntilIdle, startIdleMaintenance } from '../src/idle.js';
 
 /** 取一个"工作日"的指定时刻（避开周末，保证与星期几无关地稳定） */
 function weekdayAt(h, m = 0) {

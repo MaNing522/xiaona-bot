@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { reloadConfig } from '../config.js';
-import { searchSettings, isSearchEnabled, webSearch } from '../search.js';
+import { reloadConfig } from '../src/config.js';
+import { searchSettings, isSearchEnabled, webSearch } from '../src/search.js';
 
 const tmpFiles = [];
 function writeCfg(search) {

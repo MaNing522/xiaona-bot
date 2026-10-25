@@ -3,11 +3,9 @@
 // 通过 initScheduler() 注入依赖，由 index.js 在启动时调用
 // ============================================================
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger } from './logger.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { ROOT } from './paths.js';
 
 // ---------- 依赖注入（index.js 提供） ----------
 let callApi = null;
@@ -28,7 +26,7 @@ export function initScheduler(deps) {
   sendReply = deps.sendReply;
   segText = deps.segText;
   getBotId = deps.getBotId || (() => 0);
-  saveDir = deps.saveDir || path.join(__dirname, 'data');
+  saveDir = deps.saveDir || path.join(ROOT, 'data');
   SCH_FILE = path.join(saveDir, 'scheduler.json');
   schLoad();
   setInterval(schTick, 10000);

@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { stripComments, loadConfig, DEFAULTS, config, reloadConfig, watchConfig } from '../config.js';
+import { stripComments, loadConfig, DEFAULTS, config, reloadConfig, watchConfig } from '../src/config.js';
 
 const tmpFiles = [];
 function writeTmp(content) {

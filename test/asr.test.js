@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseFixList, fixText, transcribe } from '../asr.js';
+import { parseFixList, fixText, transcribe } from '../src/asr.js';
 
 describe('parseFixList', () => {
   it('没写等号的项算作目标名的错写', () => {

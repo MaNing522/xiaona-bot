@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
-import { signedHeaders, startMcBridge, bridgeTargetOf, planAvailableFrom, getBridgeCaps } from '../mcbridge.js';
+import { signedHeaders, startMcBridge, bridgeTargetOf, planAvailableFrom, getBridgeCaps } from '../src/mcbridge.js';
 
 const SECRET = 's'.repeat(40);
 

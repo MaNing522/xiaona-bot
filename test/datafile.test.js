@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { writeJsonAtomic, readJsonSafe } from '../datafile.js';
+import { writeJsonAtomic, readJsonSafe } from '../src/datafile.js';
 
 let dir;
 

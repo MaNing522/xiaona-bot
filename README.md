@@ -19,7 +19,7 @@
              │                                     │
              └──────────────┬──────────────────────┘
                             ▼
-                   本机 Node 机器人（index.js）
+                   本机 Node 机器人（src/index.js）
                    ├─ AI 回复（DeepSeek）+ 记忆
                    ├─ 联网搜索 / 语音 / 截图
                    ├─ 命令系统 / 定时任务 / 权限
@@ -55,29 +55,35 @@
 
 ```
 QQBot/
-├─ index.js             机器人主程序（消息处理、AI、命令）
 ├─ start.js             启动器（拉起 NapCat + 机器人 + WebUI）
-├─ aiService.js         AI 服务商可插拔层（选服务商 / 定模型 / 发请求 / max_tokens）
-├─ rateLimit.js         宽松限速（用户/群/全局滑动窗口 + 信号量队列 + 反刷屏）
-├─ idle.js              闲时调度（避开工作日高峰跑维护任务）
-├─ webui.js             网页控制面板（登录 / 权限 / 开关 / 接管 / 健康检查）
-├─ logger.js            统一日志出口（终端 + 面板 + 按天文件）
-├─ mcbridge.js          与服务器 mod 的加签通信（HTTP + SSE）
-├─ binding.js           QQ ↔ 游戏ID 绑定（验证码）
-├─ memory.js            会话记忆（SQLite）   db.js          建表 / FTS5 / 旧数据迁移
-├─ help.js              #帮助 菜单           scheduler.js   定时任务
-├─ search.js            联网搜索（百度智能搜索）
-├─ tts.js               文字转语音（玉峰）   screenshot.js  屏幕 / 网址截图
-├─ mc.js                MC 服务器状态        captcha.js / shake.js / state.js / datafile.js
+├─ src/                 机器人源码（主程序 index.js + 各功能模块）
+│  ├─ index.js          机器人主程序（消息处理、AI、命令）
+│  ├─ paths.js          项目根路径（运行时资源都相对它，整目录复制即可迁移）
+│  ├─ aiService.js      AI 服务商可插拔层（选服务商 / 定模型 / 发请求 / max_tokens）
+│  ├─ rateLimit.js      宽松限速（用户/群/全局滑动窗口 + 信号量队列 + 反刷屏）
+│  ├─ idle.js           闲时调度（避开工作日高峰跑维护任务）
+│  ├─ webui.js          网页控制面板（登录 / 权限 / 开关 / 接管 / 健康检查）
+│  ├─ logger.js         统一日志出口（终端 + 面板 + 按天文件）
+│  ├─ mcbridge.js       与服务器 mod 的加签通信（HTTP + SSE）
+│  ├─ binding.js        QQ ↔ 游戏ID 绑定（验证码）
+│  ├─ memory.js         会话记忆（SQLite）   db.js          建表 / FTS5 / 旧数据迁移
+│  ├─ help.js           #帮助 菜单           scheduler.js   定时任务
+│  ├─ search.js         联网搜索（百度智能搜索）
+│  ├─ tts.js            文字转语音           screenshot.js  屏幕 / 网址截图
+│  └─ mc.js             MC 服务器状态        captcha.js / shake.js / state.js / datafile.js
 ├─ test/                Vitest 单元测试
 ├─ web/index.html       控制面板页面
 ├─ prompt.txt           机器人人设提示词（改完保存即热更新）
-├─ push.bat             用 .env 里的 token 推送到 GitHub
+├─ config.json          数值类可调项（冷却 / 限流 / 时效，热加载）
+├─ push.bat / restart.bat / 启动.bat / startASR.bat   运维脚本
+├─ tools/               附带工具（如 VC 运行库安装包）
 ├─ .env.example         配置模板（复制为 .env 填写；.env 不入库）
 ├─ logs/                按天滚动的运行日志（YYYY-MM-DD.log，不入库）
 └─ xiaona-mod/          Minecraft Fabric 服务端模组（Java）
    └─ src/main/java/com/xiaona/  ·  src/main/resources/
 ```
+
+> **迁移**：整个 `QQBot/` 目录可直接复制到别处运行。`.env`、`config.json`、`data/`、`logs/`、`voice_cache/`、`web/`、`napcat/` 都相对项目根定位，不写死盘符。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
 
 ---
 

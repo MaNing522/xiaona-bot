@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseForwardInput, buildForwardNodes, rawArgAfter, MAX_FORWARD_NODES } from '../forward.js';
+import { parseForwardInput, buildForwardNodes, rawArgAfter, MAX_FORWARD_NODES } from '../src/forward.js';
 
 describe('rawArgAfter（命令参数保留换行）', () => {
   it('多行参数原样保留换行 —— handleCommand 的 split(/\\s+/) 会把它压平', () => {

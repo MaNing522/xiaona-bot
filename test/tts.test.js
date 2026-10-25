@@ -1,8 +1,8 @@
 // tts.js / edgeDrm.js 的单测：Sec-MS-GEC 令牌格式与已知向量、SSML 转义、
 // 小米 MiMo TTS 请求体与 emoji 清洗（真实合成依赖网络，单测只 mock fetch）。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { buildSsml, secMsGec, stripEmoji, buildXiaomiRequest, ttsProvider, textToSpeech } from '../tts.js';
-import { generateSecMsGec } from '../edgeDrm.js';
+import { buildSsml, secMsGec, stripEmoji, buildXiaomiRequest, ttsProvider, textToSpeech } from '../src/tts.js';
+import { generateSecMsGec } from '../src/edgeDrm.js';
 import fs from 'fs';
 
 describe('generateSecMsGec（Edge v2 令牌）', () => {

@@ -2,7 +2,7 @@
 // deepseek-flash 会先输出 reasoning_content，max_tokens 不够时正文 content 为空、finish_reason=length，
 // 这时必须翻倍额度重试一次，不能把空回复当结果返回。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chatCompletionRaw } from '../aiService.js';
+import { chatCompletionRaw } from '../src/aiService.js';
 
 const ENV_KEYS = ['AI_API_KEY', 'AI_PROVIDER', 'AI_API_URL', 'AI_MODEL', 'AI_MAX_TOKENS'];
 let saved;

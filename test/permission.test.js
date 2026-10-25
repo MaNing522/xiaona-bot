@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { init, role, setLevel, setLevelBy, canManage, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners } from '../permission.js';
+import { init, role, setLevel, setLevelBy, canManage, isBlacklisted, listAuthorized, listBlacklist, listExtraAdmins, listExtraOwners } from '../src/permission.js';
 
 const ENV_OWNER = '1000';
 const ENV_ADMIN = '2000';

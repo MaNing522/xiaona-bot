@@ -13,12 +13,11 @@
 // ============================================================
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
+import { ROOT } from './paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** 配置文件路径（可用环境变量 BOT_CONFIG 覆盖，便于测试） */
-export const CONFIG_PATH = path.resolve(process.env.BOT_CONFIG || path.join(__dirname, 'config.json'));
+export const CONFIG_PATH = path.resolve(process.env.BOT_CONFIG || path.join(ROOT, 'config.json'));
 
 /** 全部默认值 —— 也是"标准配置"的唯一副本，config.json 缺失/写坏时靠它兜底 */
 export const DEFAULTS = {

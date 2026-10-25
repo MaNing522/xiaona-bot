@@ -10,6 +10,8 @@ export default [
     ignores: [
       'node_modules/**',
       'napcat/**',
+      'asr-venv/**',
+      'tools/**',
       'xiaona-mod/**',
       'data/**',
       'voice_cache/**',

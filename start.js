@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { writeJsonAtomic, readJsonSafe } from './datafile.js';
+import { writeJsonAtomic, readJsonSafe } from './src/datafile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -182,7 +182,7 @@ async function ensureAsrService() {
 
 // ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
 function spawnBot() {
-  const bot = spawn(process.execPath, ['index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
+  const bot = spawn(process.execPath, ['src/index.js'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
   // 机器人自己的日志已经带时间戳（logger.js），这里只加来源前缀，避免出现两个时间
   const pipe = (chunk) => {
     String(chunk).split(/\r?\n/).forEach((l) => l.trim() && console.log(`[Bot] ${l.trim()}`));

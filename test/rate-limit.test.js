@@ -6,7 +6,7 @@ import {
   rateLimitStats,
   rateLimitConfig,
   resetRateLimit,
-} from '../rateLimit.js';
+} from '../src/rateLimit.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
