@@ -286,7 +286,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <input id="bdBanReason" type="text" placeholder="封禁原因（可空）">
       <button class="btn" id="bdBanQqBtn">封禁该 QQ</button>
 
-      <div style="font-weight:700;margin:20px 0 6px">游戏内封禁 <span class="cnt" id="bdGameBanN">0</span></div>
+      <div style="font-weight:700;margin:20px 0 6px">游戏内封禁 <span class="cnt" id="bdGameBanN">0</span> <span class="hint" id="bdGameBanSrc"></span></div>
       <div id="bdGameBans"><span class="hint">加载中…</span></div>
       <div class="row"><input id="bdBanPlayer" type="text" placeholder="游戏ID"><input id="bdBanGameReason" type="text" placeholder="封禁原因（可空）"></div>
       <button class="btn" id="bdBanGameBtn">封禁该游戏ID</button>
@@ -846,8 +846,16 @@ async function bindLoad(){
 
     // 游戏内封禁
     const gb=d.gameBans;
+    // 名单来源：装了 Paradigm 时读它自己的封禁库，否则是原版 UserBanList
+    $('bdGameBanSrc').textContent = d.gameBansProvider==='paradigm' ? '（来源：Paradigm）'
+      : (d.gameBansProvider==='vanilla' ? '（来源：原版名单）' : '');
     if(d.mcConnected===false){ $('bdGameBans').innerHTML='<span class="hint">MC 服务器未连接，无法读取游戏内封禁名单</span>'; rollNum($('bdGameBanN'),0); }
-    else if(gb==null){ $('bdGameBans').innerHTML='<span class="hint">服务器未返回封禁名单（mod 需升级到 2.7.0+）</span>'; rollNum($('bdGameBanN'),0); }
+    else if(gb==null){
+      // 带上 mod 返回的真实原因（数据库找不到 / 存储后端不支持 / 旧版 mod），别让管理员以为"没有封禁"
+      const why=d.gameBansError?esc(d.gameBansError):'服务器未返回封禁名单（mod 需升级到 2.8.0+）';
+      $('bdGameBans').innerHTML='<span class="hint" style="color:var(--danger)">读取封禁名单失败：'+why+'</span>';
+      rollNum($('bdGameBanN'),0);
+    }
     else {
       rollNum($('bdGameBanN'), gb.length);
       $('bdGameBans').innerHTML=gb.length?('<table style="width:100%;border-collapse:collapse;font-size:13.5px">'+

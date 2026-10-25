@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
-import { signedHeaders, startMcBridge, bridgeTargetOf } from '../mcbridge.js';
+import { signedHeaders, startMcBridge, bridgeTargetOf, planAvailableFrom, getBridgeCaps } from '../mcbridge.js';
 
 const SECRET = 's'.repeat(40);
 
@@ -103,5 +103,25 @@ describe('bridgeTargetOf（连接模式 → 地址）', () => {
       .toBe('http://127.0.0.1:25565');
     expect(bridgeTargetOf({ mode: 'loopback', port: 'abc' }, '').base)
       .toBe('http://127.0.0.1:25565');
+  });
+});
+
+describe('planAvailableFrom（服务器有没有 Plan）', () => {
+  it('新版 mod 明确 available=false → 不可用', () => {
+    expect(planAvailableFrom({ plan: { available: false, reason: '未安装 Plan' } })).toBe(false);
+  });
+
+  it('available=true → 可用', () => {
+    expect(planAvailableFrom({ plan: { available: true } })).toBe(true);
+  });
+
+  it('旧版 mod 没有 plan 字段 / status 为空 → 按可用处理（保持升级前行为）', () => {
+    expect(planAvailableFrom({ version: '2.6.0' })).toBe(true);
+    expect(planAvailableFrom(null)).toBe(true);
+    expect(planAvailableFrom(undefined)).toBe(true);
+  });
+
+  it('能力位默认返回空（未连桥时不误报）', () => {
+    expect(getBridgeCaps()).toEqual({ plan: null, ban: null });
   });
 });

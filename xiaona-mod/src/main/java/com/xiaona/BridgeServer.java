@@ -7,12 +7,7 @@ import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.server.BannedPlayerEntry;
-import net.minecraft.server.BannedPlayerList;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.PlayerConfigEntry;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -48,9 +43,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   POST /bridge/whitelist 本机推"谁绑定了游戏ID"（白名单模式：单人变更 / 整张名单）
  *   POST /bridge/whitelist_response 本机回答"某玩家在不在绑定名单里"（白名单模式进服时的实时询问）
  *   POST /bridge/command  本机（管理员/主人）经 AI 执行一条游戏命令（受 bridge.allowCommands 白名单约束）
- *   POST /bridge/ban      本机把 QQ 黑名单同步到服务器封禁名单（/ban、/pardon）
- *   GET  /bridge/bans     读取服务器封禁名单（网页控制面板展示 / 解封用）
- *   GET  /bridge/status   版本、玩家数、开关状态
+ *   POST /bridge/ban      本机把 QQ 黑名单同步到服务器封禁名单（装了 Paradigm 时走它的命令）
+ *   GET  /bridge/bans     读取服务器封禁名单（装了 Paradigm 时读它的 SQLite 只读视图）
+ *   GET  /bridge/status   版本、玩家数、开关状态、封禁来源 / Plan 可用性
  *
  * 注意：命令执行只走 /bridge/command 的**受控白名单**（见 {@link Config.Bridge#allowCommands}），
  * 桥本身仍不提供"任意命令"的注入口；给游戏发文本请走 /bridge/send。
@@ -104,6 +99,8 @@ public class BridgeServer {
     /** 命令执行的每分钟计数（与"注入文本"分开计，见 bridge.commandRateLimitPerMinute） */
     private final AtomicInteger cmdCount = new AtomicInteger();
     private volatile long cmdWindowStart = System.currentTimeMillis();
+    /** Plan 是否可用（没装就禁用玩家数据查询）；结果缓存 60 秒 */
+    private final PlanAvailability planAvail;
 
     public BridgeServer(Config cfg, McEvents events, RuntimeToggles toggles, BindBoard board,
                         WhitelistGate whitelistGate) {
@@ -114,9 +111,26 @@ public class BridgeServer {
         this.board = board;
         this.whitelistGate = whitelistGate;
         this.auth = new BridgeAuth(cfg.bridge);
+        this.planAvail = PlanAvailability.create(this.pcfg);
     }
 
     public boolean isRunning() { return server != null; }
+
+    /** 启动时打一条能力日志（只查 mod 列表，不探活，避免卡服务端线程） */
+    public void logCapabilities() {
+        if (BanService.paradigmLoaded()) {
+            BotState.log("[封禁] 检测到 Paradigm：读取走 paradigm_v_active_bans（只读），写入走 /ban、/unban");
+        } else {
+            BotState.log("[封禁] 未检测到 Paradigm：使用原版封禁名单");
+        }
+        if (!pcfg.enabled) {
+            BotState.log("[Plan] plan.enabled=false，玩家数据查询已禁用");
+        } else if (planAvail.modLoaded()) {
+            BotState.log("[Plan] 检测到 Plan，玩家数据查询可用");
+        } else {
+            BotState.log("[Plan] mod 列表里没有 Plan：按面板探活结果决定是否启用（连不上则禁用玩家查询）");
+        }
+    }
 
     public int boundPort() {
         HttpServer s = server;
@@ -238,6 +252,8 @@ public class BridgeServer {
         m.put("privateCommand", bcfg.privateCommand);
         m.put("chatPrefix", bcfg.chatPrefix);
         m.put("commandsEnabled", bcfg.commandsEnabled);
+        m.put("ban", Map.of("provider", BanService.currentId()));
+        m.put("plan", planAvail.status());
         if (sharePort > 0) m.put("sharePort", sharePort);
         m.put("localPort", boundPort());
         sendJson(ex, 200, m);
@@ -419,9 +435,9 @@ public class BridgeServer {
      * 参数：{@code {"players":["Steve"],"banned":true,"reason":"QQ黑名单同步"}}。
      * banned=true → 封禁，false → 解封；不受 allowCommands 约束（这是管理动作，不是 AI 命令）。
      *
-     * 注意：这里**直接写服务器封禁名单**，不走 /ban、/pardon 命令。
-     * 1.21.11 的 /ban 走 GameProfileResolver 异步解析档案，离线/解析不到时会静默什么都不做也不报错，
-     * 表现为「命令返回成功但 banlist 仍是空的」。
+     * 具体写哪套名单由 {@link BanService} 决定：
+     * 装了 Paradigm → 发它的 /ban、/unban 命令；否则直接写原版 UserBanList
+     * （1.21.11 的 /ban 走 GameProfileResolver 异步解析档案，离线玩家会静默不生效）。
      */
     private void handleBan(HttpExchange ex, String body) throws IOException {
         if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
@@ -444,93 +460,77 @@ public class BridgeServer {
         if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
         if (!allowCommandRate()) { sendJson(ex, 429, Map.of("ok", false, "error", "超过每分钟命令上限")); return; }
 
-        List<String> done = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
-        java.util.concurrent.CompletableFuture<Void> finished = new java.util.concurrent.CompletableFuture<>();
-        // 封禁名单是普通集合，增删必须在服务端线程里做
-        s.execute(() -> {
-            try {
-                BannedPlayerList list = s.getPlayerManager().getUserBanList();
-                for (String name : names) {
-                    if (!name.matches("[A-Za-z0-9_]{3,16}")) { failed.add(name); continue; }
-                    try {
-                        if (banned) {
-                            // 优先用服务器名称缓存里的真实档案（在线模式 UUID 才对得上），查不到再按离线档案
-                            PlayerConfigEntry key = s.getApiServices().nameToIdCache().findByName(name)
-                                    .orElseGet(() -> PlayerConfigEntry.fromNickname(name));
-                            if (!list.contains(key)) {
-                                list.add(new BannedPlayerEntry(key, new java.util.Date(), "xiaona-bridge", null,
-                                        reason.isBlank() ? "Banned by xiaona bridge" : reason));
-                            }
-                            ServerPlayerEntity online = s.getPlayerManager().getPlayer(name);
-                            if (online != null) {
-                                online.networkHandler.disconnect(Text.translatable("multiplayer.disconnect.banned"));
-                            }
-                            done.add(name);
-                        } else {
-                            boolean hit = false;
-                            // 复制一份再遍历，边遍历边删会撞并发修改
-                            for (BannedPlayerEntry e : new ArrayList<>(list.values())) {
-                                if (e.getKey().name().equalsIgnoreCase(name)) { list.remove(e); hit = true; }
-                            }
-                            if (hit) done.add(name); else failed.add(name);
-                        }
-                    } catch (Throwable t) {
-                        BotState.error("[桥] 封禁 " + name + " 失败：" + t.getMessage());
-                        failed.add(name);
-                    }
-                }
-            } finally {
-                finished.complete(null);
-            }
-        });
-        try { finished.get(5, TimeUnit.SECONDS); } catch (Exception ignore) { /* 超时按已处理的结果返回 */ }
-
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("ok", true);
-        m.put("banned", banned);
-        m.put("done", done);
-        m.put("failed", failed);
-        sendJson(ex, 200, m);
+        String provider = BanService.currentId();
+        try {
+            BanProvider p = BanService.provider(s);
+            BanProvider.Result r = banned ? p.ban(names, reason) : p.unban(names);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", true);
+            m.put("provider", p.id());
+            m.put("banned", banned);
+            m.put("done", r.done());
+            m.put("failed", r.failed());
+            if (!r.errors().isEmpty()) m.put("errors", r.errors());
+            sendJson(ex, 200, m);
+        } catch (BanException e) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", false);
+            m.put("provider", provider);
+            m.put("error", e.getMessage());
+            sendJson(ex, 200, m);
+        } catch (Throwable t) {
+            BotState.error("[桥] 封禁操作失败：" + t.getMessage());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", false);
+            m.put("provider", provider);
+            m.put("error", "封禁操作失败：" + (t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+            sendJson(ex, 200, m);
+        }
     }
 
     /**
      * 读取服务器封禁名单（网页控制面板展示与解封用）。
-     * 返回 {@code {"ok":true,"bans":[{"name","uuid","reason","source","created","expires"}]}}，
-     * expires=0 表示永久封禁。
+     * 返回 {@code {"ok":true,"provider":"vanilla|paradigm","bans":[{"name","uuid","reason","source","created","expires"}]}}，
+     * expires=0 表示永久封禁。读取失败时返回 {@code ok:false}，绝不拿空列表冒充"没有封禁"。
      */
     private void handleBans(HttpExchange ex, String body) throws IOException {
         if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
         MinecraftServer s = events.getServer();
         if (s == null) { sendJson(ex, 503, Map.of("ok", false, "error", "服务器未就绪")); return; }
 
-        List<Map<String, Object>> list = new ArrayList<>();
-        // 封禁名单是普通集合，必须在服务端线程里读，避免与 /ban 并发修改撞车
-        java.util.concurrent.CompletableFuture<Void> done = new java.util.concurrent.CompletableFuture<>();
-        s.execute(() -> {
-            try {
-                for (net.minecraft.server.BannedPlayerEntry e : s.getPlayerManager().getUserBanList().values()) {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("name", e.getKey().name());
-                    m.put("uuid", String.valueOf(e.getKey().id()));
-                    m.put("reason", e.getReason() == null ? "" : e.getReason());
-                    m.put("source", e.getSource() == null ? "" : e.getSource());
-                    m.put("created", e.getCreationDate() == null ? 0 : e.getCreationDate().getTime());
-                    m.put("expires", e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime());
-                    list.add(m);
-                }
-            } catch (Throwable t) {
-                BotState.error("[桥] 读取封禁名单失败：" + t.getMessage());
-            } finally {
-                done.complete(null);
+        String provider = BanService.currentId();
+        try {
+            BanProvider p = BanService.provider(s);
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (BanProvider.BanRow r : p.list()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("name", r.name());
+                m.put("uuid", r.uuid());
+                m.put("reason", r.reason());
+                m.put("source", r.source());
+                m.put("created", r.created());
+                m.put("expires", r.expires());
+                list.add(m);
             }
-        });
-        try { done.get(3, TimeUnit.SECONDS); } catch (Exception ignore) { /* 超时按已读到的返回 */ }
-
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("ok", true);
-        m.put("bans", list);
-        sendJson(ex, 200, m);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", true);
+            m.put("provider", p.id());
+            m.put("bans", list);
+            sendJson(ex, 200, m);
+        } catch (BanException e) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", false);
+            m.put("provider", provider);
+            m.put("error", e.getMessage());
+            sendJson(ex, 200, m);
+        } catch (Throwable t) {
+            BotState.error("[桥] 读取封禁名单失败：" + t.getMessage());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", false);
+            m.put("provider", provider);
+            m.put("error", "读取封禁名单失败：" + (t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+            sendJson(ex, 200, m);
+        }
     }
 
     private void handleSend(HttpExchange ex, String body) throws IOException {
@@ -593,6 +593,12 @@ public class BridgeServer {
     private void handlePlanPlayer(HttpExchange ex, String body) throws IOException {
         if (pcfg == null || !pcfg.enabled) {
             sendJson(ex, 403, Map.of("ok", false, "error", "Plan 查询未启用（config.json 的 plan.enabled=false）"));
+            return;
+        }
+        // 没装 Plan 就明确拒绝：这种服务器上玩家数据查询本来就没有意义
+        if (!planAvail.available()) {
+            sendJson(ex, 200, Map.of("ok", false, "error",
+                    "服务器没有安装 Plan，玩家数据查询已禁用（" + planAvail.status().get("reason") + "）"));
             return;
         }
         String name;

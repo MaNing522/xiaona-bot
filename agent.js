@@ -60,6 +60,8 @@ export const AGENT_TOOLS = [
   },
   {
     minRole: 'guest',
+    // 依赖服务器装了 Plan（没装时 mod 会禁用 /bridge/player，这里同步隐藏工具）
+    requires: 'plan',
     function: {
       name: 'player_query',
       description: '查询某个 Minecraft 玩家的统计数据（游玩时长、最后在线、活跃度等），数据来自服务器 Plan 插件。',
@@ -156,12 +158,16 @@ export const AGENT_TOOLS = [
 /**
  * 按身份取出可用的工具定义（已过滤 + 转为 OpenAI 格式）。
  * @param {string} role guest | authorized | admin | owner
+ * @param {object} [caps] 服务器能力位（来自 /bridge/status）：{ plan: boolean }
+ *   plan=false 时隐藏依赖 Plan 的工具（player_query），避免模型去调一个必然失败的接口。
+ *   不传 caps（或字段缺失）按"可用"处理，保持旧行为。
  * @returns {Array} OpenAI 兼容的 tools 数组
  */
-export function toolsForRole(role) {
+export function toolsForRole(role, caps = {}) {
   const rank = ROLE_RANK[role] ?? 0;
   return AGENT_TOOLS
     .filter((t) => rank >= (ROLE_RANK[t.minRole] ?? 0))
+    .filter((t) => !t.requires || caps[t.requires] !== false)
     .map((t) => ({ type: 'function', function: t.function }));
 }
 

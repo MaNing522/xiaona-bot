@@ -777,12 +777,23 @@ async function route(req, res, url) {
 
   // ---------- 绑定管理（已绑定用户 + 解绑记录 + 封禁名单） ----------
   if (url.pathname === '/api/bindings' && req.method === 'GET') {
-    // 游戏内封禁名单要问服务器 mod；桥没连上/旧版 mod 时返回 null，前端据此提示
+    // 游戏内封禁名单要问服务器 mod；桥没连上/旧版 mod 时 gameBans 为 null，前端据此提示。
+    // gameBansProvider 说明名单来自原版还是 Paradigm，gameBansError 带上失败原因（别冒充"没有封禁"）。
     let gameBans = null;
+    let gameBansProvider = '';
+    let gameBansError = '';
     if (isMcConnected()) {
-      try { gameBans = await getGameBans(); } catch { gameBans = null; }
+      try {
+        const gb = await getGameBans();
+        gameBans = gb.bans;
+        gameBansProvider = gb.provider;
+      } catch (e) {
+        gameBansError = e.message;
+      }
     }
-    return sendJSON(res, 200, { ok: true, ...bindingOverview(), gameBans, mcConnected: isMcConnected() });
+    return sendJSON(res, 200, {
+      ok: true, ...bindingOverview(), gameBans, gameBansProvider, gameBansError, mcConnected: isMcConnected(),
+    });
   }
   if (url.pathname === '/api/bindings' && req.method === 'POST') {
     const { action, qq, gameId, at, time, reason, player } = await readBody(req);
@@ -814,8 +825,13 @@ async function route(req, res, url) {
       const banned = action === 'banGame';
       const r = await banPlayers([name], banned, banned ? String(reason || '').trim() : '');
       if (!r) return sendJSON(res, 400, { ok: false, error: '调用服务器失败（mod 版本过旧？）' });
-      if (Array.isArray(r.failed) && r.failed.includes(name)) return sendJSON(res, 400, { ok: false, error: '服务器执行失败' });
-      return sendJSON(res, 200, { ok: true });
+      // 新版 mod 会明确返回 ok:false + error（如 Paradigm 存储后端不支持、命令执行失败）
+      if (r.ok === false) return sendJSON(res, 400, { ok: false, error: String(r.error || '服务器执行失败') });
+      if (Array.isArray(r.failed) && r.failed.includes(name)) {
+        const why = (r.errors && r.errors[name]) || '服务器执行失败';
+        return sendJSON(res, 400, { ok: false, error: why });
+      }
+      return sendJSON(res, 200, { ok: true, provider: r.provider || '' });
     }
     // 解绑记录：撤销（重新绑回） / 删除单条
     if (action === 'restoreUnbind') {

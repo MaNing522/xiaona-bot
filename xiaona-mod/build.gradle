@@ -2,7 +2,7 @@ plugins {
     id 'fabric-loom' version '1.14.4'
 }
 
-version = '2.7.1'
+version = '2.8.0'
 group = 'com.xiaona'
 
 repositories {
@@ -10,12 +10,16 @@ repositories {
     maven { url 'https://maven.fabricmc.net/' }
 }
 
-// 不再需要 shade：QQ/AI 已经搬回本机，mod 只依赖 MC + Fabric API
+// 不再需要 shade：QQ/AI 已经搬回本机，mod 只依赖 MC + Fabric API。
+// sqlite-jdbc 只用于**只读**打开 Paradigm 的封禁库；include 会把它嵌进 mod jar，
+// 服务器端不需要额外装驱动（jar 体积会增加约 13MB）。
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation 'org.xerial:sqlite-jdbc:3.46.1.3'
+    include 'org.xerial:sqlite-jdbc:3.46.1.3'
 }
 
 java {

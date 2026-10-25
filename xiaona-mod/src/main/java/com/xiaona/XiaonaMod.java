@@ -72,6 +72,7 @@ public class XiaonaMod implements ModInitializer {
                 whitelistGate.onServerStarted();
             }
             startListen(server);
+            if (bridge != null) bridge.logCapabilities();
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {

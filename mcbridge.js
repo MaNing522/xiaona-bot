@@ -36,6 +36,8 @@ let connected = false;
 /** 服务端序号被重置（服务器重启过）→ 丢掉旧光标，断开重连 */
 let needResync = false;
 let playersCache = { at: 0, list: [] };
+/** 最近一次 /bridge/status（能力位：ban / plan）；连上桥后刷新，断线时保留上次结果 */
+let lastStatus = null;
 let warnedOldMod = false;
 let warnedNoBindCheck = false;
 let warnedNoWhitelist = false;
@@ -193,7 +195,30 @@ export async function sendToMc(text, target) {
 }
 
 export async function getBridgeStatus() {
-    return api('/bridge/status');
+    const r = await api('/bridge/status');
+    lastStatus = r || null;
+    return r;
+}
+
+/**
+ * 服务器有没有 Plan。
+ * 旧版 mod 的 /bridge/status 没有 plan 字段 → 按"可用"处理，保持升级前的行为；
+ * 新版 mod 明确返回 available=false（没装 Plan / 面板连不上）时才禁用查询功能。
+ */
+export function planAvailableFrom(status) {
+    const p = status && status.plan;
+    return !(p && p.available === false);
+}
+
+export function isPlanAvailable() {
+    return planAvailableFrom(lastStatus);
+}
+
+/** 只读能力位，给网页/状态接口用 */
+export function getBridgeCaps() {
+    return lastStatus
+        ? { plan: lastStatus.plan || null, ban: lastStatus.ban || null }
+        : { plan: null, ban: null };
 }
 
 /**
@@ -342,19 +367,27 @@ export async function pushBlacklistAll() {
     await banPlayers(ids, true, 'QQ黑名单同步').catch(() => {});
 }
 
-/** 读取服务器封禁名单（需要 mod ≥ 2.7.0）；失败返回 null */
+/**
+ * 读取服务器封禁名单（需要 mod ≥ 2.7.0）。
+ * 返回 { bans, provider }；读取失败抛错——不能拿空数组冒充"没有封禁"。
+ * provider = vanilla（原版名单）/ paradigm（Paradigm 自己的名单）。
+ */
 export async function getGameBans() {
-    if (!cfg || !cfg.base) return null;
+    if (!cfg || !cfg.base) throw new Error('MC 桥未配置');
     try {
         const r = await api('/bridge/bans', { timeoutMs: 8000 });
-        return Array.isArray(r && r.bans) ? r.bans : [];
+        if (!r || r.ok !== true) throw new Error((r && r.error) || '服务器没有返回封禁名单');
+        return {
+            bans: Array.isArray(r.bans) ? r.bans : [],
+            provider: String(r.provider || 'vanilla'),
+        };
     } catch (e) {
         // 面板每 8 秒轮询一次，失败日志每分钟最多一条，避免刷屏
         if (Date.now() - warnedNoBansAt > 60000) {
             warnedNoBansAt = Date.now();
             logger.error(`[MC桥] 读取游戏封禁名单失败：${e.message}（需要 mod ≥ 2.7.0 的 /bridge/bans）`);
         }
-        return null;
+        throw e;
     }
 }
 
@@ -406,6 +439,8 @@ function handleSseBlock(block) {
             lastEventId = 0;
             needResync = true;   // 由 streamLoop 断开本条连接后重连（不带光标）
         }
+        // 刷新能力位（封禁来源 / Plan 是否可用），bot 按它决定要不要开放玩家查询
+        getBridgeStatus().catch(() => {});
         // 连上后推整张绑定名单：白名单模式靠它把门（计分板仍由玩家上线时逐人回 bindCheck 驱动）
         pushWhitelistAll().catch(() => {});
         // 再把 QQ 黑名单对应的游戏ID 推给服务端封禁，补上断线期间服务端没同步到的
@@ -828,6 +863,7 @@ export function applyBridgeConfig(force = false) {
     lastEventId = 0;
     needResync = false;
     playersCache = { at: 0, list: [] };
+    lastStatus = null;
     warnedOldMod = warnedNoBindCheck = warnedNoWhitelist = false;
     warnedNoBansAt = 0;
 

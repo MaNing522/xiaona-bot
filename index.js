@@ -24,7 +24,7 @@ import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryCon
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
@@ -487,7 +487,7 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
 async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {} }) {
-    let tools = toolsForRole(role);
+    let tools = toolsForRole(role, { plan: isPlanAvailable() });
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
     // 图片识别工具只在"本条消息真的带图片"时才给模型，免得它对着纯文字消息瞎调
     if (!allowImage) tools = tools.filter((t) => t.function.name !== 'analyze_image');
@@ -733,6 +733,7 @@ async function agentMcStatus(address) {
 /** 工具：Plan 玩家数据 */
 async function agentPlayerQuery(name) {
     if (!name) return '请提供玩家游戏ID。';
+    if (!isPlanAvailable()) return '服务器没有安装 Plan，玩家数据查询已禁用。';
     try {
         return formatPlanPlayer(name, await getPlanPlayer(name));
     } catch (e) {
@@ -1260,6 +1261,10 @@ async function handleCommand(event, text) {
             const target = arg.trim();
             if (!target) {
                 return sendReply(event, '❌ 用法：#查询 <玩家名>\n数据来自服务器的 Plan 插件（名字为 3-16 位字母/数字/下划线）');
+            }
+            // 服务器没装 Plan 时 mod 会禁用 /bridge/player，这里先拦下，别让用户看到一长串接口错误
+            if (!isPlanAvailable()) {
+                return sendReply(event, '❌ 服务器没有安装 Plan，玩家数据查询已禁用');
             }
             try {
                 return sendReply(event, formatPlanPlayer(target, await getPlanPlayer(target)));
@@ -3241,6 +3246,17 @@ function formatStatus(d, admin) {
     if (d.mc.status) {
         const st = d.mc.status;
         out.push(`· 桥版本：${st.version || '?'}`);
+        // 封禁来源：装了 Paradigm 时名单和封禁命令都走它，否则是原版 UserBanList
+        const banProvider = (st.ban && st.ban.provider) || 'vanilla';
+        out.push(`· 封禁来源：${banProvider === 'paradigm' ? 'Paradigm' : '原版'}`);
+        // Plan：没装/面板连不上时玩家数据查询已被禁用（旧版 mod 没有该字段，按可用显示）
+        if (st.plan && st.plan.available === false) {
+            out.push(`· Plan：不可用（${st.plan.reason || '未安装或面板未启动'}）`);
+        } else if (st.plan && st.plan.modLoaded) {
+            out.push('· Plan：已安装');
+        } else if (st.plan) {
+            out.push('· Plan：可用（面板在线）');
+        }
         out.push(`· 开关：整机 ${st.enabled ? '开' : '关'}｜游戏→本机 ${st.chatToBridge ? '开' : '关'}｜本机→游戏 ${st.bridgeToChat ? '开' : '关'}`);
         out.push(`· 私聊命令：/${st.privateCommand || 'xn'}`);
         if (admin && st.sharePort) out.push(`· 端口：对外 ${st.sharePort}（桥 ${st.localPort}）`);

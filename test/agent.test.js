@@ -30,6 +30,17 @@ describe('toolsForRole（对应身份对应调用）', () => {
     expect(ROLE_RANK.guest).toBe(0);
   });
 
+  it('服务器没装 Plan 时隐藏 player_query，其余工具不受影响', () => {
+    for (const role of ['guest', 'authorized', 'admin', 'owner']) {
+      const list = toolsForRole(role, { plan: false }).map((t) => t.function.name);
+      expect(list).not.toContain('player_query');
+      expect(list).toContain('mc_status');
+    }
+    // 能力位缺失/true 时保持旧行为
+    expect(toolsForRole('guest').map((t) => t.function.name)).toContain('player_query');
+    expect(toolsForRole('guest', { plan: true }).map((t) => t.function.name)).toContain('player_query');
+  });
+
   it('唱歌是普通工具，所有身份都能用', () => {
     for (const role of ['guest', 'authorized', 'admin', 'owner']) {
       expect(names(role)).toContain('sing');

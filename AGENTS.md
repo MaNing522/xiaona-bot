@@ -89,6 +89,13 @@ cd c:\QQBot; .\restart.bat
   - `bridge`：`mode` = `''`（用 `.env` 的 `MC_BRIDGE_URL`）/`off`/`loopback`/`lan`/`public`，`port`、`lanHost`、`publicUrl`。切换由 `index.js` 的 `applyLiveConfig()` → `applyBridgeConfig()` 热重连（mcbridge.js，`bridgeTargetOf` 是算地址的纯函数）；密钥/桥接群仍看 `.env`。
 - **网页「会话管理」**：把 `接管` 页换成会话管理（群聊/单聊两块），每个会话可覆盖全局设置（AI是否回复/触发关键词/语音/补充提示词/限流·冷却·唤起数值/**进出群提醒开关与文案**），留空即用全局。提醒只有群聊能配，文案支持占位符 `{name}`/`{kind}`/`{note}`（见 config.json 的 `notice` 段，全局默认也在那）。后端接口 `/api/chat-settings`（GET 列表+全局、POST 存某会话覆盖）与 `/api/global-config`（GET/POST config.json，写后热加载）。会话 key 仍是 `g:群号` / `p:QQ号`。
 - mod：`XiaonaMod`（入口/接线）、`Config`、`BridgeServer`（全部 HTTP 接口）、`McEvents`（事件队列 + SSE + 注入）、`BindBoard`（未绑定玩家计分板）、`WhitelistGate`（白名单模式）、`BotState`（日志）、`mixin/`（`ServerNetworkIoMixin` / `ClientConnectionMixin` / `PlayerManagerMixin`）。
+- **封禁来源（mod ≥ 2.8.0）**：装了 **Paradigm**（mod id `paradigm`）时，`/bridge/bans` 读它 SQLite 库的只读视图 `paradigm_v_active_bans`，`/bridge/ban` 走它的 `/ban`、`/unban`（命令不存在时回退 `/pardon`）命令；**没装则完全沿用原版 `UserBanList`**（`VanillaBanProvider`，行为与 2.7.x 一致）。相关类：`BanService`（选 provider）、`BanProvider` / `VanillaBanProvider` / `ParadigmBanProvider`、`ParadigmStorage`（找 storage.json / 数据库路径）、`ParadigmDb`（只读查询）、`BanCommandRunner`（1.21.11 用 dispatcher.parse + execute 跑命令）、`BanException`。
+  - 存储后端**只支持 sqlite**：`config/paradigm/storage.json` 的 provider 是 json/mysql 时，`/bridge/bans` 明确返回错误（不会拿空数组冒充"没有封禁"）。
+  - sqlite-jdbc 通过 Loom `include 'org.xerial:sqlite-jdbc:3.46.1.3'` 嵌进 mod jar（产物约 14MB，`META-INF/jars`），服务器不用另装 JDBC。
+  - `/bridge/status` 新增 `ban: { provider: 'vanilla'|'paradigm' }`；`/bridge/ban` 响应带 `provider`，失败时 `ok:false` + `error`，部分失败看 `failed`/`errors`。
+- **Plan 可用性（mod ≥ 2.8.0）**：`PlanAvailability` 先看 mod 是否装了 `plan`/`planfabric`，没装则探活 `{plan.url}/v1/server`（**任何 HTTP 响应都算在线**，只有连不上/超时才判不可用；结果缓存 60 秒）。`/bridge/status` 新增 `plan: { available, modLoaded, reason }`；不可用时 `/bridge/player` 直接返回错误，不再转发到 Plan。
+  - bot 侧：`mcbridge.js` 缓存最近一次 status（`planAvailableFrom` / `isPlanAvailable` / `getBridgeCaps`，SSE `hello` 时刷新、换桥配置时清空）；`agent.js` 给 `player_query` 标 `requires: 'plan'`，`toolsForRole(role, { plan })` 过滤；`index.js` 的 `aiReply` / `player_query` / `#查询` 都先判一次。
+  - **旧版 mod 的 status 没有 `plan` 字段 → 按"可用"处理**，保持升级前行为。网页「绑定」页的 `/api/bindings` 返回 `gameBansProvider` / `gameBansError`，读取失败会显示真实原因而不是"暂无封禁"。
 
 ## 7. 变更前请验证
 
