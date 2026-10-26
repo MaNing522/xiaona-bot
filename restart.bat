@@ -3,10 +3,10 @@ chcp 65001 >nul
 title Xiaona QQ Bot Restart
 
 rem ============================================================
-rem  Xiaona QQ Bot: restart in background + install autostart
+rem  Xiaona QQ Bot: restart in background (no autostart)
 rem
 rem  1) stop the running launcher tree (start.js + SnowLuma + bot)
-rem  2) register the logon task "XiaonaBot" (highest privileges)
+rem  2) remove the old logon task "XiaonaBot" if present
 rem  3) start it again WITHOUT a console window
 rem
 rem  Must run elevated: the WebUI binds port 80, and the running
@@ -41,18 +41,11 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 3001 -State List
 rem Give Windows a moment to release ports 80 / 3001
 ping -n 5 127.0.0.1 >nul
 
-echo [restart] Registering the logon task XiaonaBot...
-rem No inner quotes around the path: cmd.exe does not treat \" as an escape
-rem (it toggles quoting), which made schtasks fail. C:\QQBot has no spaces.
-schtasks /create /tn "XiaonaBot" /tr "wscript.exe %~dp0background.vbs" /sc onlogon /rl highest /delay 0000:30 /f >nul
-if errorlevel 1 echo [restart] WARNING: failed to register the logon task.
+echo [restart] Removing the old logon task (autostart disabled)...
+schtasks /delete /tn "XiaonaBot" /f >nul 2>&1
 
 echo [restart] Starting Xiaona in background (no console window)...
-schtasks /run /tn "XiaonaBot" >nul
-if errorlevel 1 (
-  echo [restart] Task run failed, launching the hidden script directly...
-  wscript.exe "%~dp0background.vbs"
-)
+wscript.exe "%~dp0background.vbs"
 
 echo [restart] Done. Check the web panel / logs for status.
 timeout /t 3 >nul

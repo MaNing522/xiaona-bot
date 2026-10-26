@@ -228,6 +228,8 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="stat"><span>登录状态</span><span id="stLoginState" class="pill warn">…</span></div>
       <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stSlBot" class="pill warn">…</span></div>
       <div class="stat"><span>SnowLuma 控制台</span><b id="stSlWebui">—</b></div>
+      <a class="btn ghost" id="slJump" href="http://127.0.0.1:5099" target="_blank" rel="noopener"
+         style="width:auto;margin-top:10px;padding:0 18px;text-decoration:none">🔗 打开 SL WebUI</a>
     </div>
     <div class="card">
       <h2>🔐 QQ 登录</h2>
@@ -501,6 +503,9 @@ async function refresh(){try{const s=await api('/api/connection/status');
   set('stSlBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
   if(s.botError)$('stSlBot').title=s.botError;
   $('stSlWebui').textContent=(s.snowlumaWebui||'—').replace(/^https?:\/\//,'');
+  // 跳转按钮：把 127.0.0.1 换成当前面板的地址，远程打开也能用
+  const slBase=s.snowlumaWebui||('http://127.0.0.1:'+(s.snowlumaWebuiPort||5099));
+  $('slJump').href=slBase.replace('127.0.0.1',location.hostname||'127.0.0.1');
   try{const d=await api('/api/snowluma/logs');
     renderLog('lgSlLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
   }catch(e){}
