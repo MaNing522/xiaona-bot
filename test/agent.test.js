@@ -5,8 +5,9 @@ import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, decideSkip } from '
 const names = (role) => toolsForRole(role).map((t) => t.function.name);
 
 describe('toolsForRole（对应身份对应调用）', () => {
-  it('主人拿到全部工具', () => {
+  it('所有者/主人拿到全部工具', () => {
     expect(names('owner')).toHaveLength(AGENT_TOOLS.length);
+    expect(names('master')).toHaveLength(AGENT_TOOLS.length);
   });
 
   it('普通用户拿不到账务类工具 ai_balance', () => {
@@ -14,13 +15,14 @@ describe('toolsForRole（对应身份对应调用）', () => {
     expect(names('authorized')).not.toContain('ai_balance');
   });
 
-  it('管理员/主人可用 ai_balance', () => {
+  it('管理员/主人/所有者可用 ai_balance', () => {
     expect(names('admin')).toContain('ai_balance');
+    expect(names('master')).toContain('ai_balance');
     expect(names('owner')).toContain('ai_balance');
   });
 
   it('公开类工具（搜索/MC/玩家/记忆）所有人的都可用', () => {
-    for (const role of ['guest', 'authorized', 'admin', 'owner']) {
+    for (const role of ['guest', 'authorized', 'admin', 'master', 'owner']) {
       expect(names(role)).toEqual(expect.arrayContaining(['web_search', 'mc_status', 'player_query', 'remember', 'recall_memory']));
     }
   });
@@ -28,10 +30,12 @@ describe('toolsForRole（对应身份对应调用）', () => {
   it('未知身份按最低档处理', () => {
     expect(names('whatever')).toEqual(names('guest'));
     expect(ROLE_RANK.guest).toBe(0);
+    expect(ROLE_RANK.master).toBeGreaterThan(ROLE_RANK.admin);
+    expect(ROLE_RANK.owner).toBeGreaterThan(ROLE_RANK.master);
   });
 
   it('服务器没装 Plan 时隐藏 player_query，其余工具不受影响', () => {
-    for (const role of ['guest', 'authorized', 'admin', 'owner']) {
+    for (const role of ['guest', 'authorized', 'admin', 'master', 'owner']) {
       const list = toolsForRole(role, { plan: false }).map((t) => t.function.name);
       expect(list).not.toContain('player_query');
       expect(list).toContain('mc_status');
@@ -42,7 +46,7 @@ describe('toolsForRole（对应身份对应调用）', () => {
   });
 
   it('唱歌是普通工具，所有身份都能用', () => {
-    for (const role of ['guest', 'authorized', 'admin', 'owner']) {
+    for (const role of ['guest', 'authorized', 'admin', 'master', 'owner']) {
       expect(names(role)).toContain('sing');
     }
   });

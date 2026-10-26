@@ -7,11 +7,11 @@
 // 「对应身份对应调用」：每个工具声明所需的最低身份 minRole（与 permission.js 一致），
 //   提示模型前**按提问者身份过滤**，模型根本看不到自己无权用的工具；
 //   执行时**再校验一次**（双保险），越权调用直接拒绝。
-//   身份高低：guest < authorized < admin < owner
+//   身份高低：guest < authorized < admin < master(主人) < owner(所有者)
 // ============================================================
 
 /** 身份高低（数值越大越高） */
-export const ROLE_RANK = { guest: 0, authorized: 1, admin: 2, owner: 3 };
+export const ROLE_RANK = { guest: 0, authorized: 1, admin: 2, master: 3, owner: 4 };
 
 /**
  * 工具注册表。每项：

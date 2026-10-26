@@ -1,14 +1,13 @@
 // ============================================================
 // permission.js - 授权 / 权限系统（持久化到 data/）
-// 角色档位（从高到低）：owner(主人) > admin(管理员) > authorized(授权用户) > guest(普通用户)
+// 角色档位（从高到低）：owner(所有者) > master(主人) > admin(管理员) > authorized(授权用户) > guest(普通用户)
 // 高档自动包含低档的全部权限；命令与档位的对应关系见 help.js 的 HELP_CMDS/TIERS。
-// 授权由主人管理：普通用户提交申请 -> 主人同意/拒绝。
 //
 // 等级式管理（#授权 <@或QQ> <等级>）：
 //   0 主人 / 1 管理员 / 2 授权用户 / 3 普通用户 / 4 黑名单（不响应，转发除外），默认 2
-// .env 里的 BOT_OWNER / BOT_OWNER_BACKUP / BOT_ADMINS 是「写死」的最高身份，命令改不动它们（需改 .env）。
-// BOT_OWNER_BACKUP 是主人备用账号（预留）：填了同样拥有主人权限，留空则不生效。
-// 命令能管理的是：额外主人 / 额外管理员 / 授权用户 / 黑名单（均持久化到 auth.json）。
+// .env 里的 BOT_OWNER 是「所有者」，比主人还高一级，且**只能改 .env**，任何命令都动不了；
+// BOT_OWNER_BACKUP 是「主人2」（.env 写死的主人，留空不启用）；BOT_ADMINS 是写死的管理员。
+// 命令能管理的是：主人（仅所有者可增删，等级 0）/ 管理员 / 授权用户 / 黑名单（持久化到 auth.json）。
 // ============================================================
 import path from 'path';
 import dotenv from 'dotenv';
@@ -23,8 +22,8 @@ dotenv.config({ path: path.join(ROOT, '.env') });
 let AUTH_FILE = '';
 let PENDING_FILE = '';
 
-let owner = '';         // 来自 .env BOT_OWNER
-let ownerBackup = '';   // 来自 .env BOT_OWNER_BACKUP（主人备用账号，预留；留空不启用）
+let owner = '';         // 来自 .env BOT_OWNER（所有者，最高级，只能改 .env）
+let master2 = '';       // 来自 .env BOT_OWNER_BACKUP（主人2，.env 写死的主人；留空不启用）
 let admins = [];        // 来自 .env BOT_ADMINS
 let extraOwners = [];   // 命令授予的主人（持久化）
 let extraAdmins = [];   // 命令授予的管理员（持久化）
@@ -52,7 +51,7 @@ export function init(dir) {
   AUTH_FILE = path.join(dataDir, 'auth.json');
   PENDING_FILE = path.join(dataDir, 'pending.json');
   owner = String(process.env.BOT_OWNER || '').trim();
-  ownerBackup = String(process.env.BOT_OWNER_BACKUP || '').trim();
+  master2 = String(process.env.BOT_OWNER_BACKUP || '').trim();
   admins = (process.env.BOT_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
   const a = readJsonSafe(AUTH_FILE, {}, 'auth.json');
   authorized = Array.isArray(a.authorized) ? a.authorized.map(String) : [];
@@ -64,28 +63,32 @@ export function init(dir) {
   pending = Array.isArray(p.pending) ? p.pending.map(String) : [];
 }
 
-/** 返回角色：owner | admin | authorized | guest */
+/** 返回角色：owner(所有者) | master(主人) | admin(管理员) | authorized(授权用户) | guest(普通用户) */
 export function role(userId) {
   const id = String(userId);
   if (owner && id === owner) return 'owner';
-  if (ownerBackup && id === ownerBackup) return 'owner';
-  if (extraOwners.includes(id)) return 'owner';
+  if (master2 && id === master2) return 'master';
+  if (extraOwners.includes(id)) return 'master';
   if (admins.includes(id)) return 'admin';
   if (extraAdmins.includes(id)) return 'admin';
   if (authorized.includes(id)) return 'authorized';
   return 'guest';
 }
 
+/** 是否主人档（所有者或主人）：都固定满好感、都可审批等 */
+function isMasterRole(r) { return r === 'owner' || r === 'master'; }
+
 /**
- * 四档的显示名（从高到低，供元数据/日志统一引用，避免各处各写一套）：
- *   owner 主人 > admin 管理员 > authorized 授权用户 > guest 普通用户
+ * 五档的显示名（从高到低，供元数据/日志统一引用，避免各处各写一套）：
+ *   owner 所有者 > master 主人 > admin 管理员 > authorized 授权用户 > guest 普通用户
  *
  * 好感度是**动态值**（见 getFavor/adjustFavor）：所有人默认 FAVOR_DEFAULT(50)，
  * 由 AI 在交谈中按表现增减，但受档位上限约束（FAVOR_MAX）：
- *   主人固定 100%；管理员 / 授权用户 上限 90%；普通用户上限 80%。
+ *   所有者 / 主人固定 100%；管理员 / 授权用户 上限 90%；普通用户上限 80%。
  */
 export const TIER_META = {
-  owner: { name: '主人' },
+  owner: { name: '所有者' },
+  master: { name: '主人' },
   admin: { name: '管理员' },
   authorized: { name: '授权用户' },
   guest: { name: '普通用户' },
@@ -94,8 +97,8 @@ export const TIER_META = {
 /** 好感度默认值（所有新用户从这里起步，由 AI 累积调整） */
 export const FAVOR_DEFAULT = 50;
 
-/** 各档好感度上限（主人固定即上限=下限=100） */
-export const FAVOR_MAX = { owner: 100, admin: 90, authorized: 90, guest: 80 };
+/** 各档好感度上限（所有者/主人固定即上限=下限=100） */
+export const FAVOR_MAX = { owner: 100, master: 100, admin: 90, authorized: 90, guest: 80 };
 
 /** 把某档的好感度夹到 [0, 上限]；非法值回落默认值 */
 function clampFavor(roleName, value) {
@@ -107,26 +110,26 @@ function clampFavor(roleName, value) {
 
 /**
  * 取某人当前好感度（喂给 AI 的元数据用）。
- * 主人固定 100%；其余取持久化值（无则默认 50），并按档位上限夹一次。
+ * 所有者 / 主人固定 100%；其余取持久化值（无则默认 50），并按档位上限夹一次。
  */
 export function getFavor(userId) {
   const id = String(userId || '');
   if (!id) return FAVOR_DEFAULT;
   const r = role(id);
-  if (r === 'owner') return 100;
+  if (isMasterRole(r)) return 100;
   const stored = Object.prototype.hasOwnProperty.call(favors, id) ? favors[id] : FAVOR_DEFAULT;
   return clampFavor(r, stored);
 }
 
 /**
- * 直接设定某人好感度（夹到档位上限后持久化）；主人不接受改动，恒为 100。
+ * 直接设定某人好感度（夹到档位上限后持久化）；所有者/主人不接受改动，恒为 100。
  * @returns {{ok:boolean, favor:number, msg:string}}
  */
 export function setFavor(userId, value) {
   const id = String(userId || '');
   if (!id) return { ok: false, favor: FAVOR_DEFAULT, msg: '缺少目标用户。' };
   const r = role(id);
-  if (r === 'owner') return { ok: true, favor: 100, msg: '主人好感度固定 100%，无需调整。' };
+  if (isMasterRole(r)) return { ok: true, favor: 100, msg: '主人好感度固定 100%，无需调整。' };
   const nv = clampFavor(r, value);
   favors[id] = nv;
   save();
@@ -143,7 +146,7 @@ export function adjustFavor(userId, delta) {
   if (!id) return { ok: false, favor: FAVOR_DEFAULT, max: FAVOR_MAX.guest, msg: '缺少目标用户。' };
   if (!Number.isFinite(d) || d === 0) return { ok: false, favor: getFavor(id), max: FAVOR_MAX[role(id)] ?? 80, msg: '请给出非零的好感度增减量。' };
   const r = role(id);
-  if (r === 'owner') return { ok: true, favor: 100, max: 100, msg: '主人好感度固定 100%，无需调整。' };
+  if (isMasterRole(r)) return { ok: true, favor: 100, max: 100, msg: '主人好感度固定 100%，无需调整。' };
   const cur = getFavor(id);
   const next = clampFavor(r, cur + d);
   if (next === cur) return { ok: true, favor: cur, max: FAVOR_MAX[r], msg: `好感度已是 ${cur}%（上限 ${FAVOR_MAX[r]}%），不变。` };
@@ -182,12 +185,12 @@ export function revoke(userId) {
   return false;
 }
 
-// ---------- 等级式管理（#授权 <@或QQ> <等级>，仅主人调用） ----------
-/** 该 QQ 是否被 .env 写死为最高身份（命令改不动） */
+// ---------- 等级式管理（#授权 <@或QQ> <等级>） ----------
+/** 该 QQ 是否被 .env 写死（命令改不动）：返回 所有者 / 主人2 / 管理员 */
 function envLocked(userId) {
   const id = String(userId);
-  if (owner && id === owner) return '主人';
-  if (ownerBackup && id === ownerBackup) return '主人';
+  if (owner && id === owner) return '所有者';
+  if (master2 && id === master2) return '主人2';
   if (admins.includes(id)) return '管理员';
   return '';
 }
@@ -207,13 +210,16 @@ export function setLevel(userId, level) {
   const lv = Number(level);
   if (!Number.isInteger(lv) || lv < 0 || lv > 4) return { ok: false, msg: '❌ 等级需为 0-4' };
   const lock = envLocked(id);
-  if (lock && ((lv === 0 && lock === '主人') || (lv === 1 && lock === '管理员'))) {
-    // 已是该（或更高）身份，无需改动
-    return { ok: true, msg: `ℹ️ QQ ${id} 本就是 .env 里写死的${lock}。`, level: lv };
+  if (lock === '所有者') {
+    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的所有者（最高权限），只能改 .env 的 BOT_OWNER，命令改不了。` };
   }
-  if (lock) {
-    const envKey = lock === '管理员' ? 'BOT_ADMINS' : (ownerBackup && id === ownerBackup ? 'BOT_OWNER_BACKUP' : 'BOT_OWNER');
-    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的${lock}，不能通过命令降级（请改 ${envKey}）` };
+  if (lock === '主人2') {
+    if (lv === 0) return { ok: true, msg: `ℹ️ QQ ${id} 本就是 .env 里写死的主人2（主人档）。`, level: 0 };
+    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的主人2，不能通过命令降级（请改 BOT_OWNER_BACKUP）` };
+  }
+  if (lock === '管理员') {
+    if (lv === 1) return { ok: true, msg: `ℹ️ QQ ${id} 本就是 .env 里写死的管理员。`, level: 1 };
+    return { ok: false, msg: `❌ QQ ${id} 是 .env 里写死的管理员，不能通过命令降级（请改 BOT_ADMINS）` };
   }
   // 先从所有「命令可管理」的名单里清掉，再加入目标名单
   extraOwners = extraOwners.filter((q) => q !== id);
@@ -231,7 +237,7 @@ export function setLevel(userId, level) {
   // 档位变了，好感度要按新档位的上限重新夹一次（例如从授权降到普通，88% 会被压到 80%）
   if (Object.prototype.hasOwnProperty.call(favors, id)) {
     const nr = role(id);
-    favors[id] = nr === 'owner' ? 100 : clampFavor(nr, favors[id]);
+    favors[id] = isMasterRole(nr) ? 100 : clampFavor(nr, favors[id]);
   }
 
   savePending();
@@ -242,17 +248,24 @@ export function setLevel(userId, level) {
 
 /**
  * 判定「actor 能否管理 target」——用于 #授权 / #绑定上限 这类"只能管低于自己权限的人"的命令。
- * 主人不受限；管理员只能管比自己低的人（授权用户/普通用户/黑名单），不能动同级或更高、也不能动自己。
+ * 所有者不受限；主人不能动所有者/其他主人；管理员只能管比自己低的人（授权用户/普通用户/黑名单），
+ * 都不能动同级或更高、也不能动自己。
  * @returns {{ok:boolean, msg?:string}}
  */
 export function canManage(actorId, targetId) {
   const ar = role(actorId);
-  if (ar !== 'admin' && ar !== 'owner') return { ok: false, msg: '❌ 需管理员及以上权限。' };
   if (ar === 'owner') return { ok: true };
+  if (ar !== 'master' && ar !== 'admin') return { ok: false, msg: '❌ 需管理员及以上权限。' };
   const t = String(targetId);
   if (t === String(actorId)) return { ok: false, msg: '❌ 不能对自己操作。' };
   const tr = role(t);
-  if (tr === 'owner' || tr === 'admin') {
+  if (ar === 'master') {
+    if (isMasterRole(tr)) {
+      return { ok: false, msg: `❌ QQ ${t} 是${TIER_META[tr].name}（同级或更高），无权操作。` };
+    }
+    return { ok: true };
+  }
+  if (isMasterRole(tr) || tr === 'admin') {
     return { ok: false, msg: `❌ QQ ${t} 是${TIER_META[tr].name}（同级或更高），无权操作。` };
   }
   return { ok: true };
@@ -260,8 +273,8 @@ export function canManage(actorId, targetId) {
 
 /**
  * 由某个人（actor）设置另一个人的等级。
- * 主人可设任意等级（走 setLevel）；管理员只能设「低于自己」的等级（授权用户/普通用户/黑名单），
- * 且不能改动同级或更高的人、也不能改自己。
+ * 所有者可设任意等级；主人只能设「低于自己」的（管理员/授权/普通/黑名单），
+ * 管理员只能设授权用户/普通用户/黑名单。
  * @returns {{ok:boolean, msg:string, level?:number}}
  */
 export function setLevelBy(actorId, targetId, level) {
@@ -271,7 +284,12 @@ export function setLevelBy(actorId, targetId, level) {
   if (ar === 'owner') return setLevel(targetId, lv);
   const gate = canManage(actorId, targetId);
   if (!gate.ok) return { ok: false, msg: gate.msg };
-  // 管理员：只能授予「低于自己」的档位（2 授权用户 / 3 普通 / 4 黑名单），不能授予主人或管理员
+  if (ar === 'master') {
+    // 主人可以授管理员及以下，但增删主人是所有者专属
+    if (lv < 1) return { ok: false, msg: '❌ 只有所有者可以授予/取消主人。' };
+    return setLevel(targetId, lv);
+  }
+  // 管理员：只能授予「低于自己」的档位（2 授权用户 / 3 普通 / 4 黑名单）
   if (lv < 2) return { ok: false, msg: '❌ 管理员只能设「授权用户/普通用户/黑名单」，不能授予主人或管理员。' };
   return setLevel(targetId, lv);
 }
@@ -297,8 +315,9 @@ function emitLevel(id, level) {
 // ---------- 申请 / 审批 ----------
 export function requestAuth(userId) {
   const id = String(userId);
-  if (role(id) === 'owner') return { ok: true, msg: '你是主人，无需申请。' };
-  if (admins.includes(id)) return { ok: true, msg: '你是管理员，无需申请。' };
+  const r = role(id);
+  if (isMasterRole(r)) return { ok: true, msg: `你是${TIER_META[r].name}，无需申请。` };
+  if (r === 'admin') return { ok: true, msg: '你是管理员，无需申请。' };
   if (authorized.includes(id)) return { ok: false, msg: '你已在授权列表中。' };
   if (pending.includes(id)) return { ok: false, msg: '你的申请已提交，等待主人审批。' };
   pending.push(id);
@@ -329,7 +348,7 @@ export function rejectAuth(userId) {
 export function listAuthorized() { return authorized.slice(); }
 export function listPending() { return pending.slice(); }
 export function getOwner() { return owner; }
-/** 主人备用账号（预留）：未填写时返回空字符串 */
-export function getOwnerBackup() { return ownerBackup; }
+/** 主人2（.env BOT_OWNER_BACKUP）：未填写时返回空字符串 */
+export function getMaster2() { return master2; }
 
 init();

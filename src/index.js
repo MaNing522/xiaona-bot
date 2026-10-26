@@ -476,7 +476,7 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @param {object}  o
  * @param {string}  o.metaLine   注入的元数据 + 消息内容
  * @param {string} [o.memory]    已知记忆
- * @param {string} [o.role]      提问者身份 guest|authorized|admin|owner
+ * @param {string} [o.role]      提问者身份 guest|authorized|admin|master|owner
  * @param {boolean}[o.allowSkip] 是否判断"这条不是叫我"从而不回复（从严）
  * @param {boolean}[o.allowSearch] 是否开放联网搜索工具
  * @param {boolean}[o.allowImage] 是否开放图片识别工具（仅当本条消息带图片时才开）
@@ -997,7 +997,7 @@ function recallFailText(e) {
  *   不引用时 #撤回 [条数]              直接撤回我最近发的若干条（默认 1）
  */
 async function handleRecall(event, arg, roleName) {
-    if (roleName !== 'owner' && roleName !== 'admin') {
+    if (roleName !== 'owner' && roleName !== 'master' && roleName !== 'admin') {
         return sendReply(event, '❌ 无权限（需主人/管理员）。');
     }
     const key = convKey(event);
@@ -1101,13 +1101,13 @@ export function buildMetaLine(event, meta, atBot, userInput, where = '') {
     const dialog = event.message_type === 'private' ? '私信' : '群聊';
     const dialogId = event.message_type === 'private' ? uid : String(event.group_id || '');
 
-    // 身份：主人 > 群主/群管理员(群角色) > 管理员 > 授权用户 > 普通用户
+    // 身份：所有者 > 主人 > 群主/群管理员(群角色) > 管理员 > 授权用户 > 普通用户
     const role = perm.role(uid);
     const tier = perm.TIER_META[role] || perm.TIER_META.guest;
     let ident = tier.name;
-    // 好感度是动态值：默认 50%，由 AI 在交谈中累积（受档位上限约束，主人固定 100%）
+    // 好感度是动态值：默认 50%，由 AI 在交谈中累积（受档位上限约束，主人/所有者固定 100%）
     let favor = perm.getFavor(uid);
-    if (event.message_type === 'group' && role !== 'owner') {
+    if (event.message_type === 'group' && role !== 'owner' && role !== 'master') {
         if (meta.groupRole === 'owner') ident = '群主';
         else if (meta.groupRole === 'admin') ident = '管理员';
     }
@@ -1195,7 +1195,7 @@ async function handleCommand(event, text) {
             return sendReply(event, listBindings(uid));
 
         case '/强制解绑': {
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以强制解绑');
+            if (r !== 'owner' && r !== 'master' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以强制解绑');
             const [q, gid] = arg.split(/\s+/).filter(Boolean);
             if (!q) return sendReply(event, '❌ 用法：#强制解绑 <QQ号> [游戏ID]\n不带游戏ID则清空该QQ的全部绑定');
             const fr = forceUnbind(q, gid);
@@ -1203,7 +1203,7 @@ async function handleCommand(event, text) {
         }
 
         case '/封禁': {
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以封禁');
+            if (r !== 'owner' && r !== 'master' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以封禁');
             const target = resolveTarget(event, arg);
             if (!target) {
                 return sendReply(event, '❌ 用法：#封禁 @或QQ号 [时间] [原因]\n'
@@ -1224,7 +1224,7 @@ async function handleCommand(event, text) {
         }
 
         case '/解封': {
-            if (r !== 'owner' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以解封');
+            if (r !== 'owner' && r !== 'master' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以解封');
             const target = resolveTarget(event, arg);
             if (!target) return sendReply(event, '❌ 用法：#解封 @或QQ号\n解封后对方可重新 #绑定 游戏ID');
             const ub = unbanUser(target);
@@ -1252,7 +1252,7 @@ async function handleCommand(event, text) {
 
         // 管理员及以上给「低于自己权限的人」单独设置绑定上限（全局默认在 config.json / 网页里改）
         case '/绑定上限': {
-            if (r !== 'admin' && r !== 'owner') return sendReply(event, '❌ 仅管理员及以上可设置绑定上限。');
+            if (r !== 'admin' && r !== 'master' && r !== 'owner') return sendReply(event, '❌ 仅管理员及以上可设置绑定上限。');
             const t = resolveTarget(event, arg);
             if (!t) return sendReply(event, '❌ 用法：#绑定上限 <@或QQ号> <数量>\n不填数量（或填 0）则清除该人的单独上限、回退全局默认。');
             const gate = perm.canManage(uid, t);
@@ -1314,15 +1314,16 @@ async function handleCommand(event, text) {
                 const bl = perm.listBlacklist();
                 const exOwners = perm.listExtraOwners();
                 const exAdmins = perm.listExtraAdmins();
-                const owners = [perm.getOwner(), perm.getOwnerBackup(), ...exOwners].filter(Boolean);
+                const masters = [perm.getMaster2(), ...exOwners].filter(Boolean);
                 return sendReply(event,
-                    `👑 主人(${owners.length}): ${owners.join('、') || '无'}\n`
+                    `👑 所有者: ${perm.getOwner() || '未设置'}\n`
+                    + `👑 主人(${masters.length}): ${masters.join('、') || '无'}\n`
                     + `🛡️ 管理员(${exAdmins.length}): ${exAdmins.join('、') || '无'}\n`
                     + `✅ 授权用户(${list.length}): ${list.join('、') || '无'}\n`
                     + `🚫 黑名单(${bl.length}): ${bl.join('、') || '无'}\n`
                     + `⏳ 待审批(${pend.length}): ${pend.join('、') || '无'}\n`
                     + '用法：#授权 <@或QQ号> [等级]（0主人/1管理员/2授权用户/3普通/4黑名单，默认2）\n'
-                    + '管理员及以上可用；管理员只能设「低于自己」的等级，不能授予主人/管理员。');
+                    + '管理员及以上可用；管理员只能设授权用户及以下，主人可设管理员；增删主人仅所有者。');
             }
             // 末位若是单个 0-4，视为等级；否则默认 2
             const parts = arg.split(/\s+/).filter(Boolean);
@@ -1336,7 +1337,7 @@ async function handleCommand(event, text) {
         }
 
         case '/拒绝授权': {
-            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行授权操作。');
+            if (!['owner', 'master'].includes(r)) return sendReply(event, '❌ 仅主人/所有者可执行授权操作。');
             const t = resolveTarget(event, arg);
             if (!t) return sendReply(event, '❌ 请 @对方 或提供 QQ 号。');
             return perm.rejectAuth(t)
@@ -1345,7 +1346,7 @@ async function handleCommand(event, text) {
         }
 
         case '/取消授权': {
-            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行授权操作。');
+            if (!['owner', 'master'].includes(r)) return sendReply(event, '❌ 仅主人/所有者可执行授权操作。');
             const t = resolveTarget(event, arg);
             if (!t) return sendReply(event, '❌ 请 @对方 或提供 QQ 号。');
             return perm.revoke(t)
@@ -1424,7 +1425,7 @@ async function handleCommand(event, text) {
             return handleProfile(event, cmd, arg, r);
 
         case '/接管':
-            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行该操作。');
+            if (!['owner', 'master'].includes(r)) return sendReply(event, '❌ 仅主人/所有者可执行该操作。');
             if (arg === 'auto' || arg === '人工' || arg === 'manual') {
                 setTakeoverMode(convKey(event), 'auto', uid);
                 return sendReply(event, '✅ 已恢复自动回复。');
@@ -1437,8 +1438,8 @@ async function handleCommand(event, text) {
             return sendReply(event, '🤝 已人工接管本会话，自动回复已暂停。用 #恢复AI 恢复，或在面板上操作。');
 
         case '/恢复AI':
-            // 接管是主人专属，恢复自然也归主人（管理员不继承主人专属命令）
-            if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行该操作。');
+            // 接管是主人档专属，恢复自然也归主人档
+            if (!['owner', 'master'].includes(r)) return sendReply(event, '❌ 仅主人/所有者可执行该操作。');
             setTakeoverMode(convKey(event), 'auto', uid);
             return sendReply(event, '✅ 已恢复自动回复。');
 
@@ -1479,7 +1480,7 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
         return sendReply(event, '❌ 该指令仅可在群聊中使用。');
     }
     // 仅主人/管理员
-    if (roleName !== 'owner' && roleName !== 'admin') {
+    if (roleName !== 'owner' && roleName !== 'master' && roleName !== 'admin') {
         return sendReply(event, '❌ 无权限（需主人或管理员）。');
     }
     const gid = event.group_id;
@@ -1583,11 +1584,16 @@ async function doApplyAuth(event, uid) {
     return sendReply(event, r.ok ? `⏳ ${r.msg}` : `ℹ️ ${r.msg}`);
 }
 
-// 主人通知回调（私聊主人）
+// 主人档 QQ 列表：所有者 + 主人2 + 命令授予的主人（去重、保序）
+function masterTargets() {
+    return [...new Set([perm.getOwner(), perm.getMaster2(), ...perm.listExtraOwners()].filter(Boolean))];
+}
+
+// 通知回调（私聊所有主人档账号）
 const notifyOwner = async (msg) => {
-    const owner = perm.getOwner();
-    if (!owner) return;
-    await callApi('send_private_msg', { user_id: owner, message: [segText(msg)] }).catch((e) => logger.error('通知主人失败:', e.message));
+    await Promise.all(masterTargets().map((qq) =>
+        callApi('send_private_msg', { user_id: qq, message: [segText(msg)] })
+            .catch((e) => logger.error('通知主人失败:', e.message))));
 };
 
 // 被审批后被授权者结果私聊（尽力而为）
@@ -1709,7 +1715,7 @@ async function fetchBalanceInfos() {
  * 接口地址由 aiService 按服务商推导；该服务商没有余额接口时给友好提示而不是报错崩掉。
  */
 async function doBalance(event, role) {
-    if (role !== 'owner' && role !== 'admin') {
+    if (role !== 'owner' && role !== 'master' && role !== 'admin') {
         return sendReply(event, '❌ 只有主人/管理员可以查看余额');
     }
     let fetched;
@@ -1743,7 +1749,7 @@ async function doBalance(event, role) {
  * 之后每笔充值都会在这个设定值的基础上继续累加。
  */
 async function doCorrectBalance(event, role, arg) {
-    if (role !== 'owner') return sendReply(event, '❌ 只有主人可以矫正余额');
+    if (!['owner', 'master'].includes(role)) return sendReply(event, '❌ 只有主人/所有者可以矫正余额');
     const parts = arg.split(/\s+/).filter(Boolean);
     if (parts.length < 2) {
         return sendReply(event, '❌ 用法：#余额矫正 <充值总金额> <已使用> [币种]\n'
@@ -2349,20 +2355,24 @@ async function chatSourceForAi(event) {
     return `群 ${gid}${name ? '「' + name + '」' : ''}`;
 }
 
-/** 私聊主人，并返回那条消息的 message_id（主人要靠引用它来回复） */
+/** 私聊所有主人档账号，并返回各条通知的 message_id（主人靠引用它来回复） */
 async function notifyOwnerWithId(msg) {
-    const owner = perm.getOwner();
-    if (!owner) {
-        logger.warn('[申请] 没设置主人，没法转发申请。用 #授权 设置主人后再试。');
-        return '';
+    const targets = masterTargets();
+    if (!targets.length) {
+        logger.warn('[申请] 没设置所有者/主人，没法转发申请。改 .env 的 BOT_OWNER 后再试。');
+        return [];
     }
-    try {
-        const r = await callApi('send_private_msg', { user_id: owner, message: [segText(msg)] });
-        return String((r && (r.message_id || r.msg_id)) || '');
-    } catch (e) {
-        logger.error('[申请] 通知主人失败:', e.message);
-        return '';
+    const ids = [];
+    for (const qq of targets) {
+        try {
+            const r = await callApi('send_private_msg', { user_id: qq, message: [segText(msg)] });
+            const id = String((r && (r.message_id || r.msg_id)) || '');
+            if (id) ids.push(id);
+        } catch (e) {
+            logger.error('[申请] 通知主人失败:', e.message);
+        }
     }
+    return ids;
 }
 
 /**
@@ -2412,13 +2422,15 @@ async function onRequest(event) {
         lines.push('  拒绝 [理由]     → 驳回（理由会带给对方）');
         lines.push(`不方便引用就发：#同意 ${uid}　或　#拒绝 ${uid} 理由`);
 
-        const msgId = await notifyOwnerWithId(lines.join('\n'));
-        if (!msgId) return;   // 没发出去就别记，免得引用一个不存在的 id
-        cacheSet(pendingReqs, msgId, PENDING_REQ_MAX, {
-            kind, sub, flag: String(event.flag || ''), uid, gid,
-            label: `${kind === 'friend' ? '好友' : '群'}申请 ${who}`,
-            at: Date.now(),
-        });
+        const msgIds = await notifyOwnerWithId(lines.join('\n'));
+        if (!msgIds.length) return;   // 没发出去就别记，免得引用一个不存在的 id
+        for (const msgId of msgIds) {
+            cacheSet(pendingReqs, msgId, PENDING_REQ_MAX, {
+                kind, sub, flag: String(event.flag || ''), uid, gid,
+                label: `${kind === 'friend' ? '好友' : '群'}申请 ${who}`,
+                at: Date.now(),
+            });
+        }
         logger.info(`📨 已把${kind === 'friend' ? '好友' : '进群'}申请转给主人：${who}`);
     } catch (e) {
         logger.error('[申请] 处理失败:', e.message);
@@ -2458,7 +2470,7 @@ async function applyVerdict(req, approve, extra) {
 async function handleOwnerApproval(event, segments, text) {
     if (!QQ_REQUEST_APPROVE) return false;
     if (event.message_type !== 'private') return false;              // 只在私聊里审批
-    if (perm.role(String(event.user_id)) !== 'owner') return false;  // 只有主人能批
+    if (!['owner', 'master'].includes(perm.role(String(event.user_id)))) return false;  // 只有所有者/主人能批
     const replySeg = (Array.isArray(segments) ? segments : []).find((s) => s && s.type === 'reply');
     const quotedId = replySeg ? String((replySeg.data && replySeg.data.id) || '').trim() : '';
     if (!quotedId) return false;
@@ -2496,8 +2508,8 @@ async function handleManualApproval(event, cmd, arg) {
         await sendReply(event, '🔒 申请只在私聊里处理，私聊我发：#' + cmd.slice(1) + ' <QQ号>');
         return true;
     }
-    if (perm.role(String(event.user_id)) !== 'owner') {
-        await sendReply(event, '❌ 只有主人可以审批申请。');
+    if (!['owner', 'master'].includes(perm.role(String(event.user_id)))) {
+        await sendReply(event, '❌ 只有所有者/主人可以审批申请。');
         return true;
     }
     const m = String(arg || '').match(/^(\d{5,14})\s*([\s\S]*)$/);
@@ -3364,10 +3376,10 @@ function formatStatus(d, admin) {
     out.push(`· 模型：${d.bot.model}`);
     out.push(`· 已绑定游戏ID：${d.bot.boundGameIds} 个`);
     out.push(`· 运行：${uptimeText(d.bot.uptimeSec)}`);
-    if (d.bot.ownerHome) out.push(`· 主人主页：${d.bot.ownerHome}`);
+    if (d.bot.ownerHome) out.push(`· 所有者主页：${d.bot.ownerHome}`);
     if (admin) {
         out.push(`· OneBot 地址：${d.bot.wsUrl}`);
-        out.push(`· 主人：${d.bot.owner || '未设置'}｜已授权 ${d.bot.authorized} 人`);
+        out.push(`· 所有者：${d.bot.owner || '未设置'}｜主人 ${d.bot.masters || 0} 人｜已授权 ${d.bot.authorized} 人`);
         out.push(`· 面板：http://${d.bot.webuiHost}:${d.bot.webuiPort}`);
     }
     return out.join('\n');
@@ -3375,7 +3387,7 @@ function formatStatus(d, admin) {
 
 /** 采集真实数据后拼状态（任何一项取不到都不影响整体） */
 async function doStatus(role) {
-    const admin = role === 'owner' || role === 'admin';
+    const admin = role === 'owner' || role === 'master' || role === 'admin';
     let status = null, players = [];
     try { status = await getBridgeStatus(); } catch { /* 服务器不可达：只显示未连接 */ }
     if (status) {
@@ -3397,6 +3409,7 @@ async function doStatus(role) {
             uptimeSec: process.uptime(),
             wsUrl: WS_URL,
             owner: perm.getOwner(),
+            masters: masterTargets().length,
             ownerHome: (process.env.BOT_OWNER_HOME || '').trim(),
             authorized,
             webuiHost: process.env.WEBUI_HOST || '127.0.0.1',
@@ -3524,7 +3537,7 @@ function handleMemoryCmd(event, cmd, arg) {
 
 // ---------- 主人改昵称 / 换头像（OneBot/NapCat 扩展接口 set_qq_profile / set_qq_avatar） ----------
 async function handleProfile(event, cmd, arg, r) {
-    if (r !== 'owner') return sendReply(event, '❌ 仅主人可执行该操作。');
+    if (!['owner', 'master'].includes(r)) return sendReply(event, '❌ 仅主人/所有者可执行该操作。');
     try {
         if (cmd === '/换名') {
             const nickname = arg.trim();

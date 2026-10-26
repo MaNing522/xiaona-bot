@@ -246,9 +246,10 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
   <!-- 授权 -->
   <div class="panel" data-panel="perms">
     <div class="card">
-      <h2>👑 主人 / 管理员</h2>
-      <div class="stat"><span>主人(QQ)</span><b id="pmOwner">—</b></div>
-      <div class="stat"><span>主人备用账号（预留）</span><b id="pmOwnerBackup">—</b></div>
+      <h2>👑 所有者 / 主人 / 管理员</h2>
+      <div class="stat"><span>所有者（.env，最高权限）</span><b id="pmOwner">—</b></div>
+      <div class="stat"><span>主人2（.env 预留）</span><b id="pmMaster2">—</b></div>
+      <div class="stat"><span>授权主人</span><b id="pmMasters">—</b></div>
       <div class="stat"><span>管理员</span><b id="pmAdmins">—</b></div>
     </div>
     <div class="card">
@@ -310,7 +311,8 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
           <option value="all">👤 普通用户</option>
           <option value="auth">✅ 授权用户</option>
           <option value="admin">🛡️ 管理员</option>
-          <option value="owner">👑 主人</option>
+          <option value="master">👑 主人</option>
+          <option value="owner">👑 所有者</option>
         </select>
       </div>
       <div class="chips" id="ftCats" style="margin-top:12px"></div>
@@ -480,13 +482,14 @@ async function load(){try{const s=await api('/api/status');
   $('stBridge').textContent=(mc.base?(mc.connected?'已连接 · ':'未连接 · ')+(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'):(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'));
   if($('stWebuiPort'))$('stWebuiPort').textContent=s.webuiPort||'—';
   $('stQqClient').textContent=s.qqRunning?'运行中':'未运行';
-  $('sub').textContent=s.wsUrl+' · 授权由主人管理'+(s.botError?' · '+s.botError:'');
+  $('sub').textContent=s.wsUrl+' · 授权由所有者 / 主人管理'+(s.botError?' · '+s.botError:'');
   set('lvUp','服务在线','ok');set('lvBot',s.botConnected?'机器人已连接':'机器人未连接',s.botConnected?'ok':'warn');
-  set('lvAuth','授权由主人管理','warn');
+  set('lvAuth','授权由所有者 / 主人管理','warn');
 }catch(e){set('stUp','离线','red');set('lvUp','服务离线','red');}}
 
 async function perms(){try{const d=await api('/api/perms');
-  $('pmOwner').textContent=d.owner||'未设置';$('pmOwnerBackup').textContent=d.ownerBackup||'未设置';$('pmAdmins').textContent=d.admins.join('、')||'无';
+  $('pmOwner').textContent=d.owner||'未设置';$('pmMaster2').textContent=d.master2||'未设置';
+  $('pmMasters').textContent=(d.extraOwners||[]).join('、')||'无';$('pmAdmins').textContent=d.admins.join('、')||'无';
   $('pmList').innerHTML=d.authorized.length?d.authorized.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
   $('pmPending').innerHTML=d.pending.length?d.pending.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
   rollNum($('pmListN'), d.authorized.length); rollNum($('pmPendingN'), d.pending.length);
@@ -518,8 +521,8 @@ async function logs(){try{const d=await api('/api/logs');
 
 // ---------- 功能列表（指令表直接来自 help.js，与 QQ 里的 #帮助 同一份数据） ----------
 let ftCmds=null, ftTiers=[], ftCat='全部';
-const FT_ROLE_NAME={all:'普通用户',auth:'授权用户',admin:'管理员',owner:'主人'};
-const FT_ROLE_CLASS={all:'mut',auth:'ok',admin:'warn',owner:'red'};
+const FT_ROLE_NAME={all:'普通用户',auth:'授权用户',admin:'管理员',master:'主人',owner:'所有者'};
+const FT_ROLE_CLASS={all:'mut',auth:'ok',admin:'warn',master:'red',owner:'red'};
 async function ftLoad(){
   if(!ftCmds){
     try{ const d=await api('/api/features'); ftCmds=d.commands||[]; ftTiers=d.tiers||[]; }
@@ -631,12 +634,12 @@ function gcRender(){
   $('gcBridge').value=bridgeMode;
 }
 
-// 会话列表（所有群聊 + 所有好友；主人私聊默认置顶，可手动置顶/取消）
+// 会话列表（所有群聊 + 所有好友；所有者私聊默认置顶，可手动置顶/取消）
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
 function cvItem(c){
   const n=c.overrides||0;
   const tip=c.pinned?'📌 ':'';
-  const own=c.key===cvOwner?' <span class="hint" style="margin:0">(主人)</span>':'';
+  const own=c.key===cvOwner?' <span class="hint" style="margin:0">(所有者)</span>':'';
   return '<div class="cmd" style="display:flex;align-items:center;gap:8px'+(c.key===cvSel?';border-color:var(--accent)':'')+'">'+
     '<div data-sel="'+esc(c.key)+'" style="cursor:pointer;flex:1;min-width:0;display:flex;align-items:center;gap:8px">'+
       '<b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+tip+esc(c.name)+own+'</b>'+
