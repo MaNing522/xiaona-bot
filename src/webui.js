@@ -25,6 +25,7 @@ import {
   deleteUnbind, restoreUnbind,
 } from './binding.js';
 import { ROOT } from './paths.js';
+import { transcribe } from './asr.js';
 
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
@@ -794,18 +795,36 @@ async function route(req, res, url) {
     return sendJSON(res, 200, { logs: tailSnowlumaLog(80) });
   }
 
-  // 试用页聊天：以「小锂 · 普通用户」身份跑一轮私聊 AI，返回小钠的回复
+  // 试用页聊天：以「小锂 · 普通用户」身份跑一轮私聊 AI（文字或语音），返回小钠的回复
   if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
     if (!trialChat) return sendJSON(res, 503, { ok: false, error: '试用聊天未就绪（机器人还没起来）' });
-    const { text } = await readBody(req);
-    const t = String(text || '').trim();
+    const body = await readBody(req);
+    let t = String(body.text || '').trim();
+    const isVoice = !t && !!body.audio;
+    if (isVoice) {
+      // 浏览器录的是 16k 单声道 WAV（前端已重采样），直接落临时文件交给 FunASR
+      const buf = Buffer.from(String(body.audio), 'base64');
+      if (!buf.length) return sendJSON(res, 400, { ok: false, error: '语音内容为空' });
+      if (buf.length > 12 * 1024 * 1024) return sendJSON(res, 400, { ok: false, error: '录音太长了（最多 60 秒）' });
+      const fmt = /^(wav|mp3|ogg|webm|m4a)$/i.test(String(body.format || '')) ? String(body.format).toLowerCase() : 'wav';
+      const tmp = path.join(os.tmpdir(), `xn-trial-${crypto.randomBytes(6).toString('hex')}.${fmt}`);
+      fs.writeFileSync(tmp, buf);
+      try {
+        t = String((await transcribe({ path: tmp, format: fmt })) || '').trim();
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* 临时文件删不掉就算了 */ }
+      }
+      if (!t) return sendJSON(res, 400, { ok: false, error: '语音没听清，再说一遍？' });
+    }
     if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
     if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
     const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
     try {
-      const reply = await trialChat(cid, t);
-      if (!reply) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
-      return sendJSON(res, 200, { ok: true, reply });
+      const result = await trialChat(cid, t);
+      const reply = typeof result === 'string' ? result : String((result && result.reply) || '');
+      const voices = (result && Array.isArray(result.voices)) ? result.voices : [];
+      if (!reply && !voices.length) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
+      return sendJSON(res, 200, { ok: true, reply, heard: isVoice ? t : '', voices });
     } catch (e) {
       // 把失败原因原样带回前端展示（如「AI 请求失败 (401)：...」「AI 超时」）
       const reason = String((e && e.message) || e || '未知错误');

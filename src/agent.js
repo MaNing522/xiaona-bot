@@ -115,7 +115,7 @@ export const AGENT_TOOLS = [
     minRole: 'guest',
     function: {
       name: 'sing',
-      description: '唱一段歌给对方听：系统会把歌声合成语音并直接发出去（只有 QQ 聊天有语音，游戏内、网页试用不行）。歌词必须放在 lyrics；如果你记不全歌词，**先调用 web_search 搜「歌名 歌词」**，拿到歌词后再调用本工具；搜不到就直说不会唱这首，别瞎编歌词。唱 4~8 句就好，别整首唱完。歌词里不要带 emoji。',
+      description: '唱一段歌给对方听：系统会把歌声合成语音并直接发出去（QQ 聊天、网页试用有语音；游戏内没有）。歌词必须放在 lyrics；如果你记不全歌词，**先调用 web_search 搜「歌名 歌词」**，拿到歌词后再调用本工具；搜不到就直说不会唱这首，别瞎编歌词。唱 4~8 句就好，别整首唱完。歌词里不要带 emoji。',
       parameters: {
         type: 'object',
         properties: {

@@ -2976,28 +2976,88 @@ function trialMemoryContext(history) {
         + history.map((m) => `${m.role === 'ai' ? '小钠' : '小锂'}: ${m.text}`).join('\n');
 }
 
+/** 试用会话里的 # 命令：按普通用户身份执行，返回 null 表示不是命令 */
+async function trialCommand(clientId, input) {
+    // 与 QQ 主流程一致：# 或 / 开头，或句子中间夹带 #指令
+    const cmdHit = input.match(/(?:^|[\s，,、]+)(#[^\s，,、]+)/);
+    const cmdStart = cmdHit ? cmdHit.index + cmdHit[0].indexOf('#') : -1;
+    if (!(input.startsWith('#') || input.startsWith('/') || cmdStart >= 0)) return null;
+    const cmdText = cmdStart >= 0 ? input.slice(cmdStart) : input;
+    const sink = [];
+    const event = {
+        message_type: 'private',
+        user_id: `${TRIAL_KEY}:${String(clientId || 'default')}`,
+        __convKey: TRIAL_KEY,
+        __replySink: sink,   // 回复收集起来返回给网页，不走 QQ
+    };
+    const handled = await handleCommand(event, cmdText)
+        .catch((e) => { sink.push('❌ 指令错误：' + e.message); return true; });
+    if (handled === false) return null;   // 认不出的指令：交回 AI
+    return sink.join('\n').trim() || '（指令已执行）';
+}
+
+/** 把一段文字合成语音，返回可直接播放的 data URL；失败返回 null */
+async function trialVoiceClip(text) {
+    try {
+        const p = await textToSpeech(String(text || '').trim());
+        const buf = fs.readFileSync(p);
+        cleanVoiceCache(50);
+        return 'data:audio/mpeg;base64,' + buf.toString('base64');
+    } catch (e) {
+        logger.warn('[试用] 语音合成失败:', e.message);
+        return null;
+    }
+}
+
 async function runTrialChat(clientId, text) {
     const input = String(text || '').trim();
-    if (!input) return '';
+    if (!input) return { reply: '' };
     const sess = trialSession(clientId);
+
+    // 命令优先（和 QQ 主流程一致）：执行结果直接返回，不喂给 AI
+    const cmdReply = await trialCommand(clientId, input);
+    if (cmdReply !== null) {
+        sess.history.push({ role: 'user', text: input }, { role: 'ai', text: cmdReply });
+        if (sess.history.length > TRIAL_MAX) sess.history.splice(0, sess.history.length - TRIAL_MAX);
+        return { reply: cmdReply };
+    }
+
     // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
     const memory = trialMemoryContext(sess.history);
     const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:${perm.FAVOR_DEFAULT}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ 小锂: ${input} ]`;
+    // sing 工具在试用里也能用：把要唱的内容收起来，本轮结束后合成语音返回网页播放
+    const voiceLines = [];
     const result = await aiReply({
         metaLine,
         memory,
         role: 'guest',          // 固定普通用户
         allowSkip: false,
         allowSearch: searchEnabled(),
+        allowVoice: true,
         userId: TRIAL_KEY + ':' + String(clientId || 'default'),   // KV 缓存按客户端隔离
-        ctx: buildAgentCtx(TRIAL_KEY),
+        ctx: buildAgentCtx(TRIAL_KEY, '', {
+            sendVoice: async (line) => {
+                const t = String(line || '').trim();
+                if (t) voiceLines.push(t);
+                return [voiceLines.length];
+            },
+        }),
     });
-    const reply = stripToolTags(String(result.reply || '')).trim() || '（小钠没有回复）';
+    let reply = stripToolTags(String(result.reply || '')).trim();
+    // 模型自己标了要发语音（或唱了歌）：合成后随回复一起返回，由网页播放
+    if (result.wantVoice && reply && !voiceLines.length) voiceLines.push(reply);
+    const voices = [];
+    for (const line of voiceLines.slice(0, 2)) {
+        const clip = await trialVoiceClip(line);
+        if (clip) voices.push(clip);
+    }
+    if (!reply && voices.length) reply = '（语音回复）';
+    reply = reply || '（小钠没有回复）';
     // 记录本轮（含小锂与小钠），只留最近 50 条
     sess.history.push({ role: 'user', text: input }, { role: 'ai', text: reply });
     if (sess.history.length > TRIAL_MAX) sess.history.splice(0, sess.history.length - TRIAL_MAX);
-    return reply;
+    return { reply, voices };
 }
 
 // ---------- 桥接群消息 → 游戏（只投给已绑定游戏ID的账号） ----------

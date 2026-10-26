@@ -143,18 +143,25 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 .chat .tip{color:var(--sub);font-size:12px;text-align:center;margin:6px 0}
 .tr-row{display:flex;animation:xnPop .22s ease both}
 .tr-row.me{justify-content:flex-end}
+/* 机器人气泡下面可能要挂「播放语音」按钮，改成竖排 */
+.tr-row.na{flex-direction:column;align-items:flex-start}
 .tr-bub{max-width:78%;padding:8px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word;font-size:14px}
 .me .tr-bub{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
 .na .tr-bub{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
 .tr-bub.wait{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
 .tr-bub.caret::after{content:'▍';margin-left:1px;color:var(--sub);animation:xnBlink .9s steps(1) infinite}
 .tr-bub.err{background:#fff5f5;border:1px solid #ffd6d6;color:#c0392b}
+.tr-voice{margin-top:4px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--txt);font-size:12.5px;cursor:pointer;transition:.15s}
+.tr-voice:hover{border-color:var(--accent);color:var(--accent)}
 @keyframes xnBlink{0%,100%{opacity:1}50%{opacity:.45}}
-.tr-foot{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px}
+.tr-foot{display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-top:12px}
 .tr-foot textarea{resize:none;height:44px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;
   background:var(--card);color:var(--txt);font:inherit;font-size:15px;outline:none}
 .tr-foot textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(22,119,255,.12)}
 .tr-foot .btn{width:auto;margin-top:0;padding:0 22px}
+.tr-foot .btn.tr-mic{padding:0 14px;font-size:17px;background:var(--card);color:var(--txt);border-color:#d9d9d9}
+.tr-foot .btn.tr-mic.rec{background:var(--danger);border-color:var(--danger);color:#fff}
 
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -335,10 +342,11 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
   <!-- 私聊试用 -->
   <div class="panel" data-panel="trial">
     <div class="card span2">
-      <h2>🧪 小钠 · 私聊试用 <span class="hint" style="margin:0;font-weight:400">以「小锂 · 普通用户」身份私聊，不经过 QQ</span></h2>
-      <div class="chat" id="trMsgs"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。</div></div>
+      <h2>🧪 小钠 · 私聊试用 <span class="hint" style="margin:0;font-weight:400">以「小锂 · 普通用户」身份私聊，不经过 QQ · 支持 #命令与语音</span></h2>
+      <div class="chat" id="trMsgs"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。可直接发 #命令（按普通用户权限执行），也可以点 🎤 发语音。</div></div>
       <div class="tr-foot">
         <textarea id="trInput" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="btn tr-mic" id="trMic" type="button" title="发语音（最长 60 秒）">🎤</button>
         <button class="btn green" id="trSend">发送</button>
       </div>
     </div>
@@ -776,21 +784,35 @@ function trType(b,text){
     })();
   });
 }
+// 统一渲染试用回复：文字逐字显示；带语音时在气泡下面挂「播放语音」按钮
+async function trShowReply(b,j){
+  const reply=String(j.reply||'');
+  if(!reply){b.className='tr-bub err';b.textContent='⚠️ 小钠这次没回成：返回内容为空';}
+  else{b.className='tr-bub caret';b.textContent='';await trType(b,reply);}
+  const vs=Array.isArray(j.voices)?j.voices:[];
+  if(vs.length){
+    const row=b.parentElement;
+    vs.forEach((src,i)=>{
+      const btn=document.createElement('button');btn.type='button';btn.className='tr-voice';
+      btn.textContent='🔊 播放语音'+(vs.length>1?' '+(i+1):'');
+      btn.onclick=()=>{try{(new Audio(src)).play().catch(()=>{});}catch(e){}};
+      row.appendChild(btn);
+    });
+    $('trMsgs').scrollTop=$('trMsgs').scrollHeight;
+  }
+}
+function trLock(on){$('trSend').disabled=on;$('trMic').disabled=on;}
 async function trSend(){
   if(trBusy)return;
   const t=$('trInput').value.trim(); if(!t)return;
-  trBusy=true;$('trSend').disabled=true;$('trInput').value='';
+  trBusy=true;trLock(true);$('trInput').value='';
   trAdd('me',t);
   const b=trAdd('na','小钠正在输入…','wait');
   try{
     const r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
     const j=await r.json().catch(()=>({}));
-    if(r.ok&&j.ok){
-      const reply=String(j.reply||'');
-      b.className='tr-bub caret';b.textContent='';
-      if(!reply){b.className='tr-bub err';b.textContent='⚠️ 小钠这次没回成：返回内容为空';}
-      else await trType(b,reply);
-    }else{
+    if(r.ok&&j.ok) await trShowReply(b,j);
+    else{
       b.className='tr-bub err';
       b.textContent='⚠️ 小钠这次没回成：'+(j.error||('HTTP '+r.status));
     }
@@ -798,10 +820,92 @@ async function trSend(){
     b.className='tr-bub err';
     b.textContent='⚠️ 小钠这次没回成：'+(e&&e.message?e.message:'网络错误');
   }
-  trBusy=false;$('trSend').disabled=false;$('trInput').focus();
+  trBusy=false;trLock(false);$('trInput').focus();
 }
 $('trSend').onclick=trSend;
 $('trInput').addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();trSend();}});
+
+// ---------- 试用页语音：浏览器录成 16k 单声道 WAV，交给服务端识别 ----------
+let trRec=null;
+function trWav(chunks,rate,target){
+  let len=0;for(const c of chunks)len+=c.length;
+  const all=new Float32Array(len);let o=0;for(const c of chunks){all.set(c,o);o+=c.length;}
+  const ratio=rate/target,n=Math.floor(all.length/ratio),pcm=new Int16Array(n);
+  for(let i=0;i<n;i++){
+    const a=Math.floor(i*ratio),b=Math.min(all.length,Math.floor((i+1)*ratio));
+    let s=0;for(let j=a;j<b;j++)s+=all[j];
+    s/=Math.max(1,b-a);
+    pcm[i]=Math.max(-32768,Math.min(32767,Math.round(s*32767)));
+  }
+  const buf=new ArrayBuffer(44+n*2),dv=new DataView(buf);
+  const w=(off,str)=>{for(let i=0;i<str.length;i++)dv.setUint8(off+i,str.charCodeAt(i));};
+  w(0,'RIFF');dv.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');
+  dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
+  dv.setUint32(24,target,true);dv.setUint32(28,target*2,true);dv.setUint16(32,2,true);
+  dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,n*2,true);
+  for(let i=0;i<n;i++)dv.setInt16(44+i*2,pcm[i],true);
+  return buf;
+}
+function trB64(buf){
+  const u8=new Uint8Array(buf);let s='';
+  for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+  return btoa(s);
+}
+async function trStartRec(){
+  if(trRec||trBusy)return;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    trAdd('na','⚠️ 浏览器只允许 HTTPS 或 127.0.0.1 使用麦克风，请用 http://127.0.0.1 打开面板，或给面板配 HTTPS。','err');
+    return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const AC=window.AudioContext||window.webkitAudioContext;
+    const ctx=new AC();
+    if(ctx.resume)ctx.resume();
+    const src=ctx.createMediaStreamSource(stream);
+    const node=ctx.createScriptProcessor(4096,1,1);
+    const chunks=[];
+    node.onaudioprocess=(e)=>chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(node);node.connect(ctx.destination);
+    trRec={stream,ctx,node,chunks,rate:ctx.sampleRate};
+    trRec.timer=setTimeout(()=>trStopRec(),60000);
+    $('trMic').classList.add('rec');$('trMic').textContent='⏹';
+    $('trInput').placeholder='正在录音…（点 ⏹ 结束，最长 60 秒）';
+  }catch(e){
+    trAdd('na','⚠️ 麦克风打不开：'+(e&&e.message?e.message:'没有权限'),'err');
+  }
+}
+async function trStopRec(){
+  if(!trRec)return;
+  const r=trRec;trRec=null;clearTimeout(r.timer);
+  $('trMic').classList.remove('rec');$('trMic').textContent='🎤';
+  $('trInput').placeholder='说点什么…（Enter 发送，Shift+Enter 换行）';
+  try{r.node.disconnect();}catch(e){}
+  r.stream.getTracks().forEach((t)=>{try{t.stop();}catch(e){}});
+  try{r.ctx.close();}catch(e){}
+  if(!r.chunks.length)return;
+  const wav=trWav(r.chunks,r.rate,16000);
+  if(wav.byteLength<3200){trAdd('na','⚠️ 没录到声音，再试一次？','err');return;}
+  trBusy=true;trLock(true);
+  const b=trAdd('na','小钠正在听…','wait');
+  try{
+    const resp=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audio:trB64(wav),format:'wav'})});
+    const j=await resp.json().catch(()=>({}));
+    if(resp.ok&&j.ok){
+      if(j.heard)trAdd('me','🎤 '+j.heard);
+      b.remove();
+      const nb=trAdd('na','');
+      await trShowReply(nb,j);
+    }else{
+      b.className='tr-bub err';b.textContent='⚠️ '+(j.error||('HTTP '+resp.status));
+    }
+  }catch(e){
+    b.className='tr-bub err';
+    b.textContent='⚠️ 语音没发出去：'+(e&&e.message?e.message:'网络错误');
+  }
+  trBusy=false;trLock(false);
+}
+$('trMic').onclick=()=>{trRec?trStopRec():trStartRec();};
 // 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
 window.addEventListener('pagehide',()=>{try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
 
