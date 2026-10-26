@@ -866,7 +866,8 @@ async function trStartRec(){
     const node=ctx.createScriptProcessor(4096,1,1);
     const chunks=[];
     node.onaudioprocess=(e)=>chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    src.connect(node);node.connect(ctx.destination);
+    const mute=ctx.createGain();mute.gain.value=0;   // 别把麦克风声音放出来（防啸叫）
+    src.connect(node);node.connect(mute);mute.connect(ctx.destination);
     trRec={stream,ctx,node,chunks,rate:ctx.sampleRate};
     trRec.timer=setTimeout(()=>trStopRec(),60000);
     $('trMic').classList.add('rec');$('trMic').textContent='⏹';
