@@ -113,7 +113,7 @@ export const DEFAULTS = {
         commentEvery: 3,       // 每发几条自评一条（0=关闭）
         replyComments: true,   // 有人评论自己的说说时，在动态下回复
         checkMinutes: 30,      // 多久查一次新评论（分钟，5~1440）
-        ugcRight: 1,           // 查看权限：1公开 4好友 16部分好友 64仅自己
+        ugcRight: 1,           // 查看权限：1公开 4好友 64仅自己
         maxLength: 120,        // 说说/评论最大字数
         stylePrompt: '',       // 额外风格要求（追加给 AI）
     },

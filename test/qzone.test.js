@@ -32,7 +32,7 @@ describe('QQ 空间自动说说', () => {
     expect(s).toHaveProperty('nextAt');
     expect(s).toHaveProperty('postCount');
     expect(s.commentEvery).toBeGreaterThanOrEqual(0);
-    expect([1, 4, 16, 64, 128]).toContain(s.ugcRight);
+    expect([1, 4, 64]).toContain(s.ugcRight);
   });
 
   it('未初始化时手动发布给出明确错误', async () => {

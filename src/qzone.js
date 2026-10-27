@@ -56,7 +56,7 @@ export function normalizeQzone(raw) {
   let minDays = clampNum(pick('minDays'), def.minDays, 1, 7);
   let maxDays = clampNum(pick('maxDays'), def.maxDays, 1, 7);
   if (minDays > maxDays) [minDays, maxDays] = [maxDays, minDays];
-  const rights = [1, 4, 16, 64, 128];
+  const rights = [1, 4, 64];   // 16/128 需要额外指定部分好友，网页不做
   const right = Number(pick('ugcRight'));
   return {
     enabled: pick('enabled') !== false,
