@@ -18,6 +18,11 @@ const MINUTE_MS = 60 * 1000;
 const RETRY_MS = 30 * MINUTE_MS;
 const REPLY_COOLDOWN_MS = 60 * MINUTE_MS;
 const MAX_POSTS = 30;
+const AUTH_TTL_MS = 5 * MINUTE_MS;
+const AUTH_ERROR_RETRY_MS = 6 * 60 * MINUTE_MS;
+const QZONE_API = 'https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin';
+const QZONE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const AUTH_ERROR_HINT = 'QQ 空间登录态失效（-3000）：请先用机器人 QQ 打开一次 QQ 空间，再重新发布';
 
 let callApi = null;
 let isReady = () => true;
@@ -25,6 +30,7 @@ let stateFile = '';
 let state = emptyState();
 let timer = null;
 let busy = false;
+let authCache = null;
 
 function emptyState() {
   return {
@@ -73,6 +79,134 @@ export function normalizeQzone(raw) {
 
 function qzConfig() {
   return normalizeQzone(config().qzone);
+}
+
+function parseCookieString(str) {
+  const jar = {};
+  for (const part of String(str || '').split(';')) {
+    const s = part.trim();
+    if (!s) continue;
+    const i = s.indexOf('=');
+    if (i < 0) continue;
+    jar[s.slice(0, i)] = s.slice(i + 1);
+  }
+  return jar;
+}
+
+function bknFromSkey(skey) {
+  let hash = 5381;
+  for (let i = 0; i < skey.length; i++) hash += (hash << 5) + skey.charCodeAt(i);
+  return String(hash & 2147483647);
+}
+
+function isAuthError(message) {
+  return /code=-3000|请先登录空间/.test(String(message || ''));
+}
+
+// 发布/评论必须用 user.qzone.qq.com 域的 cookie（里面带 qzone_check）。
+// SnowLuma 的 send_qzone_msg / comment_qzone 用的是 qzone.qq.com 域，缺 qzone_check，会报 -3000。
+async function qzoneAuth() {
+  if (authCache && Date.now() - authCache.at < AUTH_TTL_MS) return authCache;
+  if (!callApi) throw new Error('机器人未连接 SnowLuma');
+  const cred = await callApi('get_credentials', { domain: 'user.qzone.qq.com' });
+  const cookies = String((cred && cred.cookies) || '');
+  const jar = parseCookieString(cookies);
+  const skey = jar.p_skey || jar.skey || '';
+  if (!cookies || !skey) throw new Error('拿不到 QQ 空间登录态（p_skey 为空）');
+  const login = await callApi('get_login_info', {});
+  const uin = String((login && login.user_id) || '');
+  if (!uin) throw new Error('拿不到机器人 QQ 号');
+  authCache = { cookies, gtk: bknFromSkey(skey), uin, at: Date.now() };
+  return authCache;
+}
+
+async function qzoneCgi(cgi, params) {
+  const auth = await qzoneAuth();
+  const referer = `https://user.qzone.qq.com/${auth.uin}`;
+  let res;
+  try {
+    res = await fetch(`${QZONE_API}/${cgi}?g_tk=${auth.gtk}`, {
+      method: 'POST',
+      headers: {
+        Cookie: auth.cookies,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': QZONE_UA,
+        Referer: referer,
+      },
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(25000),
+    });
+  } catch (e) {
+    throw new Error(`QQ 空间请求失败：${e.message}`, { cause: e });
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (res.status === 403) throw new Error('QQ 空间触发风控（403 Forbidden），请过一会儿再试');
+    throw new Error(`QQ 空间返回异常：${text.slice(0, 120)}`);
+  }
+  if (typeof data.code === 'number' && data.code !== 0) {
+    if (data.code === -3000) authCache = null;
+    throw new Error(`qzone ${cgi} failed: code=${data.code} ${data.message || data.msg || ''}`.trim());
+  }
+  if (typeof data.subcode === 'number' && data.subcode !== 0) {
+    throw new Error(`qzone ${cgi} failed: subcode=${data.subcode} ${data.message || data.msg || ''}`.trim());
+  }
+  return data;
+}
+
+async function publishViaQzone(content, ugcRight) {
+  const auth = await qzoneAuth();
+  const data = await qzoneCgi('emotion_cgi_publish_v6', {
+    syn_tweet_verson: '1',
+    paramstr: '1',
+    pic_template: '',
+    richtype: '',
+    richval: '',
+    special_url: '',
+    subrichtype: '',
+    con: content,
+    feedversion: '1',
+    ver: '1',
+    ugc_right: String(ugcRight),
+    to_sign: '0',
+    who: '1',
+    hostuin: auth.uin,
+    code_version: '1',
+    format: 'json',
+    qzreferrer: `https://user.qzone.qq.com/${auth.uin}`,
+  });
+  const tid = data.t1_tid || data.tid;
+  if (!tid) throw new Error('发表说说失败：响应缺少 tid');
+  return { tid: String(tid), time: Number(data.t1_time || data.now || 0) };
+}
+
+async function commentViaQzone(tid, content) {
+  const auth = await qzoneAuth();
+  const data = await qzoneCgi('emotion_cgi_re_feeds', {
+    qzreferrer: `https://user.qzone.qq.com/${auth.uin}`,
+    inCharset: 'utf-8',
+    outCharset: 'utf-8',
+    hostUin: auth.uin,
+    format: 'json',
+    ref: 'feeds',
+    topicId: `${auth.uin}_${tid}__1`,
+    feedsType: '100',
+    private: '0',
+    paramstr: '1',
+    richtype: '',
+    richval: '',
+    isSignIn: '',
+    uin: auth.uin,
+    content,
+    plat: 'qzone',
+    source: 'ic',
+    platformid: '52',
+  });
+  const id = data.commentid == null ? data.commentId : data.commentid;
+  return { commentId: id == null ? '' : String(id) };
 }
 
 /** 在 [minDays, maxDays] 天之间随机取一个间隔（毫秒） */
@@ -145,7 +279,7 @@ async function genReply(q, postContent, newCount) {
 async function publishPost(q, now) {
   if (!callApi) throw new Error('机器人未连接 SnowLuma');
   const content = await genPost(q);
-  const r = await callApi('send_qzone_msg', { content, ugc_right: q.ugcRight });
+  const r = await publishViaQzone(content, q.ugcRight);
   const tid = String((r && r.tid) || '');
   if (!tid) throw new Error('发表说说成功但没拿到 tid');
 
@@ -161,7 +295,7 @@ async function publishPost(q, now) {
   if (q.commentEvery > 0 && state.sinceComment >= q.commentEvery) {
     try {
       const c = await genSelfComment(q, content);
-      await callApi('comment_qzone', { tid, content: c });
+      await commentViaQzone(tid, c);
       post.knownComments += 1;
       state.sinceComment = 0;
     } catch (e) {
@@ -198,7 +332,7 @@ async function checkComments(q, now) {
     if (now - Number(p.lastReplyAt || 0) < REPLY_COOLDOWN_MS) continue;
     try {
       const text = await genReply(q, p.content, external);
-      await callApi('comment_qzone', { tid: p.tid, content: text });
+      await commentViaQzone(p.tid, text);
       p.knownComments = n + 1;   // 自己这条回复也会 +1
       p.lastReplyAt = now;
       replied += 1;
@@ -267,10 +401,12 @@ export async function tick(now = Date.now()) {
       try {
         await publishPost(q, now);
       } catch (e) {
-        state.lastError = e.message;
-        state.nextAt = now + RETRY_MS;
+        const authErr = isAuthError(e.message);
+        state.lastError = authErr ? AUTH_ERROR_HINT : e.message;
+        state.nextAt = now + (authErr ? AUTH_ERROR_RETRY_MS : RETRY_MS);
         save();
-        logger.error('[空间] 发说说失败，30 分钟后再试:', e.message);
+        if (authErr) logger.error('[空间] 发说说失败：', AUTH_ERROR_HINT);
+        else logger.error('[空间] 发说说失败，30 分钟后再试:', e.message);
       }
     }
   } finally {
@@ -288,6 +424,11 @@ export async function postQzoneNow() {
   try {
     const r = await publishPost(q, Date.now());
     return { ...r, nextAt: state.nextAt };
+  } catch (e) {
+    state.lastError = isAuthError(e.message) ? AUTH_ERROR_HINT : e.message;
+    save();
+    if (isAuthError(e.message)) throw new Error(AUTH_ERROR_HINT, { cause: e });
+    throw e;
   } finally {
     busy = false;
   }
