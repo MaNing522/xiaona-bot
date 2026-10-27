@@ -18,6 +18,7 @@ import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
 import { isMcConnected, getGameBans, banPlayers, getBridgeTarget, isMcConfigured } from './mcbridge.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
+import { qzoneStatus, postQzoneNow, normalizeQzone } from './qzone.js';
 import { HELP_CMDS, TIERS } from './help.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
 import {
@@ -846,6 +847,19 @@ async function route(req, res, url) {
     return sendJSON(res, 200, { ok: true });
   }
 
+  // ---------- QQ 空间自动说说 ----------
+  if (url.pathname === '/api/qzone/status') {
+    return sendJSON(res, 200, { ok: true, ...qzoneStatus() });
+  }
+  if (url.pathname === '/api/qzone/post-now' && req.method === 'POST') {
+    try {
+      const r = await postQzoneNow();
+      return sendJSON(res, 200, { ok: true, ...r });
+    } catch (e) {
+      return sendJSON(res, 502, { ok: false, error: e.message });
+    }
+  }
+
   // ---------- 会话管理（群聊/单聊各自覆盖全局设置）----------
   // 会话列表来源：最近消息流里出现过的会话 + 已存有覆盖记录的会话
   if (url.pathname === '/api/chat-settings' && req.method === 'GET') {
@@ -900,13 +914,16 @@ async function route(req, res, url) {
       search: { ...base.search },
       vision: { ...base.vision },
       bridge: { ...base.bridge },
+      qzone: { ...base.qzone },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge', 'qzone']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
     }
+    // 空间动态参数做边界校正：间隔 1~7 天、评论频率 0~10、查看权限只允许支持的值
+    next.qzone = normalizeQzone(next.qzone);
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
     reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
     return sendJSON(res, 200, { ok: true, config: config() });

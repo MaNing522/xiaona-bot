@@ -198,7 +198,8 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
       <button class="nav-item" data-tab="features"><span class="ico">🧩</span>功能</button>
-      <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话管理</button>
+      <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话设置</button>
+      <button class="nav-item" data-tab="gcfg"><span class="ico">🌐</span>全局设置</button>
       <button class="nav-item" data-tab="trial"><span class="ico">🧪</span>私聊试用</button>
       <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
     </nav>
@@ -320,26 +321,55 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
   </div>
 
-  <!-- 会话管理 -->
+  <!-- 会话设置（只放单个会话的独立设置） -->
   <div class="panel" data-panel="conv">
+    <div class="card">
+      <h2>💬 会话列表</h2>
+      <div class="hint" style="margin-top:0">机器人收到消息的群/私聊会出现在这里。点选一个会话，在右侧单独设置；留空的项都继承全局。</div>
+      <div id="convList"><span class="hint">暂无会话</span></div>
+    </div>
+    <div class="card">
+      <h2 id="convTitle">单会话设置</h2>
+      <div class="hint" style="margin-top:0">这里只影响选中的那个群/私聊。全局默认在左侧「🌐 全局设置」页。</div>
+      <div id="convForm"><span class="hint">先在左侧选择一个会话</span></div>
+      <button class="btn green" id="cvSave" style="width:auto;margin-top:14px">保存会话设置</button>
+      <div class="hint" id="cvMsg"></div>
+    </div>
+  </div>
+
+  <!-- 全局设置（config.json） -->
+  <div class="panel" data-panel="gcfg">
     <div class="card span2">
-      <h2>⚙️ 全局设置 <span class="hint" style="margin:0;font-weight:400">来自 config.json，保存后热加载生效</span></h2>
+      <h2>⚙️ 全局默认设置 <span class="hint" style="margin:0;font-weight:400">来自 config.json，保存后热加载生效</span></h2>
       <div id="gcfgChat"></div>
       <div id="gcfgNum"></div>
       <div id="gcfgFunc"></div>
       <button class="btn green" id="gcSave" style="width:auto;margin-top:14px">保存全局设置</button>
       <div class="hint" id="gcMsg"></div>
     </div>
-    <div class="card">
-      <h2>💬 会话列表</h2>
-      <div class="hint" style="margin-top:0">机器人收到消息的群/私聊会出现在这里。点选一个会话可单独设置；留空的项都使用全局。</div>
-      <div id="convList"><span class="hint">暂无会话</span></div>
-    </div>
-    <div class="card">
-      <h2 id="convTitle">该会话设置</h2>
-      <div id="convForm"><span class="hint">先在左侧选择一个会话</span></div>
-      <button class="btn green" id="cvSave" style="width:auto;margin-top:14px">保存会话设置</button>
-      <div class="hint" id="cvMsg"></div>
+    <div class="card span2">
+      <h2>🌙 QQ 空间自动说说 <span class="hint" style="margin:0;font-weight:400">随机间隔 · 自评 · 回复评论</span></h2>
+      <div class="row">
+        <div><label>自动发说说</label><select id="qzOn"><option value="true">开启</option><option value="false">关闭</option></select></div>
+        <div><label>查看权限</label><select id="qzRight"><option value="1">所有人可见</option><option value="4">好友可见</option><option value="64">仅自己可见</option></select></div>
+      </div>
+      <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+        <div><label>最短间隔(天)</label><input id="qzMin" type="number" min="1" max="7" step="0.5"></div>
+        <div><label>最长间隔(天)</label><input id="qzMax" type="number" min="1" max="7" step="0.5"></div>
+        <div><label>每几条自评一条</label><input id="qzEvery" type="number" min="0" max="10" step="1"></div>
+      </div>
+      <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+        <div><label>回复新评论</label><select id="qzReply"><option value="true">开启</option><option value="false">关闭</option></select></div>
+        <div><label>查评论间隔(分钟)</label><input id="qzCheck" type="number" min="5" max="1440" step="1"></div>
+        <div><label>最大字数</label><input id="qzMaxLen" type="number" min="20" max="500" step="10"></div>
+      </div>
+      <label>内容风格（追加给 AI，可留空）</label>
+      <textarea id="qzStyle" style="width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;color:#1f2329;font:inherit;font-size:15px;resize:vertical"></textarea>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <button class="btn ghost" id="qzPostNow" style="width:auto">立即发一条（测试）</button>
+        <div class="hint" id="qzStatus" style="margin:0">…</div>
+      </div>
+      <div class="hint">间隔在设定范围内随机；每发 N 条给自己留一条评论；有人评论你的说说时，会在该动态下追加一条回复。SnowLuma 不提供评论内容，回复只能按原说说写一句友善的话，且每条最多 60 分钟回一次。</div>
     </div>
   </div>
 
@@ -632,6 +662,36 @@ function gcRender(){
   $('gcSearch').value=Object.prototype.hasOwnProperty.call(SEARCH_NAMES,String(s.provider||'baidu'))?String(s.provider||'baidu'):'baidu';
   $('gcVision').value=Object.prototype.hasOwnProperty.call(VISION_NAMES,String(v.provider||'ai'))?String(v.provider||'ai'):'ai';
   $('gcBridge').value=bridgeMode;
+  // QQ 空间自动说说
+  const qz=c.qzone||{};
+  $('qzOn').value=String(qz.enabled!==false);
+  $('qzRight').value=String([1,4,64].includes(Number(qz.ugcRight))?Number(qz.ugcRight):1);
+  $('qzMin').value=(qz.minDays??1);
+  $('qzMax').value=(qz.maxDays??7);
+  $('qzEvery').value=(qz.commentEvery??3);
+  $('qzReply').value=String(qz.replyComments!==false);
+  $('qzCheck').value=(qz.checkMinutes??30);
+  $('qzMaxLen').value=(qz.maxLength??120);
+  $('qzStyle').value=qz.stylePrompt||'';
+  qzStatus();
+}
+
+function fmtQzTime(t){
+  if(!t)return '—';
+  const d=new Date(Number(t));
+  if(isNaN(d.getTime()))return '—';
+  const p=n=>String(n).padStart(2,'0');
+  return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+async function qzStatus(){
+  try{
+    const s=await api('/api/qzone/status');
+    if(!s.enabled){ $('qzStatus').textContent='已关闭（保存后生效）'; return; }
+    let txt='下次发布：'+fmtQzTime(s.nextAt)+' · 已发 '+s.postCount+' 条';
+    if(s.commentEvery>0) txt+=' · 再发 '+Math.max(0,s.commentEvery-(s.sinceComment||0))+' 条后自评';
+    if(s.lastError) txt+=' · 上次失败：'+s.lastError;
+    $('qzStatus').textContent=txt;
+  }catch(e){ $('qzStatus').textContent='状态读取失败：'+e.message; }
 }
 
 // 会话列表（所有群聊 + 所有好友；所有者私聊默认置顶，可手动置顶/取消）
@@ -729,7 +789,11 @@ $('gcSave').onclick=async()=>{
     rateLimit:{},cooldown:{},engage:{},bind:{},
     search:{provider:$('gcSearch').value,limit:Number($('gcSearchLimit').value)||5,customUrl:$('gcSearchUrl').value.trim()},
     vision:{provider:$('gcVision').value,customUrl:$('gcVisionUrl').value.trim(),customModel:$('gcVisionModel').value.trim()},
-    bridge:{mode:$('gcBridge').value,port:Number($('gcBridgePort').value)||25565,lanHost:$('gcBridgeLan').value.trim(),publicUrl:$('gcBridgePub').value.trim()}};
+    bridge:{mode:$('gcBridge').value,port:Number($('gcBridgePort').value)||25565,lanHost:$('gcBridgeLan').value.trim(),publicUrl:$('gcBridgePub').value.trim()},
+    qzone:{enabled:$('qzOn').value==='true',minDays:Number($('qzMin').value),maxDays:Number($('qzMax').value),
+      commentEvery:Number($('qzEvery').value),replyComments:$('qzReply').value==='true',
+      checkMinutes:Number($('qzCheck').value),ugcRight:Number($('qzRight').value),
+      maxLength:Number($('qzMaxLen').value),stylePrompt:$('qzStyle').value.trim()}};
   document.querySelectorAll('[data-gc]').forEach(inp=>{
     const a=inp.dataset.gc.split('.');
     const v=inp.value.trim();
@@ -742,6 +806,19 @@ $('gcSave').onclick=async()=>{
     $('gcMsg').textContent='✅ 已保存并即时生效（连接模式切换约 1 秒内重连）';
     setTimeout(()=>{$('gcMsg').textContent='';},2500);
   }catch(e){ $('gcMsg').textContent='❌ '+e.message; }
+};
+
+$('qzPostNow').onclick=async()=>{
+  const btn=$('qzPostNow');
+  btn.disabled=true;
+  $('qzStatus').textContent='正在生成并发布…';
+  try{
+    const d=await api('/api/qzone/post-now',{method:'POST'});
+    $('qzStatus').textContent='✅ 已发布：'+(d.content||'').slice(0,60);
+    qzStatus();
+  }catch(e){
+    $('qzStatus').textContent='❌ '+(e.message||'发布失败');
+  }finally{ btn.disabled=false; }
 };
 
 $('cvSave').onclick=async()=>{

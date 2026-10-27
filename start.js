@@ -137,6 +137,29 @@ function isQQRunning() {
 }
 
 /**
+ * 把 QQ 主窗口最小化到任务栏（静默启动）。
+ * 用 PowerShell 轮询等窗口出现再调用 ShowWindowAsync(SW_MINIMIZE=6)；
+ * 扫码登录窗口也能从任务栏点回来，不会把 QQ 藏到找不着。
+ */
+function minimizeQQWindow() {
+  const script = `
+Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);' -Name Win32Show -Namespace Xn -PassThru | Out-Null
+for ($i = 0; $i -lt 90; $i++) {
+  $p = Get-Process QQ -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($p) { [Xn.Win32Show]::ShowWindowAsync($p.MainWindowHandle, 6) | Out-Null; exit 0 }
+  Start-Sleep -Milliseconds 1000
+}
+exit 1
+`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  execFile('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+    { windowsHide: true }, (err) => {
+      if (err) console.log(`[启动器] 最小化 QQ 窗口失败：${err.message}`);
+      else console.log('[启动器] QQ 已静默启动（窗口最小化到任务栏）');
+    });
+}
+
+/**
  * 确保桌面 QQ 在跑：SnowLuma 靠注入 QQ.exe 工作，没有 QQ 就没有 OneBot。
  * 不负责登录（扫码只能在桌面完成），登录后 SnowLuma 会自动注入。
  * QQ_AUTOLAUNCH=false 时只提示、不代启。
@@ -159,6 +182,10 @@ async function ensureQQ() {
   const proc = spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore' });
   proc.on('error', (e) => console.log(`[启动器] 启动 QQ 失败：${e.message}`));
   proc.unref();
+  // 静默启动：等窗口出现后最小化（QQ_START_MINIMIZED=false 可关闭）
+  if (String(process.env.QQ_START_MINIMIZED || 'true').trim().toLowerCase() !== 'false') {
+    minimizeQQWindow();
+  }
 }
 
 // ---------- 启动 SnowLuma ----------

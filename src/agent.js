@@ -153,6 +153,39 @@ export const AGENT_TOOLS = [
     },
     run: async (args, ctx) => ctx.recall(String(args.keyword || '').trim()),
   },
+  {
+    minRole: 'authorized',
+    function: {
+      name: 'write_note',
+      description: '把内容写进小钠本地的文本笔记（data/notes/），以后可以用 read_note 读回来。适合保存清单、资料、约定、长文本等需要长期留存的内容；只在对方明确要求保存或确实值得存档时用，不要记录闲聊。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '笔记文件名，如「购物清单」「服务器资料」（自动补 .txt）' },
+          content: { type: 'string', description: '要保存的文本内容' },
+          append: { type: 'boolean', description: 'true=追加到文件末尾；false 或不填=覆盖' },
+        },
+        required: ['name', 'content'],
+      },
+    },
+    run: async (args, ctx) => ctx.writeNote(
+      String(args.name || '').trim(),
+      String(args.content || ''),
+      args.append === true,
+    ),
+  },
+  {
+    minRole: 'authorized',
+    function: {
+      name: 'read_note',
+      description: '读取小钠本地文本笔记。不填 name 时列出所有笔记；填 name 时返回该笔记内容。',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '笔记文件名（可省略；省略则列出全部笔记）' } },
+      },
+    },
+    run: async (args, ctx) => ctx.readNote(String(args.name || '').trim()),
+  },
 ];
 
 /**

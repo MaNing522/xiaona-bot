@@ -30,6 +30,8 @@ import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
+import { initNotes, writeNote, readNote } from './notes.js';
+import { initQzone } from './qzone.js';
 import { ROOT } from './paths.js';
 
 // 显式指定 .env 路径，避免受启动目录影响
@@ -188,6 +190,9 @@ if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
 
 // 会话级设置（群聊/单聊各自覆盖全局）：落盘到 data/chat-settings.json
 chatCfg.initChatSettings(SAVE_DIR);
+
+// AI 本地文本笔记（data/notes/）：write_note / read_note 两个工具用
+initNotes(SAVE_DIR);
 
 // 记忆模块初始化（配置化：条数/超时来自 .env）
 initMemory(SAVE_DIR, {
@@ -669,6 +674,9 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             const r = searchMemory(key, kw);
             return r ? r : '没找到相关记忆。';
         },
+        // 本地文本笔记（data/notes/）：保存资料 / 以后读回来
+        writeNote: (name, content, append) => writeNote(name, content, append),
+        readNote: (name) => readNote(name),
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
         // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
@@ -1560,6 +1568,9 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
 
 // ============ 定时任务（独立模块 scheduler.js） ============
 initScheduler({ callApi, sendReply, segText, getBotId: () => botId, saveDir: SAVE_DIR });
+
+// ============ QQ 空间自动说说（qzone.js；参数在网页「全局设置」） ============
+initQzone({ callApi, saveDir: SAVE_DIR, isReady: () => bot.connected });
 
 // 人工接管超时自动恢复（TAKEOVER_TIMEOUT 秒，0 或留空=不自动恢复）
 setInterval(() => {

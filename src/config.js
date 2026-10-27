@@ -103,6 +103,20 @@ export const DEFAULTS = {
         lanHost: '',           // lan 模式用：服务器局域网地址（IP 或主机名）
         publicUrl: '',         // public 模式用：完整公网地址（含 http:// 与端口）
     },
+    // QQ 空间自动说说（网页「全局设置」可改，热加载生效）：
+    // 每隔 minDays~maxDays 天随机发一条；每发 commentEvery 条自评一条；
+    // replyComments=true 时，自己的说说新增评论会在动态下回复（SL 不提供评论内容，按原说说内容回应）。
+    qzone: {
+        enabled: true,         // 总开关
+        minDays: 1,            // 最短间隔（天，1~7）
+        maxDays: 7,            // 最长间隔（天，1~7）
+        commentEvery: 3,       // 每发几条自评一条（0=关闭）
+        replyComments: true,   // 有人评论自己的说说时，在动态下回复
+        checkMinutes: 30,      // 多久查一次新评论（分钟，5~1440）
+        ugcRight: 1,           // 查看权限：1公开 4好友 16部分好友 64仅自己
+        maxLength: 120,        // 说说/评论最大字数
+        stylePrompt: '',       // 额外风格要求（追加给 AI）
+    },
 };
 
 /**
