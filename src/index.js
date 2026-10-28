@@ -16,7 +16,7 @@ import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
 import { queryServer, formatServer } from './mc.js';
-import { startWebUI, setOwnerNotifier, setTrialChat, setTrialReset } from './webui.js';
+import { startWebUI, setOwnerNotifier, setTrialChat, setTrialReset, getWebuiPort } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
 import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
@@ -3391,7 +3391,7 @@ function formatStatus(d, admin) {
     if (admin) {
         out.push(`· OneBot 地址：${d.bot.wsUrl}`);
         out.push(`· 所有者：${d.bot.owner || '未设置'}｜主人 ${d.bot.masters || 0} 人｜已授权 ${d.bot.authorized} 人`);
-        out.push(`· 面板：http://${d.bot.webuiHost}:${d.bot.webuiPort}`);
+        out.push(`· 面板：https://${d.bot.webuiHost}:${d.bot.webuiPort}`);
     }
     return out.join('\n');
 }
@@ -3424,7 +3424,7 @@ async function doStatus(role) {
             ownerHome: (process.env.BOT_OWNER_HOME || '').trim(),
             authorized,
             webuiHost: process.env.WEBUI_HOST || '127.0.0.1',
-            webuiPort: process.env.WEBUI_PORT || '8080',
+            webuiPort: getWebuiPort() || process.env.WEBUI_PORT || '443',
         },
     }, admin);
 }

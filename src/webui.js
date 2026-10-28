@@ -1,8 +1,9 @@
 // ============================================================
-// webui.js - 响应式网页控制面板（Node 内置 http，无第三方依赖）
+// webui.js - 响应式网页控制面板（Node 内置 https + 自签名证书，无第三方依赖）
 // 功能：SnowLuma / QQ 连接状态、授权管理、状态监控、日志流
 // ============================================================
 import http from 'http';
+import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
@@ -26,6 +27,7 @@ import {
   deleteUnbind, restoreUnbind,
 } from './binding.js';
 import { ROOT } from './paths.js';
+import { ensureTls, CERT_FILE } from './tls.js';
 import { transcribe } from './asr.js';
 
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
@@ -36,6 +38,9 @@ const ONEBOT_WS = String(process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws:/
 
 // WebUI 实际监听的端口（配置端口被占用时会自动顺延，这里记录真实值供状态页展示）
 let webuiPort = 0;
+export function getWebuiPort() {
+  return webuiPort;
+}
 
 // 主人通知回调（由 index.js 注入，用于 QQ 通知主人审批）
 let notifyOwner = null;
@@ -241,7 +246,7 @@ function trialClientId(req, res) {
     id = crypto.randomBytes(16).toString('hex');
     // 不设 Max-Age：会话级 Cookie，浏览器关闭即失效，试用历史随之被丢弃
     if (res && !res.headersSent) {
-      res.setHeader('Set-Cookie', `${TRIAL_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`);
+      res.setHeader('Set-Cookie', `${TRIAL_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; Secure`);
     }
   }
   return id;
@@ -599,7 +604,7 @@ async function route(req, res, url) {
     res.writeHead(200, {
       'Content-Type': 'image/png',
       'Cache-Control': 'no-store',
-      'Set-Cookie': `xn_pre=${pid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${CAPTCHA_TTL / 1000}`,
+      'Set-Cookie': `xn_pre=${pid}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${CAPTCHA_TTL / 1000}`,
     });
     return res.end(renderCaptcha(answer));
   }
@@ -644,7 +649,7 @@ async function route(req, res, url) {
     sessions.set(token, Date.now() + SESSION_TTL);
     saveSessions();
     logger.info(`🔓 面板登录成功（${ip}）`);
-    res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`);
+    res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_TTL / 1000}`);
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -654,8 +659,8 @@ async function route(req, res, url) {
     // 退出登录也丢弃**本客户端**的试用会话（不落盘），并清掉试用客户端 Cookie
     if (trialReset) trialReset(parseCookies(req)[TRIAL_COOKIE]);
     res.setHeader('Set-Cookie', [
-      'xn_sess=; Path=/; HttpOnly; Max-Age=0',
-      `${TRIAL_COOKIE}=; Path=/; HttpOnly; Max-Age=0`,
+      'xn_sess=; Path=/; HttpOnly; Secure; Max-Age=0',
+      `${TRIAL_COOKIE}=; Path=/; HttpOnly; Secure; Max-Age=0`,
     ]);
     return sendJSON(res, 200, { ok: true });
   }
@@ -961,23 +966,40 @@ async function route(req, res, url) {
   return sendJSON(res, 404, { error: 'api not found' });
 }
 
+/** HTTP → HTTPS 跳转（默认 80 端口；WEBUI_HTTP_PORT=0 关闭） */
+function startHttpRedirect(host, port, httpsPort) {
+  const srv = http.createServer((req, res) => {
+    const h = String(req.headers.host || '').replace(/:\d+$/, '')
+      || (host === '0.0.0.0' ? 'localhost' : host);
+    const target = `https://${h}${httpsPort === 443 ? '' : ':' + httpsPort}${req.url || '/'}`;
+    res.writeHead(308, { Location: target, 'Cache-Control': 'no-store' });
+    res.end();
+  });
+  srv.on('error', (e) => logger.warn(`⚠️  HTTP 跳转端口 ${port} 监听失败（${e.code || e.message}），请直接用 https 访问面板。`));
+  srv.listen(port, host, () => logger.info(`↪️  HTTP :${port} → HTTPS :${httpsPort} 跳转已开启`));
+  return srv;
+}
+
 export async function startWebUI() {
   if (!PANEL_PASS) {
     throw new Error('WebUI 未启动：请在 .env 里设置 WEBUI_PASSWORD（面板密码，不允许为空）。'
       + '可参考 .env.example。');
   }
   const host = process.env.WEBUI_HOST || '127.0.0.1';
-  const port = Number(process.env.WEBUI_PORT) || 80; // 默认走 HTTP 标准端口 80
+  const port = Number(process.env.WEBUI_PORT) || 443; // HTTPS 默认 443
 
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+  // 自签名证书：首次启动自动生成到 data/tls/，之后复用；过期 / 损坏时自动重签
+  const tlsOpts = ensureTls();
+
+  const server = https.createServer(tlsOpts, (req, res) => {
+    const url = new URL(req.url, 'https://localhost');
     route(req, res, url).catch((e) => sendJSON(res, 500, { error: e.message }));
   });
 
   // 端口被占用时自动顺延，避免整个面板起不来：
-  // 端口 80 常被 Steam++(Watt Toolkit)、IIS、nginx 等占用，硬绑会 EADDRINUSE。
-  // 依次尝试「配置端口 → 8080 → 8888 → 由系统分配(0)」，最后一个必然成功。
-  const candidates = [...new Set([port, 8080, 8888, 0])];
+  // 443 常被 IIS、nginx、Steam++(Watt Toolkit) 等占用，硬绑会 EADDRINUSE。
+  // 依次尝试「配置端口 → 8443 → 9443 → 由系统分配(0)」，最后一个必然成功。
+  const candidates = [...new Set([port, 8443, 9443, 0])];
   for (let i = 0; i < candidates.length; i++) {
     const p = candidates[i];
     try {
@@ -991,7 +1013,7 @@ export async function startWebUI() {
       const actual = server.address().port;
       webuiPort = actual;
       if (p !== port) {
-        logger.warn(`⚠️  端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
+        logger.warn(`⚠️  HTTPS 端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
           + ' 想固定端口请改 .env 的 WEBUI_PORT。');
       }
       break;
@@ -1004,10 +1026,18 @@ export async function startWebUI() {
   // 公开到局域网时，把能找到的本机地址都列出来，省得去查 IP
   const lan = Object.values(os.networkInterfaces()).flat()
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
-    .map((n) => `http://${n.address}:${webuiPort}`);
-  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `http://${host}:${webuiPort}`;
-  logger.info(`🌐 WebUI: ${shown}  [需登录，账号 ${PANEL_USER}]`);
+    .map((n) => `https://${n.address}:${webuiPort}`);
+  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `https://${host}:${webuiPort}`;
+  logger.info(`🔒 WebUI(HTTPS): ${shown}  [需登录，账号 ${PANEL_USER}]`);
+  logger.info(`   自签名证书：${CERT_FILE}（浏览器首次访问点「高级 → 继续访问」；也可导入系统受信任的根证书）`);
   if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
   if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
+
+  // 老地址（HTTP）自动跳到 HTTPS；设 WEBUI_HTTP_PORT=0 可关闭
+  const redirectPort = process.env.WEBUI_HTTP_PORT === undefined
+    ? 80
+    : (Number(process.env.WEBUI_HTTP_PORT) || 0);
+  if (redirectPort) startHttpRedirect(host, redirectPort, webuiPort);
+
   return server;
 }

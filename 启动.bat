@@ -20,10 +20,10 @@ if "%~1"=="elevated" goto elevated
 fltmc >nul 2>&1
 if not errorlevel 1 goto elevated
 
-echo [launcher] Requesting Administrator rights (WebUI listens on port 80)...
+echo [launcher] Requesting Administrator rights (WebUI listens on 443/80)...
 powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList 'elevated' -WorkingDirectory '%~dp0' -Verb RunAs"
 if not errorlevel 1 exit /b
-echo [launcher] Elevation not granted, starting without admin; WEBUI_PORT < 1024 will fail.
+echo [launcher] Elevation not granted, starting without admin; HTTPS 443 / HTTP 80 will fail, panel falls back to 8443.
 
 :elevated
 cd /d "%~dp0"

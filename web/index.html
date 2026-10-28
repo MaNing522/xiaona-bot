@@ -398,7 +398,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="stat"><span>图像识别</span><b id="stVision">—</b></div>
       <div class="stat"><span>MC 服务器桥</span><b id="stBridge">—</b></div>
       <div class="stat"><span>OneBot 地址</span><b id="stWs">—</b></div>
-      <div class="stat"><span>WebUI 端口</span><b id="stWebuiPort">—</b></div>
+      <div class="stat"><span>WebUI 端口（HTTPS）</span><b id="stWebuiPort">—</b></div>
       <div class="stat"><span>QQ 客户端</span><b id="stQqClient">—</b></div>
     </div>
     <div class="card span2">
@@ -939,7 +939,7 @@ function trB64(buf){
 async function trStartRec(){
   if(trRec||trBusy)return;
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    trAdd('na','⚠️ 浏览器只允许 HTTPS 或 127.0.0.1 使用麦克风，请用 http://127.0.0.1 打开面板，或给面板配 HTTPS。','err');
+    trAdd('na','⚠️ 当前浏览器不支持录音，或页面不在安全上下文（HTTPS）中，无法使用麦克风。','err');
     return;
   }
   try{
