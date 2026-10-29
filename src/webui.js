@@ -1,5 +1,5 @@
 // ============================================================
-// webui.js - 响应式网页控制面板（Node 内置 https + 本地 CA 签发证书，无第三方依赖）
+// webui.js - 响应式网页控制面板（Node 内置 http/https，无第三方依赖；HTTPS 代码保留，由 WEBUI_HTTPS 开关控制）
 // 功能：SnowLuma / QQ 连接状态、授权管理、状态监控、日志流
 // ============================================================
 import http from 'http';
@@ -32,6 +32,15 @@ import { transcribe } from './asr.js';
 
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
+
+// 面板协议：默认 HTTP；设 WEBUI_HTTPS=true 才启用 HTTPS（证书代码保留在 tls.js）
+function useHttps() {
+  return String(process.env.WEBUI_HTTPS || '').toLowerCase() === 'true';
+}
+// Cookie 的 Secure 只在 HTTPS 下加：HTTP 下加了浏览器会直接丢弃
+function cookieSecure() {
+  return useHttps() ? '; Secure' : '';
+}
 
 // OneBot 连接参数（与 index.js 保持一致；旧 NAPCAT_* 仍兼容）
 const ONEBOT_WS = String(process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1:3001').trim();
@@ -246,7 +255,7 @@ function trialClientId(req, res) {
     id = crypto.randomBytes(16).toString('hex');
     // 不设 Max-Age：会话级 Cookie，浏览器关闭即失效，试用历史随之被丢弃
     if (res && !res.headersSent) {
-      res.setHeader('Set-Cookie', `${TRIAL_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; Secure`);
+      res.setHeader('Set-Cookie', `${TRIAL_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax${cookieSecure()}`);
     }
   }
   return id;
@@ -648,7 +657,7 @@ async function route(req, res, url) {
     res.writeHead(200, {
       'Content-Type': 'image/png',
       'Cache-Control': 'no-store',
-      'Set-Cookie': `xn_pre=${pid}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${CAPTCHA_TTL / 1000}`,
+      'Set-Cookie': `xn_pre=${pid}; Path=/; HttpOnly; SameSite=Lax${cookieSecure()}; Max-Age=${CAPTCHA_TTL / 1000}`,
     });
     return res.end(renderCaptcha(answer));
   }
@@ -693,7 +702,7 @@ async function route(req, res, url) {
     sessions.set(token, Date.now() + SESSION_TTL);
     saveSessions();
     logger.info(`🔓 面板登录成功（${ip}）`);
-    res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_TTL / 1000}`);
+    res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax${cookieSecure()}; Max-Age=${SESSION_TTL / 1000}`);
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -703,8 +712,8 @@ async function route(req, res, url) {
     // 退出登录也丢弃**本客户端**的试用会话（不落盘），并清掉试用客户端 Cookie
     if (trialReset) trialReset(parseCookies(req)[TRIAL_COOKIE]);
     res.setHeader('Set-Cookie', [
-      'xn_sess=; Path=/; HttpOnly; Secure; Max-Age=0',
-      `${TRIAL_COOKIE}=; Path=/; HttpOnly; Secure; Max-Age=0`,
+      `xn_sess=; Path=/; HttpOnly${cookieSecure()}; Max-Age=0`,
+      `${TRIAL_COOKIE}=; Path=/; HttpOnly${cookieSecure()}; Max-Age=0`,
     ]);
     return sendJSON(res, 200, { ok: true });
   }
@@ -1046,20 +1055,22 @@ export async function startWebUI() {
       + '可参考 .env.example。');
   }
   const host = process.env.WEBUI_HOST || '127.0.0.1';
-  const port = Number(process.env.WEBUI_PORT) || 443; // HTTPS 默认 443
+  const httpsOn = useHttps();
+  const port = Number(process.env.WEBUI_PORT) || (httpsOn ? 443 : 80);
+  const scheme = httpsOn ? 'https' : 'http';
 
-  // 证书：本地根 CA 签发，首次启动生成到 data/tls/，之后复用；临期 / 损坏时自动重签
-  const tlsOpts = ensureTls();
-
-  const server = https.createServer(tlsOpts, (req, res) => {
-    const url = new URL(req.url, 'https://localhost');
+  const handler = (req, res) => {
+    const url = new URL(req.url, `${scheme}://localhost`);
     route(req, res, url).catch((e) => sendJSON(res, 500, { error: e.message }));
-  });
+  };
+
+  // HTTPS 才生成 / 复用证书；HTTP 模式完全不碰证书与证书库
+  const server = httpsOn ? https.createServer(ensureTls(), handler) : http.createServer(handler);
 
   // 端口被占用时自动顺延，避免整个面板起不来：
   // 443 常被 IIS、nginx、Steam++(Watt Toolkit) 等占用，硬绑会 EADDRINUSE。
-  // 依次尝试「配置端口 → 8443 → 9443 → 由系统分配(0)」，最后一个必然成功。
-  const candidates = [...new Set([port, 8443, 9443, 0])];
+  // 依次尝试「配置端口 → 备选端口 → 由系统分配(0)」，最后一个必然成功。
+  const candidates = [...new Set(httpsOn ? [port, 8443, 9443, 0] : [port, 8080, 9080, 0])];
   for (let i = 0; i < candidates.length; i++) {
     const p = candidates[i];
     try {
@@ -1073,7 +1084,7 @@ export async function startWebUI() {
       const actual = server.address().port;
       webuiPort = actual;
       if (p !== port) {
-        logger.warn(`⚠️  HTTPS 端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
+        logger.warn(`⚠️  ${httpsOn ? 'HTTPS' : 'HTTP'} 端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
           + ' 想固定端口请改 .env 的 WEBUI_PORT。');
       }
       break;
@@ -1086,17 +1097,23 @@ export async function startWebUI() {
   // 公开到局域网时，把能找到的本机地址都列出来，省得去查 IP
   const lan = Object.values(os.networkInterfaces()).flat()
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
-    .map((n) => `https://${n.address}:${webuiPort}`);
-  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `https://${host}:${webuiPort}`;
-  logger.info(`🔒 WebUI(HTTPS): ${shown}  [需登录，账号 ${PANEL_USER}]`);
-  logger.info(`   证书：${CERT_FILE}（由本地根 CA 签发；已自动装入当前用户受信任根证书，Firefox 需手动导入 data/tls/ca.crt）`);
+    .map((n) => `${scheme}://${n.address}:${webuiPort}`);
+  const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `${scheme}://${host}:${webuiPort}`;
+  logger.info(`${httpsOn ? '🔒' : '🌐'} WebUI(${httpsOn ? 'HTTPS' : 'HTTP'}): ${shown}  [需登录，账号 ${PANEL_USER}]`);
+  if (httpsOn) {
+    logger.info(`   证书：${CERT_FILE}（由本地根 CA 签发；已自动装入当前用户受信任根证书，Firefox 需手动导入 data/tls/ca.crt）`);
+  } else {
+    logger.info('   面板当前为 HTTP 明文；要启用 HTTPS 只需在 .env 设 WEBUI_HTTPS=true（证书代码已保留）。');
+  }
   if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
   if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
 
-  // 老地址（HTTP）自动跳到 HTTPS；设 WEBUI_HTTP_PORT=0 可关闭
-  const redirectPort = process.env.WEBUI_HTTP_PORT === undefined
-    ? 80
-    : (Number(process.env.WEBUI_HTTP_PORT) || 0);
+  // 仅 HTTPS 模式提供「HTTP → HTTPS 跳转」；设 WEBUI_HTTP_PORT=0 可关闭
+  const redirectPort = httpsOn
+    ? (process.env.WEBUI_HTTP_PORT === undefined
+      ? 80
+      : (Number(process.env.WEBUI_HTTP_PORT) || 0))
+    : 0;
   if (redirectPort) startHttpRedirect(host, redirectPort, webuiPort);
 
   return server;
