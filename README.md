@@ -40,6 +40,8 @@
 - **QQ ↔ 游戏ID 绑定**：**只能在桥接群**里发 `#绑定 <游戏ID>`（其他群和私聊都不行），过图形验证码即可把群里消息转发进游戏（每人最多 3 个）。
 - **游戏桥**：双向聊天转发、进出服/死亡/成就提示、游戏图片转 QQ 真图、公聊限速与重复内容屏蔽。
 - **网页控制面板**：HTTPS + 登录鉴权 + 图形验证码 + 登录限速；可查看状态、管理权限、以机器人身份发消息、开关功能、人工接管。「全局设置」管默认参数，「会话设置」只改单个群/私聊。
+- **登录前试用**：`/trial` 无需登录即可跟小钠私聊（普通用户「小锂」身份，限速防滥用）；登录后同一套界面按**所有者**身份跑（套用 `BOT_OWNER` 信息），支持 `#命令` 与语音。
+- **老旧浏览器兼容**：不支持 `async` / `?.` / `??` / `fetch` 的老浏览器自动跳到 `/legacy` 精简页（状态 / 登录 / 试用），现代浏览器照常使用完整面板。
 - **命令系统**：`#帮助` 分类菜单，覆盖绑定、记忆、群管、定时、主人、工具等。
 - **文字转语音**、**屏幕/网址截图**、**MC 服务器状态查询**、**定时提醒/定时禁言**。
 - **QQ 空间自动说说**：按 1~7 天随机间隔发说说，每发 N 条自评一条；有人评论你的说说时在动态下回复。间隔、频率、查看权限、风格都在网页「全局设置」里调。
@@ -65,8 +67,8 @@ QQBot/
 │  ├─ aiService.js      AI 服务商可插拔层（选服务商 / 定模型 / 发请求 / max_tokens）
 │  ├─ rateLimit.js      宽松限速（用户/群/全局滑动窗口 + 信号量队列 + 反刷屏）
 │  ├─ idle.js           闲时调度（避开工作日高峰跑维护任务）
-│  ├─ webui.js          网页控制面板（HTTPS / 登录 / 权限 / 开关 / 接管 / 健康检查）
-│  ├─ tls.js            WebUI 自签名证书（首次启动生成到 data/tls，不入库）
+│  ├─ webui.js          网页控制面板（HTTPS / 登录 / 权限 / 开关 / 接管 / 健康检查 / 试用）
+│  ├─ tls.js            WebUI 本地根 CA + 服务器证书（生成 / 续签 / 自动信任，data/tls 不入库）
 │  ├─ logger.js         统一日志出口（终端 + 面板 + 按天文件）
 │  ├─ mcbridge.js       与服务器 mod 的加签通信（HTTP + SSE）
 │  ├─ binding.js        QQ ↔ 游戏ID 绑定（验证码）
@@ -79,6 +81,7 @@ QQBot/
 │  └─ mc.js             MC 服务器状态        captcha.js / shake.js / state.js / datafile.js
 ├─ test/                Vitest 单元测试
 ├─ web/index.html       控制面板页面
+├─ web/legacy.html      老旧浏览器兼容页（纯 ES5 / XHR）
 ├─ prompt.txt           机器人人设提示词（改完保存即热更新）
 ├─ config.json          数值类可调项（冷却 / 限流 / 时效，热加载）
 ├─ push.bat / restart.bat / 启动.bat / startASR.bat   运维脚本
@@ -156,6 +159,7 @@ gradlew.bat build
 | 上下文 | `MEMORY_CONTEXT_RECENT` | 每次对话注入给 AI 的「最近对话」条数（默认 20，建议 20~30） |
 | 唤起会话 | `ENGAGE_DEBUG` | 置 `true` 打印唤起判断的额度消耗，便于排查 |
 | 面板 | `WEBUI_HOST` / `WEBUI_PORT` / `WEBUI_HTTP_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动；HTTPS 默认 443，`WEBUI_HTTP_PORT` 为 HTTP 跳转端口（0=关闭） |
+| 面板证书 | `WEBUI_TLS_TRUST` / `OPENSSL_BIN` | 默认 `true` 自动把本地根 CA 装进当前用户受信任根证书（Chrome/Edge 不再报不安全）；设 `false` 不改系统证书库。`OPENSSL_BIN` 指定 openssl 路径 |
 | MC 桥 | `MC_BRIDGE_URL` / `MC_BRIDGE_SECRET` / `MC_BRIDGE_GROUP` | 桥地址、签名密钥、桥接群号 |
 | MC 桥 | `MC_SERVER_NAME` | 喂给 AI 的服务器名字（可留空）。地址自动取自 `MC_BRIDGE_URL`；这些值只在 `.env`，不入库 |
 | MC 桥开关 | `MC_BRIDGE_MC_TO_QQ` / `MC_BRIDGE_QQ_TO_MC` / `MC_BRIDGE_OP_RELAY` / `MC_BRIDGE_GAME_IMAGE` | 各方向开关 |
@@ -267,10 +271,18 @@ gradlew.bat build
 
 ### 面板 HTTPS
 
-- 面板只走 HTTPS（默认 `https://<主机>:443`）。首次启动用 openssl 自动生成自签名证书到 `data/tls/`（`data/` 不入库），之后复用，过期前 30 天自动重签。
-- 浏览器首次访问会提示证书不受信任：点「高级 → 继续访问」即可；想彻底不提示，把 `data/tls/cert.pem` 导入系统「受信任的根证书颁发机构」（局域网其它设备需各自导入）。
+- 面板只走 HTTPS（默认 `https://<主机>:443`）。首次启动用 openssl 在 `data/tls/` 生成一套**本地根 CA**（`ca.crt` / `ca.key`，10 年），再由它签发**服务器证书**（`cert.pem` / `key.pem`，397 天，对齐 Chrome 上限），之后复用，剩不到 30 天自动重签。
+- 启动时自动把根 CA 装进 **当前用户 → 受信任的根证书颁发机构**（`certutil -user -addstore Root`），Chrome / Edge / IE 直接信任，**不再提示「不安全」**。不想改系统证书库时设 `WEBUI_TLS_TRUST=false`。
+- **Firefox 用自己的证书库**，不读 Windows 的：设置 → 隐私与安全 → 证书 → 查看证书 → 证书颁发机构 → 导入 `data/tls/ca.crt`，勾选「信任由此颁发机构标识的网站」。局域网其它设备访问也需各自导入这张 `ca.crt`。
 - 老地址 HTTP（默认 80）自动 308 跳到 HTTPS；已有 nginx 等做跳转时把 `WEBUI_HTTP_PORT` 设为 `0`。
 - 生成证书需要 openssl：Windows 装 Git for Windows 即有；找不到时用 `.env` 的 `OPENSSL_BIN` 指定 `openssl.exe` 完整路径。
+
+### 试用与兼容页
+
+- **`/trial`（登录前可用）**：无需登录直接跟小钠私聊。身份是普通用户「小锂」（虚拟 QQ，不碰真实账号），300 字上限、语音需要登录；限速按浏览器 20 条 / 10 分钟、按 IP 50 条 / 10 分钟、消息间隔 1.2 秒、全局并发 2，防止被白嫖 AI 额度。
+- **面板内「私聊试用」**：登录后同一套对话按**所有者**身份执行——套用 `.env` 的 `BOT_OWNER` 信息，`#命令` 按所有者权限跑，500 字、不限速。
+- 两种身份的会话互相隔离（`owner:` / `guest:` + 浏览器标识），互不清扰；「清空」会同时清掉两者。
+- **老旧浏览器**：`web/index.html` 头部会用 ES5 探测 `async` / `?.` / `??` / `fetch` / `Promise`，任一不支持就自动 `location.replace('/legacy')`。`/legacy` 是纯 ES5 + XHR 的精简页（状态 / 登录 / 试用），现代浏览器不受影响，照常使用完整面板。
 
 ### 日志
 
@@ -337,7 +349,7 @@ npm test           跑单元测试（Vitest）
 ## 安全说明
 
 - `.env` 已在 `.gitignore` 中排除，**不会入库**；请勿把密钥写进代码或模板文件。
-- 面板只走 HTTPS（自签名证书自动生成到 `data/tls/`），默认要求登录（账号密码 + 图形验证码），连续失败 5 次锁定 5 分钟，密码采用固定时间比较；`WEBUI_PASSWORD` 为空时面板直接不启动。
+- 面板只走 HTTPS（本地根 CA 签发 + 自动装进当前用户受信任根证书），默认要求登录（账号密码 + 图形验证码），连续失败 5 次锁定 5 分钟，密码采用固定时间比较；`WEBUI_PASSWORD` 为空时面板直接不启动。
 - 本机 ↔ 服务端使用 HMAC-SHA256 签名（含时间戳与 nonce），`bridge.secret` 不足 32 位则桥拒绝启动。
 - `push.bat` 从 `.env` 读取 GitHub token，通过一次性 HTTP 头传给 git，**不写入 `.git/config`、不出现在输出中**。
 

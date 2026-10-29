@@ -2,9 +2,20 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#f0f2f5">
 <title>小钠控制面板</title>
+<script>
+// 老旧浏览器（不支持 async / ?. / ?? / fetch）自动转到兼容页，现代浏览器不受影响
+(function () {
+  var old = false;
+  try { new Function('async function f(){}'); } catch (e) { old = true; }
+  try { new Function('var a={}; return (a?.b) ?? 1;'); } catch (e) { old = true; }
+  if (!window.fetch || !window.Promise || !window.XMLHttpRequest || !document.querySelector) old = true;
+  if (old) location.replace('/legacy');
+})();
+</script>
 <style>
 :root{
   --bg:#f0f2f5; --card:#fff; --card2:#f5f7fa; --line:#e8ebf0;
@@ -376,8 +387,8 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
   <!-- 私聊试用 -->
   <div class="panel" data-panel="trial">
     <div class="card span2">
-      <h2>🧪 小钠 · 私聊试用 <span class="hint" style="margin:0;font-weight:400">以「小锂 · 普通用户」身份私聊，不经过 QQ · 支持 #命令与语音</span></h2>
-      <div class="chat" id="trMsgs"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。可直接发 #命令（按普通用户权限执行），也可以点 🎤 发语音。</div></div>
+      <h2>🧪 小钠 · 私聊试用 <span class="hint" style="margin:0;font-weight:400">以所有者身份私聊（套用 BOT_OWNER 信息），不经过 QQ · 支持 #命令与语音</span></h2>
+      <div class="chat" id="trMsgs"><div class="tip">这里以所有者身份跟小钠私聊，不经过 QQ。可直接发 #命令（按所有者权限执行），也可以点 🎤 发语音。登录前的公开试用在 /trial，按普通用户权限执行。</div></div>
       <div class="tr-foot">
         <textarea id="trInput" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
         <button class="btn tr-mic" id="trMic" type="button" title="发语音（最长 60 秒）">🎤</button>

@@ -2966,14 +2966,22 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
  * 历史**按客户端隔离**（WebUI 传进来的 clientId）：不同浏览器 / 不同 IP 各一份，
  * 互不串记忆。长期不活跃的会话由定时器回收，避免内存无限涨。
  */
-const TRIAL_KEY = 'trial:小锂';
 const TRIAL_MAX = 50;                          // 对话历史上限（同时也是上下文注入上限）
 const TRIAL_TTL = 2 * 60 * 60 * 1000;          // 2 小时无活动即回收
-const trialSessions = new Map();               // clientId -> { history:[{role,text}], at }
+const trialSessions = new Map();               // "owner|guest:clientId" -> { history:[{role,text}], at }
 
-/** 取（或新建）某客户端的试用会话 */
-function trialSession(clientId) {
-    const k = String(clientId || 'default');
+/** 登录面板后的试用 = 所有者身份；登录前 = 普通用户「小锂」 */
+function trialIdentity(asOwner) {
+    const ownerQq = perm.getOwner();
+    if (asOwner && ownerQq) {
+        return { mode: 'owner', key: 'trial:owner', name: '主人', qq: ownerQq, role: perm.role(ownerQq), favor: 100 };
+    }
+    return { mode: 'guest', key: 'trial:guest', name: '小锂', qq: '', role: 'guest', favor: perm.FAVOR_DEFAULT };
+}
+
+/** 取（或新建）某客户端、某身份的试用会话 */
+function trialSession(who, clientId) {
+    const k = who.mode + ':' + String(clientId || 'default');
     let s = trialSessions.get(k);
     if (!s) { s = { history: [], at: Date.now() }; trialSessions.set(k, s); }
     s.at = Date.now();
@@ -2988,19 +2996,20 @@ setInterval(() => {
 
 /** 清空试用会话（断开连接时由 WebUI 调用）：给了 clientId 只清该客户端，否则全清 */
 export function resetTrialChat(clientId) {
-    if (clientId) trialSessions.delete(String(clientId));
-    else trialSessions.clear();
+    if (!clientId) { trialSessions.clear(); return; }
+    trialSessions.delete('owner:' + String(clientId));
+    trialSessions.delete('guest:' + String(clientId));
 }
 
 /** 把内存历史拼成注入 AI 的上下文（最多 50 条，全量） */
-function trialMemoryContext(history) {
+function trialMemoryContext(history, who) {
     if (!history.length) return '';
     return '【最近对话】（下面每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
-        + history.map((m) => `${m.role === 'ai' ? '小钠' : '小锂'}: ${m.text}`).join('\n');
+        + history.map((m) => `${m.role === 'ai' ? '小钠' : who.name}: ${m.text}`).join('\n');
 }
 
-/** 试用会话里的 # 命令：按普通用户身份执行，返回 null 表示不是命令 */
-async function trialCommand(clientId, input) {
+/** 试用会话里的 # 命令：按当前身份执行（登录后是所有者），返回 null 表示不是命令 */
+async function trialCommand(clientId, input, who) {
     // 与 QQ 主流程一致：# 或 / 开头，或句子中间夹带 #指令
     const cmdHit = input.match(/(?:^|[\s，,、]+)(#[^\s，,、]+)/);
     const cmdStart = cmdHit ? cmdHit.index + cmdHit[0].indexOf('#') : -1;
@@ -3009,8 +3018,9 @@ async function trialCommand(clientId, input) {
     const sink = [];
     const event = {
         message_type: 'private',
-        user_id: `${TRIAL_KEY}:${String(clientId || 'default')}`,
-        __convKey: TRIAL_KEY,
+        // 所有者身份直接用主人 QQ，权限判定就按所有者走；普通用户用虚拟 ID，落到 guest
+        user_id: who.mode === 'owner' ? who.qq : `${who.key}:${String(clientId || 'default')}`,
+        __convKey: who.key,
         __replySink: sink,   // 回复收集起来返回给网页，不走 QQ
     };
     const handled = await handleCommand(event, cmdText)
@@ -3032,13 +3042,15 @@ async function trialVoiceClip(text) {
     }
 }
 
-async function runTrialChat(clientId, text) {
+async function runTrialChat(clientId, text, opts) {
     const input = String(text || '').trim();
     if (!input) return { reply: '' };
-    const sess = trialSession(clientId);
+    const who = trialIdentity(!!(opts && opts.owner));
+    const sess = trialSession(who, clientId);
+    const tierName = (perm.TIER_META[who.role] || { name: '普通用户' }).name;
 
     // 命令优先（和 QQ 主流程一致）：执行结果直接返回，不喂给 AI
-    const cmdReply = await trialCommand(clientId, input);
+    const cmdReply = await trialCommand(clientId, input, who);
     if (cmdReply !== null) {
         sess.history.push({ role: 'user', text: input }, { role: 'ai', text: cmdReply });
         if (sess.history.length > TRIAL_MAX) sess.history.splice(0, sess.history.length - TRIAL_MAX);
@@ -3046,20 +3058,20 @@ async function runTrialChat(clientId, text) {
     }
 
     // 上下文只带「本轮之前」的历史（本轮这句由 metaLine 提供，避免重复）
-    const memory = trialMemoryContext(sess.history);
-    const metaLine = `[当前对话:私信|对话ID:${TRIAL_KEY}][名称:小锂| QQ:-|身份:普通用户|好感度:${perm.FAVOR_DEFAULT}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
-        + `消息内容:[ 小锂: ${input} ]`;
+    const memory = trialMemoryContext(sess.history, who);
+    const metaLine = `[当前对话:私信|对话ID:${who.key}][名称:${who.name}| QQ:${who.qq || '-'}|身份:${tierName}|好感度:${who.favor}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
+        + `消息内容:[ ${who.name}: ${input} ]`;
     // sing 工具在试用里也能用：把要唱的内容收起来，本轮结束后合成语音返回网页播放
     const voiceLines = [];
     const result = await aiReply({
         metaLine,
         memory,
-        role: 'guest',          // 固定普通用户
+        role: who.role,          // 登录后：所有者；登录前：普通用户
         allowSkip: false,
         allowSearch: searchEnabled(),
         allowVoice: true,
-        userId: TRIAL_KEY + ':' + String(clientId || 'default'),   // KV 缓存按客户端隔离
-        ctx: buildAgentCtx(TRIAL_KEY, '', {
+        userId: who.key + ':' + String(clientId || 'default'),   // KV 缓存按客户端隔离
+        ctx: buildAgentCtx(who.key, who.qq || '', {
             sendVoice: async (line) => {
                 const t = String(line || '').trim();
                 if (t) voiceLines.push(t);
@@ -3077,7 +3089,7 @@ async function runTrialChat(clientId, text) {
     }
     if (!reply && voices.length) reply = '（语音回复）';
     reply = reply || '（小钠没有回复）';
-    // 记录本轮（含小锂与小钠），只留最近 50 条
+    // 记录本轮（含用户与小钠），只留最近 50 条
     sess.history.push({ role: 'user', text: input }, { role: 'ai', text: reply });
     if (sess.history.length > TRIAL_MAX) sess.history.splice(0, sess.history.length - TRIAL_MAX);
     return { reply, voices };

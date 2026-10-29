@@ -252,6 +252,32 @@ function trialClientId(req, res) {
   return id;
 }
 
+/**
+ * 免登录试用限速：按浏览器（Cookie）+ IP 双维度，防止外人白嫖 AI 额度。
+ * 只限制未登录访客；登录后的所有者试用不受影响。
+ */
+const TRIAL_WINDOW_MS = 10 * 60 * 1000;
+const TRIAL_GUEST_LIMIT = 20;     // 每个浏览器 10 分钟最多 20 句
+const TRIAL_IP_LIMIT = 50;        // 每个 IP 10 分钟最多 50 句
+const TRIAL_GUEST_GAP_MS = 1200;  // 两句之间至少隔 1.2 秒
+const trialRate = new Map();
+let trialGuestBusy = 0;
+
+/** 记一次试用；超限返回需要等待的秒数，0 表示放行 */
+function trialRateHit(key, limit, gapMs, now) {
+  let v = trialRate.get(key);
+  if (!v || now - v.at > TRIAL_WINDOW_MS) { v = { at: now, n: 0, last: 0 }; trialRate.set(key, v); }
+  if (gapMs && v.last && now - v.last < gapMs) return Math.max(1, Math.ceil((gapMs - (now - v.last)) / 1000));
+  if (v.n >= limit) return Math.max(1, Math.ceil((TRIAL_WINDOW_MS - (now - v.at)) / 1000));
+  v.n++;
+  v.last = now;
+  return 0;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of trialRate) if (now - v.at > TRIAL_WINDOW_MS * 2) trialRate.delete(k);
+}, 10 * 60 * 1000).unref?.();
+
 function sendHtml(res, code, html) {
   res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(html);
@@ -266,6 +292,7 @@ function captchaNeeded(ip) {
 function loginPage(msg = '', needCaptcha = false) {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f0f2f5">
 <title>小钠控制面板 · 登录</title>
@@ -298,6 +325,8 @@ button:hover{filter:brightness(1.06)}
 button:active{transform:scale(.98)}
 button:disabled{opacity:.6;cursor:default}
 .err{margin-top:12px;color:var(--danger);font-size:12px;min-height:16px}
+.alt{display:block;margin-top:14px;text-align:center;color:var(--accent);font-size:13px;text-decoration:none}
+.alt:hover{text-decoration:underline}
 @keyframes xnUp{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
 .card{animation:xnUp .38s cubic-bezier(.2,.8,.25,1) both}
 .err:not(:empty){animation:xnUp .25s ease both}
@@ -322,6 +351,7 @@ button:disabled{opacity:.6;cursor:default}
   </div>
   <button id="b">登录</button>
   <div class="err" id="e">${msg}</div>
+  <a class="alt" href="/trial">🧪 先试用一下（无需登录）</a>
 </form>
 <script>
 var $ = function (i) { return document.getElementById(i); };
@@ -333,72 +363,75 @@ function showCaptcha(show) {
   if (show && !$('cap').getAttribute('src')) fresh();
 }
 if (${needCaptcha ? 'true' : 'false'}) fresh();
-$('f').onsubmit = async function (ev) {
+// 用 XHR 而不是 fetch/async：老旧浏览器也能登录
+$('f').onsubmit = function (ev) {
   ev.preventDefault();
   $('b').disabled = true; $('e').textContent = '';
-  try {
-    var r = await fetch('/api/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user: $('u').value, pass: $('p').value, captcha: $('c').value }),
-    });
-    var j = await r.json().catch(function () { return {}; });
-    if (r.ok && j.ok) { location.reload(); return; }
-    $('e').textContent = j.error || '登录失败';
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/login', true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+    var j = {};
+    try { j = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+    if (xhr.status >= 200 && xhr.status < 300 && j.ok) { location.reload(); return; }
+    $('e').textContent = j.error || ('登录失败（HTTP ' + xhr.status + '）');
     if (j.captchaRequired) showCaptcha(true);
-  } catch (e) { $('e').textContent = '网络错误'; }
-  $('b').disabled = false; $('c').value = ''; $('p').value = '';
-  if ($('capBox').style.display !== 'none') fresh();
+    $('b').disabled = false; $('c').value = ''; $('p').value = '';
+    if ($('capBox').style.display !== 'none') fresh();
+  };
+  xhr.onerror = function () {
+    $('e').textContent = '网络错误';
+    $('b').disabled = false;
+  };
+  xhr.send(JSON.stringify({ user: $('u').value, pass: $('p').value, captcha: $('c').value }));
 };
 </script></body></html>`;
 }
 
-/** 试用页：以「小锂 · 普通用户」身份跟小钠私聊（不经过 QQ，仅本地跑一轮 AI） */
+/**
+ * 试用页（登录前也能用）：以「小锂 · 普通用户」身份跟小钠私聊，不经过 QQ。
+ * 刻意只用 ES5 + XHR + 老式 CSS，保证老旧手机浏览器也能打开。
+ */
 function trialPage() {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f0f2f5">
 <title>小钠 · 私聊试用</title>
 <style>
-:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--radius:10px}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px}
-.card{width:100%;max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:clamp(420px,86vh,1400px);overflow:hidden}
-.head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
-.head .logo{font-size:22px}
+body{margin:0;background:#f0f2f5;color:#1f2329;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px}
+.card{width:100%;max-width:560px;background:#fff;border:1px solid #e8ebf0;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:86vh;max-height:1400px;min-height:420px;overflow:hidden}
+.head{padding:14px 16px;border-bottom:1px solid #e8ebf0;display:flex;align-items:center}
+.head .logo{font-size:22px;margin-right:10px}
 .head h1{margin:0;font-size:15px}
-.head .sub{font-size:12px;color:var(--sub)}
-.head .who{margin-left:auto;font-size:12px;color:var(--sub);white-space:nowrap}
-.msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#fafbfc}
-.row{display:flex}
+.head .sub{font-size:12px;color:#8a919f}
+.head .who{margin-left:auto;font-size:12px;color:#8a919f;white-space:nowrap}
+.head .who a{color:#1677ff;text-decoration:none}
+.msgs{flex:1;overflow-y:auto;padding:16px;background:#fafbfc}
+.row{display:flex;margin-bottom:10px}
 .row.me{justify-content:flex-end}
 .bub{max-width:78%;padding:8px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
-.me .bub{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
-.na .bub{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
-.tip{color:var(--sub);font-size:12px;text-align:center;margin:6px 0}
-.foot{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
-textarea{flex:1;resize:none;height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;outline:none}
-textarea:focus{border-color:var(--accent)}
-button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer;transition:.15s}
-button:hover{filter:brightness(1.06);box-shadow:0 4px 12px rgba(22,119,255,.22)}
-button:active{transform:scale(.97)}
+.me .bub{background:#1677ff;color:#fff;border-bottom-right-radius:4px}
+.na .bub{background:#fff;border:1px solid #e8ebf0;border-bottom-left-radius:4px}
+.tip{color:#8a919f;font-size:12px;text-align:center;margin:6px 0}
+.foot{display:flex;padding:12px;border-top:1px solid #e8ebf0}
+textarea{flex:1;resize:none;height:44px;padding:10px 12px;border:1px solid #e8ebf0;border-radius:8px;font:inherit;outline:none}
+textarea:focus{border-color:#1677ff}
+button{border:0;background:#1677ff;color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer;margin-left:8px}
 button:disabled{opacity:.6;cursor:default}
-@keyframes xnPop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes xnBlink{0%,100%{opacity:1}50%{opacity:.45}}
-.card{animation:xnPop .34s ease both}
-.row{animation:xnPop .22s ease both}
-.bub.wait{animation:xnBlink 1.2s ease-in-out infinite;color:var(--sub)}
-.bub.caret::after{content:'▍';margin-left:1px;color:var(--sub);animation:xnBlink .9s steps(1) infinite}
+.bub.wait{color:#8a919f}
 .bub.err{background:#fff5f5;border:1px solid #ffd6d6;color:#c0392b}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="card">
   <div class="head">
     <div class="logo">🤖</div>
     <div><h1>小钠 · 私聊试用</h1><div class="sub">发消息看看小钠怎么回</div></div>
-    <div class="who">你是 小锂 · 普通用户</div>
+    <div class="who">你是 小锂 · 普通用户 · <a href="/">登录面板</a></div>
   </div>
-  <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。</div></div>
+  <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。登录面板后会以所有者身份试用。</div></div>
   <div class="foot">
     <textarea id="t" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
     <button id="s">发送</button>
@@ -408,50 +441,55 @@ button:disabled{opacity:.6;cursor:default}
 var $=function(i){return document.getElementById(i);};
 var busy=false;
 function add(cls,text,kind){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub'+(kind?' '+kind:'');b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
-// 逐字显示：把整段回复按「约 60 帧吐完」的节奏打进气泡，末尾跟一个跳动的光标
-function typeInto(b,text){
-  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  if(reduce){b.className='bub';b.textContent=text;return Promise.resolve();}
+// 逐字显示：约 60 帧吐完；老浏览器没有 matchMedia 时也能正常走
+function typeInto(b,text,done){
+  var reduce=false;
+  try{reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;}catch(e){}
+  if(reduce){b.className='bub';b.textContent=text;done();return;}
   var n=text.length,step=Math.max(1,Math.round(n/60)),i=0;
-  return new Promise(function(res){
-    (function tick(){
-      i=Math.min(n,i+step);
-      b.textContent=text.slice(0,i);
-      $('m').scrollTop=$('m').scrollHeight;
-      if(i<n) setTimeout(tick,26);
-      else {b.className='bub';res();}
-    })();
-  });
+  (function tick(){
+    i=Math.min(n,i+step);
+    b.textContent=text.slice(0,i);
+    $('m').scrollTop=$('m').scrollHeight;
+    if(i<n) setTimeout(tick,26);
+    else {b.className='bub';done();}
+  })();
 }
-async function send(){
+function fail(b,msg){b.className='bub err';b.textContent='⚠️ 小钠这次没回成：'+msg;}
+function send(){
   if(busy)return;
-  var t=$('t').value.trim(); if(!t)return;
+  var t=$('t').value.replace(/^\\s+|\\s+$/g,''); if(!t)return;
   busy=true;$('s').disabled=true;$('t').value='';
   add('me',t);
   var b=add('na','小钠正在输入…','wait');
-  try{
-    var r=await fetch('/api/trial/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
-    var j=await r.json().catch(function(){return {};});
-    if(r.ok&&j.ok){
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/trial/chat',true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  xhr.onreadystatechange=function(){
+    if(xhr.readyState!==4)return;
+    var j={};
+    try{j=JSON.parse(xhr.responseText||'{}');}catch(e){}
+    if(xhr.status>=200&&xhr.status<300&&j.ok){
       var reply=String(j.reply||'');
-      b.className='bub caret';b.textContent='';
-      if(!reply){b.className='bub err';b.textContent='⚠️ 小钠这次没回成：返回内容为空';}
-      else await typeInto(b,reply);
+      if(!reply){fail(b,'返回内容为空');}
+      else {b.className='bub';b.textContent='';typeInto(b,reply,function(){busy=false;$('s').disabled=false;$('t').focus();});return;}
     }else{
-      b.className='bub err';
-      b.textContent='⚠️ 小钠这次没回成：'+(j.error||('HTTP '+r.status));
+      fail(b,j.error||('HTTP '+xhr.status));
     }
-  }catch(e){
-    b.className='bub err';
-    b.textContent='⚠️ 小钠这次没回成：'+(e&&e.message?e.message:'网络错误');
-  }
-  busy=false;$('s').disabled=false;$('t').focus();
+    busy=false;$('s').disabled=false;$('t').focus();
+  };
+  xhr.onerror=function(){fail(b,'网络错误');busy=false;$('s').disabled=false;};
+  xhr.send(JSON.stringify({text:t}));
 }
 $('s').onclick=send;
-$('t').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+$('t').onkeydown=function(e){
+  e=e||window.event;
+  var k=e.keyCode||e.which;
+  if(k===13&&!e.shiftKey){if(e.preventDefault)e.preventDefault();send();return false;}
+};
 $('t').focus();
 // 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
-window.addEventListener('pagehide',function(){try{navigator.sendBeacon('/api/trial/reset');}catch(e){}});
+window.onpagehide=function(){try{if(navigator.sendBeacon)navigator.sendBeacon('/api/trial/reset');}catch(e){}};
 </script></body></html>`;
 }
 
@@ -588,10 +626,16 @@ async function route(req, res, url) {
     return res.end(html);
   }
 
-  // 试用页：以「小锂 · 普通用户」身份跟小钠私聊（需登录，避免白嫖 AI 额度）
+  // 试用页：登录前也能用（普通用户身份）；登录后再打开会按所有者身份跑
   if (url.pathname === '/trial' || url.pathname === '/trial.html') {
-    if (!authed(req)) return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
     return sendHtml(res, 200, trialPage());
+  }
+
+  // 老旧浏览器兼容页（纯 ES5 + XHR，只保留状态 / 登录 / 试用）
+  if (url.pathname === '/legacy' || url.pathname === '/legacy.html') {
+    const legacy = path.join(path.dirname(WEB_DIR), 'legacy.html');
+    if (!fs.existsSync(legacy)) return sendJSON(res, 500, { error: '缺少 web/legacy.html' });
+    return sendHtml(res, 200, fs.readFileSync(legacy));
   }
 
   // 人机验证：发图 + 记下答案（按预登录 id 绑定，换一张即作废旧的）
@@ -662,6 +706,66 @@ async function route(req, res, url) {
       'xn_sess=; Path=/; HttpOnly; Secure; Max-Age=0',
       `${TRIAL_COOKIE}=; Path=/; HttpOnly; Secure; Max-Age=0`,
     ]);
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  // 试用聊天：登录前是「小锂 · 普通用户」，登录后按所有者身份跑；都不经过 QQ
+  if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
+    if (!trialChat) return sendJSON(res, 503, { ok: false, error: '试用聊天未就绪（机器人还没起来）' });
+    const isOwner = authed(req);
+    const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
+    const body = await readBody(req);
+    let t = String(body.text || '').trim();
+    const isVoice = !t && !!body.audio;
+    if (isVoice && !isOwner) {
+      return sendJSON(res, 403, { ok: false, error: '语音试用需要先登录面板' });
+    }
+    if (isVoice) {
+      // 浏览器录的是 16k 单声道 WAV（前端已重采样），直接落临时文件交给 FunASR
+      const buf = Buffer.from(String(body.audio), 'base64');
+      if (!buf.length) return sendJSON(res, 400, { ok: false, error: '语音内容为空' });
+      if (buf.length > 12 * 1024 * 1024) return sendJSON(res, 400, { ok: false, error: '录音太长了（最多 60 秒）' });
+      const fmt = /^(wav|mp3|ogg|webm|m4a)$/i.test(String(body.format || '')) ? String(body.format).toLowerCase() : 'wav';
+      const tmp = path.join(os.tmpdir(), `xn-trial-${crypto.randomBytes(6).toString('hex')}.${fmt}`);
+      fs.writeFileSync(tmp, buf);
+      try {
+        t = String((await transcribe({ path: tmp, format: fmt })) || '').trim();
+      } finally {
+        try { fs.unlinkSync(tmp); } catch { /* 临时文件删不掉就算了 */ }
+      }
+      if (!t) return sendJSON(res, 400, { ok: false, error: '语音没听清，再说一遍？' });
+    }
+    if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
+    const maxLen = isOwner ? 500 : 300;
+    if (t.length > maxLen) return sendJSON(res, 400, { ok: false, error: `太长了（最多 ${maxLen} 字）` });
+    // 未登录访客限速，避免外人白嫖 AI 额度
+    if (!isOwner) {
+      const now = Date.now();
+      let wait = trialRateHit('c:' + cid, TRIAL_GUEST_LIMIT, TRIAL_GUEST_GAP_MS, now);
+      if (!wait) wait = trialRateHit('ip:' + clientIp(req), TRIAL_IP_LIMIT, 0, now);
+      if (wait) return sendJSON(res, 429, { ok: false, error: `试用太频繁，请 ${wait} 秒后再试` });
+      if (trialGuestBusy >= 2) return sendJSON(res, 503, { ok: false, error: '当前试用的人有点多，稍后再试' });
+    }
+    if (!isOwner) trialGuestBusy++;
+    try {
+      const result = await trialChat(cid, t, { owner: isOwner });
+      const reply = typeof result === 'string' ? result : String((result && result.reply) || '');
+      const voices = (result && Array.isArray(result.voices)) ? result.voices : [];
+      if (!reply && !voices.length) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
+      return sendJSON(res, 200, { ok: true, reply, heard: isVoice ? t : '', voices });
+    } catch (e) {
+      // 把失败原因原样带回前端展示（如「AI 请求失败 (401)：...」「AI 超时」）
+      const reason = String((e && e.message) || e || '未知错误');
+      logger.warn(`[试用] 这轮没回成：${reason}`);
+      return sendJSON(res, 502, { ok: false, error: reason });
+    } finally {
+      if (!isOwner) trialGuestBusy--;
+    }
+  }
+
+  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
+  if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
+    if (trialReset) trialReset(trialClientId(req, res));
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -806,50 +910,6 @@ async function route(req, res, url) {
   // SnowLuma 自己的运行日志（末尾若干行）
   if (url.pathname === '/api/snowluma/logs') {
     return sendJSON(res, 200, { logs: tailSnowlumaLog(80) });
-  }
-
-  // 试用页聊天：以「小锂 · 普通用户」身份跑一轮私聊 AI（文字或语音），返回小钠的回复
-  if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
-    if (!trialChat) return sendJSON(res, 503, { ok: false, error: '试用聊天未就绪（机器人还没起来）' });
-    const body = await readBody(req);
-    let t = String(body.text || '').trim();
-    const isVoice = !t && !!body.audio;
-    if (isVoice) {
-      // 浏览器录的是 16k 单声道 WAV（前端已重采样），直接落临时文件交给 FunASR
-      const buf = Buffer.from(String(body.audio), 'base64');
-      if (!buf.length) return sendJSON(res, 400, { ok: false, error: '语音内容为空' });
-      if (buf.length > 12 * 1024 * 1024) return sendJSON(res, 400, { ok: false, error: '录音太长了（最多 60 秒）' });
-      const fmt = /^(wav|mp3|ogg|webm|m4a)$/i.test(String(body.format || '')) ? String(body.format).toLowerCase() : 'wav';
-      const tmp = path.join(os.tmpdir(), `xn-trial-${crypto.randomBytes(6).toString('hex')}.${fmt}`);
-      fs.writeFileSync(tmp, buf);
-      try {
-        t = String((await transcribe({ path: tmp, format: fmt })) || '').trim();
-      } finally {
-        try { fs.unlinkSync(tmp); } catch { /* 临时文件删不掉就算了 */ }
-      }
-      if (!t) return sendJSON(res, 400, { ok: false, error: '语音没听清，再说一遍？' });
-    }
-    if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
-    if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
-    const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
-    try {
-      const result = await trialChat(cid, t);
-      const reply = typeof result === 'string' ? result : String((result && result.reply) || '');
-      const voices = (result && Array.isArray(result.voices)) ? result.voices : [];
-      if (!reply && !voices.length) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
-      return sendJSON(res, 200, { ok: true, reply, heard: isVoice ? t : '', voices });
-    } catch (e) {
-      // 把失败原因原样带回前端展示（如「AI 请求失败 (401)：...」「AI 超时」）
-      const reason = String((e && e.message) || e || '未知错误');
-      logger.warn(`[试用] 这轮没回成：${reason}`);
-      return sendJSON(res, 502, { ok: false, error: reason });
-    }
-  }
-
-  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
-  if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
-    if (trialReset) trialReset(trialClientId(req, res));
-    return sendJSON(res, 200, { ok: true });
   }
 
   // ---------- QQ 空间自动说说 ----------
