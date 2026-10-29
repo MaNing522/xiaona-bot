@@ -1,5 +1,5 @@
 // ============================================================
-// webui.js - 响应式网页控制面板（Node 内置 https + 自签名证书，无第三方依赖）
+// webui.js - 响应式网页控制面板（Node 内置 https + 本地 CA 签发证书，无第三方依赖）
 // 功能：SnowLuma / QQ 连接状态、授权管理、状态监控、日志流
 // ============================================================
 import http from 'http';
@@ -1048,7 +1048,7 @@ export async function startWebUI() {
   const host = process.env.WEBUI_HOST || '127.0.0.1';
   const port = Number(process.env.WEBUI_PORT) || 443; // HTTPS 默认 443
 
-  // 自签名证书：首次启动自动生成到 data/tls/，之后复用；过期 / 损坏时自动重签
+  // 证书：本地根 CA 签发，首次启动生成到 data/tls/，之后复用；临期 / 损坏时自动重签
   const tlsOpts = ensureTls();
 
   const server = https.createServer(tlsOpts, (req, res) => {
@@ -1089,7 +1089,7 @@ export async function startWebUI() {
     .map((n) => `https://${n.address}:${webuiPort}`);
   const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `https://${host}:${webuiPort}`;
   logger.info(`🔒 WebUI(HTTPS): ${shown}  [需登录，账号 ${PANEL_USER}]`);
-  logger.info(`   自签名证书：${CERT_FILE}（浏览器首次访问点「高级 → 继续访问」；也可导入系统受信任的根证书）`);
+  logger.info(`   证书：${CERT_FILE}（由本地根 CA 签发；已自动装入当前用户受信任根证书，Firefox 需手动导入 data/tls/ca.crt）`);
   if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
   if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
 
