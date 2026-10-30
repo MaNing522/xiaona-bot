@@ -11,6 +11,7 @@
 //   AI_MODEL      显式指定则优先于 provider 默认值
 // ============================================================
 import { logger } from './logger.js';
+import { config } from './config.js';
 
 /** 各服务商的默认接入点与默认模型（仅在 .env 未显式配置时兜底） */
 const PROVIDERS = {
@@ -98,6 +99,38 @@ function intEnv(name, dflt) {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
+/**
+ * 读取 config.json 的 ai 段（每次请求都读，改完热加载立即生效）。
+ * 非法值一律回退到安全默认，免得配置写错把 AI 请求搞挂。
+ */
+export function aiSettings() {
+  const a = (config() && config().ai) || {};
+  const effort = String(a.reasoningEffort || 'auto').trim().toLowerCase();
+  const temp = Number(a.temperature);
+  const ctx = Number(a.contextMessages);
+  return {
+    thinking: a.thinking !== false,
+    reasoningEffort: ['low', 'high', 'max'].includes(effort) ? effort : 'auto',
+    contextMessages: Number.isFinite(ctx) ? Math.min(50, Math.max(5, Math.round(ctx))) : 20,
+    temperature: Number.isFinite(temp) ? Math.min(2, Math.max(0, temp)) : 0.7,
+  };
+}
+
+/**
+ * 把「是否思考 / 思考强度」翻译成请求参数（纯函数，方便单测）。
+ * DeepSeek（2026）用 reasoning_effort 一个参数同时控制开关与强度：
+ *   none = 关闭思考；low / high / max = 开启并指定强度。
+ * auto = 不传，跟随模型默认（保持旧行为，也避免给不认这个参数的接口添乱）。
+ */
+export function reasoningParams(ai) {
+  const a = ai || {};
+  const thinking = a.thinking !== false;
+  const effort = String(a.reasoningEffort || 'auto').trim().toLowerCase();
+  if (!thinking) return { reasoning_effort: 'none' };
+  if (['low', 'high', 'max'].includes(effort)) return { reasoning_effort: effort };
+  return {};
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 网络层可重试的错误码：DNS 临时失败（EAI_AGAIN，家宽路由器最常见）、
@@ -130,16 +163,20 @@ function isTransientNetErr(e) {
  * tools 传入 OpenAI 兼容的工具定义数组时，模型可自主返回 tool_calls。
  * @returns {Promise<{content:string, tool_calls:Array|null}>}
  */
-export async function chatCompletionRaw({ messages, temperature = 0.7, maxTokens, timeoutMs = 60000, userId, tools, toolChoice }) {
+export async function chatCompletionRaw({ messages, temperature, maxTokens, timeoutMs = 60000, userId, tools, toolChoice }) {
   const c = getProviderInfo();
   if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
   if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
 
+  const ai = aiSettings();
+  const temp = Number.isFinite(Number(temperature)) ? Number(temperature) : ai.temperature;
   const body = {
     model: c.model,
     messages,
-    temperature,
+    temperature: Math.min(2, Math.max(0, temp)),
     max_tokens: maxTokens || intEnv('AI_MAX_TOKENS', 512),
+    // 思考开关 / 强度（config.json 的 ai 段）；auto 时不传
+    ...reasoningParams(ai),
   };
   // 传 user：服务商据此做 KVCache 隔离，同一个人的连续对话更容易命中前缀缓存（命中价差极大）
   if (userId) body.user = String(userId);

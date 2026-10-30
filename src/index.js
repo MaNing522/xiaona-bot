@@ -19,7 +19,7 @@ import { queryServer, formatServer } from './mc.js';
 import { startWebUI, setOwnerNotifier, setTrialChat, setTrialReset, getWebuiPort } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
-import { initMemory, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
+import { initMemory, setMemoryOptions, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
@@ -82,9 +82,6 @@ const QQ_GROUP_NOTICE = (process.env.QQ_GROUP_NOTICE || 'true') !== 'false';
 const BOT_REPLY = (process.env.BOT_REPLY || 'false') === 'true';
 // 进群申请 / 好友申请：转给主人，由主人引用通知回复"同意 / 拒绝"
 const QQ_REQUEST_APPROVE = (process.env.QQ_REQUEST_APPROVE || 'true') !== 'false';
-// 游戏内消息转发到 QQ 时那条消息的前缀（与 mcbridge.js 的 prefixMc 保持一致）
-const MC_PREFIX = String(process.env.MC_BRIDGE_PREFIX_MC || '[MC]');
-
 // ---------- 配置自检：没配的功能直接停用（不报错、也不半死不活） ----------
 const AI_ENABLED = isAiEnabled();
 const WEBUI_ENABLED = !!String(process.env.WEBUI_PASSWORD || '').trim();
@@ -194,13 +191,12 @@ chatCfg.initChatSettings(SAVE_DIR);
 // AI 本地文本笔记（data/notes/）：write_note / read_note 两个工具用
 initNotes(SAVE_DIR);
 
-// 记忆模块初始化（配置化：条数/超时来自 .env）
+// 记忆模块初始化（按人存；每人条数与注入上下文来自 config.json 的 memory / ai 段）
 initMemory(SAVE_DIR, {
-  maxRecent: Number(process.env.MEMORY_MAX_RECENT || 30),
+  maxUserMessages: cfg.memory ? cfg.memory.maxUserMessages : undefined,
   maxLongterm: Number(process.env.MEMORY_MAX_LONGTERM || 50),
   maxAgeDays: Number(process.env.MEMORY_MAX_AGE_DAYS || 30),
-  // 每次对话注入给 AI 的「最近对话」条数：20~30 为宜（太多费 token，太少记不住上文）
-  contextRecent: Number(process.env.MEMORY_CONTEXT_RECENT || 20),
+  contextRecent: cfg.ai ? cfg.ai.contextMessages : undefined,
 });
 
 // 绑定模块初始化（QQ ↔ 游戏ID，#绑定；每人上限的全局默认来自 config.json 的 bind.maxPerQQ，
@@ -260,6 +256,11 @@ function applyLiveConfig() {
     reloadConfig();
     const c = config();
     initRateLimit(c.rateLimit);
+    // 记忆人数上限 / 注入上下文条数也随配置热更新
+    setMemoryOptions({
+        maxUserMessages: c.memory ? c.memory.maxUserMessages : undefined,
+        contextRecent: c.ai ? c.ai.contextMessages : undefined,
+    });
     // 绑定上限的全局默认也随配置热更新（单独的每人覆盖值不受影响）
     if (c.bind) setGlobalMaxPerQQ(c.bind.maxPerQQ);
     // 解绑记录保留天数随配置热更新
@@ -285,6 +286,45 @@ initBalance();
 // 否则会全落到 g:0，所有游戏玩家共用一个记忆桶
 const convKey = (event) =>
     event.__convKey || (event.message_type === 'private' ? 'p:' + event.user_id : 'g:' + event.group_id);
+
+/**
+ * 记忆键：按「人」存，不按会话。
+ * QQ 用户 → u:QQ号；游戏内没绑 QQ 的玩家 → n:玩家名；其它虚拟身份用名字兜底。
+ */
+function memoryKeyOf(event, name = '') {
+    const uid = String(event.user_id || '');
+    if (/^\d{5,14}$/.test(uid)) return 'u:' + uid;
+    const ck = String(event.__convKey || '');
+    if (ck.startsWith('mc:')) return 'n:' + ck.slice(3);
+    return 'n:' + String(name || uid || '匿名');
+}
+
+/** 这条消息发生在哪（群 / 私聊 / 游戏），写进记忆，AI 才知道"当时是在哪个群说的" */
+function memorySceneOf(event) {
+    if (event.message_type === 'group') return 'g:' + event.group_id;
+    if (event.message_type === 'private') return 'p:' + event.user_id;
+    return String(event.__convKey || '');
+}
+
+/**
+ * 按 key 串行执行任务（promise 链）：同一会话里的 AI 处理 / 消息发送严格排队，
+ * 避免并发请求互相插队，导致"后生成的回复先发出去"。
+ * 前一个任务失败不影响下一个（链上始终接的是永不 reject 的 tail）。
+ */
+function queueBy(map, key, task) {
+    const k = String(key || '');
+    const prev = map.get(k) || Promise.resolve();
+    const run = prev.then(task, task);
+    const tail = run.then(() => {}, () => {});
+    map.set(k, tail);
+    tail.then(() => { if (map.get(k) === tail) map.delete(k); });
+    return run;
+}
+
+// 发送队列（按会话）：语音合成很慢，不能让后一条文字抢在语音前面
+const sendQueues = new Map();
+// AI 处理队列（按会话）：同一会话的消息按到达顺序依次交给 AI，回复顺序才稳定
+const aiQueues = new Map();
 
 // 忽略的机器人 QQ（不响应）：内置常见官方机器人 + .env BOT_IGNORE_QQ 追加（逗号分隔）
 const IGNORED_BOTS = new Set([
@@ -801,13 +841,23 @@ function sanitizeOutgoing(text) {
 }
 
 // ---------- 发送 ----------
-async function sendReply(event, message, wantVoice = false, withAt = false, markSelf = false) {
+/**
+ * 发一条消息（可能含语音合成）。
+ * 同一会话里所有发送都排进一条队列：语音合成耗时远大于纯文本，
+ * 如果并发跑，后生成的文字可能抢在先生成的语音前面 —— 顺序必须与产生顺序一致。
+ */
+async function sendReply(event, message, wantVoice = false, withAt = false) {
     // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
     if (Array.isArray(event.__replySink)) {
         const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
         if (t) event.__replySink.push(t);
         return [];
     }
+    return queueBy(sendQueues, convKey(event), () => sendReplyNow(event, message, wantVoice, withAt));
+}
+
+/** 实际发送逻辑（已在会话发送队列里，按产生顺序逐条执行） */
+async function sendReplyNow(event, message, wantVoice = false, withAt = false) {
     const target = event.message_type === 'private'
         ? { action: 'send_private_msg', id: event.user_id }
         : { action: 'send_group_msg', id: event.group_id };
@@ -830,8 +880,6 @@ async function sendReply(event, message, wantVoice = false, withAt = false, mark
             const mid = res && res.message_id;
             // 记下这条是我自己发的，供 #撤回 定位（只撤自己的，不碰别人的消息）
             recordBotMsg(convKey(event), mid);
-            // AI 主流程发出的：标一下，自身消息回执到来时跳过，避免同一句记两遍
-            if (markSelf) markSelfRecorded(mid);
             // 发送成功说明未被禁言，解除标记
             if (gidKey) mutedGroups.delete(gidKey);
             return mid === undefined || mid === null ? '' : mid;
@@ -906,75 +954,13 @@ function recordBotMsg(key, id) {
     botSentMsgs.set(key, arr);
 }
 
-// 已被 AI 主流程记入记忆的"自己发的消息"id：自身消息回执到来时据此跳过，避免重复记录
-const selfRecordedIds = new Map();      // message_id -> 过期时间
-const SELF_RECORDED_MAX = 500;
-const SELF_RECORDED_TTL = 10 * 60 * 1000;
-function markSelfRecorded(id) {
-    if (id === undefined || id === null || id === '') return;
-    if (selfRecordedIds.size >= SELF_RECORDED_MAX) {
-        const now = Date.now();
-        for (const [k, exp] of selfRecordedIds) if (now > exp) selfRecordedIds.delete(k);
-        while (selfRecordedIds.size >= SELF_RECORDED_MAX) selfRecordedIds.delete(selfRecordedIds.keys().next().value);
-    }
-    selfRecordedIds.set(String(id), Date.now() + SELF_RECORDED_TTL);
-}
-function isSelfRecorded(id) {
-    const k = String(id);
-    const exp = selfRecordedIds.get(k);
-    if (exp === undefined) return false;
-    if (Date.now() > exp) { selfRecordedIds.delete(k); return false; }
-    return true;
-}
-
 /**
- * 识别"游戏内转发到 QQ"的消息（桥接群里机器人发的 "[MC] 玩家名: 内容"）。
- * 返回 {name, qq, body}，不是这类消息则返回 null。
- * 用途：喂给 AI 时特殊标记 —— 署名带上「游戏·」前缀与发言者**绑定的 QQ**，
- * 免得 AI 把它当成群里的普通人（或误以为是自己说过的话）。
+ * 机器人自己发的消息（message_sent / 自身 message 事件）：
+ * 绝不触发命令、回复或转发。记忆现在按人存、只记触发 AI 的对话，
+ * 自己发的普通消息没有归属人，不再写入记忆（AI 的回复由 runAI 记录）。
  */
-function parseGameForward(text) {
-    const s = String(text || '');
-    if (!MC_PREFIX || !s.startsWith(MC_PREFIX)) return null;
-    const rest = s.slice(MC_PREFIX.length).trim();
-    if (!rest) return null;
-    // "谁: 内容" 结构 → 有明确发言人；加入/离开、限速提示等没有，按系统消息处理
-    const m = rest.match(/^([^:：]{1,32})\s*[:：]\s*([\s\S]*)$/);
-    if (!m) return { name: '游戏', qq: '', body: rest };
-    const player = m[1].trim();
-    const qq = getQqOf(player);
-    return { name: `游戏·${player}${qq ? '' : '（未绑定QQ）'}`, qq, body: m[2].trim() };
-}
-
-/**
- * 机器人自己发的消息（NapCat 上报自身消息时的 message_sent / 自身 message 事件）：
- * 只把它记进会话记忆，让 AI「知道自己说了什么」，**绝不触发命令、回复或转发**。
- * 已经由 AI 主流程记录过的（按 message_id 判定）跳过，避免重复。
- */
-function recordSelfMessage(event) {
-    const mid = String(event.message_id ?? '');
-    if (mid && isSelfRecorded(mid)) return false;
-    const segs = event.message;
-    if (!segs) return false;
-    const isGroup = event.message_type === 'group';
-    const gid = String(event.group_id ?? event.target_id ?? '');
-    const key = isGroup ? 'g:' + gid : 'p:' + String(event.target_id ?? event.user_id ?? '');
-    const text = inlineTextOf(segs, isGroup ? gid : '');
-    if (!text) return false;
-    // 游戏内转发到 QQ 的：特殊标记（署名「游戏·玩家(绑定QQ)」），让 AI 分得清是谁在游戏里说的
-    const gf = parseGameForward(text);
-    if (gf) recordMessage(key, 'user', gf.body, { name: gf.name, qq: gf.qq });
-    else recordMessage(key, 'ai', text);
-    return true;
-}
-
-/** WS 分发：NapCat 上报的自身消息 → 记记忆，不触发任何逻辑 */
-async function onSelfMessage(event) {
-    try {
-        recordSelfMessage(event);
-    } catch (e) {
-        logger.debug('[自身消息] 记录失败:', e.message);
-    }
+async function onSelfMessage() {
+    /* 忽略自身消息回执 */
 }
 
 /**
@@ -1368,9 +1354,11 @@ async function handleCommand(event, text) {
         case '/清除记忆':
             return handleMemoryCmd(event, cmd, arg);
 
-        case '/clear':
-            clearMemory(convKey(event));
-            return sendReply(event, '✅ 已清空本会话的记忆。');
+        case '/clear': {
+            const name = (event.sender && (event.sender.card || event.sender.nickname)) || '';
+            clearMemory(memoryKeyOf(event, name));
+            return sendReply(event, '✅ 已清空关于你的记忆。');
+        }
 
         case '/screenshot':
         case '/截图':
@@ -2595,12 +2583,8 @@ async function onMessage(event) {
     // 自己发的判定用 self_id 兜底：botId 在收到第一条事件前还是 0，那时会把机器人自己的消息也转发进游戏
     const me = String(event.self_id || botId || '');
 
-    // 机器人自己发的消息（NapCat 打开了"上报自身消息"时）：只记进记忆让 AI 知道自己说了什么，
-    // 绝不触发命令/回复/转发（否则会自己接自己）
-    if (me && String(event.user_id) === me) {
-        recordSelfMessage(event);
-        return;
-    }
+    // 机器人自己发的消息（打开"上报自身消息"时）：绝不触发命令/回复/转发（否则会自己接自己）
+    if (me && String(event.user_id) === me) return;
 
     const isBridgeGroup = MC_BRIDGE_QQ_TO_MC && event.message_type === 'group'
         && MC_BRIDGE_GROUP && String(event.group_id) === MC_BRIDGE_GROUP
@@ -2653,8 +2637,7 @@ async function onMessage(event) {
     if (userInput) {
         // 记录最近消息流（供 GUI 人工接管挑选会话）
         pushTakeoverMsg({ key: convKey(event), dir: 'in', from: String(event.user_id), text: raw || userInput, t: Date.now() });
-        // 写入记忆（滑动窗口，角色 user）：带上发言人，历史里才分得清谁在说话
-        recordMessage(convKey(event), 'user', userInput, { name: fromName || uid, qq: uid, isBot: isKnownBot(uid) });
+        // 记忆只记「真正触发了 AI 回复」的消息（在 runAI 里写），这里不再全量记录
 
         // 先判断是否命令：消息开头是 # 或 /，或消息中包含 "#指令"（如"小钠 #禁言 张三"）
         const cmdHit = userInput.match(/(?:^|[\s，,、]+)(#[^\s，,、]+)/);
@@ -2742,26 +2725,30 @@ async function onMessage(event) {
     // AI 未启用：不用占限速额度，也不该因为"额度用满"去回复（那些话只有开 AI 时才该说）
     if (!AI_ENABLED) return;
 
-    // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
-    // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
-    const ticket = await acquire({
-        userId: String(event.user_id),
-        groupId: event.message_type === 'group' ? String(event.group_id || '') : '',
-        convKey: ckey,
-        limits: cset.rateLimit, // 会话级限速覆盖（未设置的项回退全局）
+    // 同一会话的消息按到达顺序串行处理：限速等待 → AI 生成 → 发送。
+    // 以前两条消息会并发跑 AI，后生成的那条可能先发出去，看起来就是「发送顺序乱了」。
+    await queueBy(aiQueues, ckey, async () => {
+        // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
+        // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
+        const ticket = await acquire({
+            userId: String(event.user_id),
+            groupId: event.message_type === 'group' ? String(event.group_id || '') : '',
+            convKey: ckey,
+            limits: cset.rateLimit, // 会话级限速覆盖（未设置的项回退全局）
+        });
+        if (!ticket.ok) {
+            if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
+            if (ticket.reason === 'day') return sendReply(event, '📅 今天聊得够多啦，明天再来找我吧～');
+            if (ticket.reason === 'hour') return sendReply(event, '⏳ 说得有点快啦，歇一会儿再来～');
+            return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
+        }
+        if (ticket.waitMs > 3000) logger.info(`[限速] ${ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
+        try {
+            await runAI(event, userInput, allowSkip, cset);
+        } finally {
+            ticket.release();
+        }
     });
-    if (!ticket.ok) {
-        if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
-        if (ticket.reason === 'day') return sendReply(event, '📅 今天聊得够多啦，明天再来找我吧～');
-        if (ticket.reason === 'hour') return sendReply(event, '⏳ 说得有点快啦，歇一会儿再来～');
-        return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
-    }
-    if (ticket.waitMs > 3000) logger.info(`[限速] ${ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
-    try {
-        await runAI(event, userInput, allowSkip, cset);
-    } finally {
-        ticket.release();
-    }
 }
 
 // AI 回复主流程（含搜索/语音/多条回复）
@@ -2783,7 +2770,10 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
-        const mem = memoryContext(convKey(event)); // 本会话已保存的多条记忆
+        // 记忆按「人」存（QQ 号 / 游戏名），不按会话；条数取 config.json 的 ai.contextMessages
+        const memKey = memoryKeyOf(event, meta.name);
+        const memScene = memorySceneOf(event);
+        const mem = memoryContext(memKey, cfg.ai ? cfg.ai.contextMessages : undefined);
         // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别（工具里会先告诉用户"稍等"）
         const imgs = imageSegmentsOf(event.message);
         // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
@@ -2798,7 +2788,7 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             allowVoice: cs.voice,
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
-            ctx: buildAgentCtx(convKey(event), String(event.user_id), {
+            ctx: buildAgentCtx(memKey, String(event.user_id), {
                 images: imgs,
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
@@ -2807,7 +2797,7 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
                 },
                 // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
                 sendVoice: async (text) => {
-                    const ids = await sendReply(event, text, true, false, true);
+                    const ids = await sendReply(event, text, true, false);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
                 },
@@ -2823,6 +2813,10 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         // 该会话关闭了语音：不发语音（AI 就算标记了 VOICE:YES 也降级成文字）
         if (!cs.voice) wantVoice = false;
 
+        // 真正触发回复的这条才进记忆（带上当时所在的群 / 私聊，AI 以后能分清人在哪说话）
+        recordMessage(memKey, 'user', userInput, {
+            name: meta.name, qq: String(event.user_id), isBot: meta.isRobot, scene: memScene,
+        });
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
@@ -2838,13 +2832,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
         const withAt = event.message_type === 'group';
         for (let i = 0; i < parts.length; i++) {
-            // 最后一位 true：这些是我(AI)发的，自身消息回执按 id 跳过，避免同一句记两遍
-            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0, true);
+            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0);
             if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 700));
         }
-        // 写入记忆（滑动窗口，角色 ai）
+        // 写入记忆（同上，按人记；只留最近 N 条）
         const finalReply = parts.join('\n');
-        recordMessage(convKey(event), 'ai', finalReply);
+        recordMessage(memKey, 'ai', finalReply, { scene: memScene });
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
     } catch (err) {
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
@@ -2935,8 +2928,11 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         + `[名称:${player}| QQ:${mcQq || '-'}|身份:${mcTier.name}|好感度:${perm.getFavor(mcQq || player)}%|群头衔:-|msgId:0|时间:${mcTimeStr()}]`
         + `消息内容:[ ${player}: ${text} ]`;
 
-    recordMessage(key, 'user', text, { name: player, qq: '' });
-    const mem = memoryContext(key);
+    // 记忆按人：绑过 QQ 的和他 QQ 上的记忆共用一份（同一个人），没绑的用游戏名
+    const mcMemKey = mcQq ? 'u:' + mcQq : 'n:' + player;
+    const mcScene = 'mc:' + player;
+    recordMessage(mcMemKey, 'user', text, { name: player, qq: mcQq || '', scene: mcScene });
+    const mem = memoryContext(mcMemKey, cfg.ai ? cfg.ai.contextMessages : undefined);
 
     // 游戏玩家没有 QQ 号，用玩家名当 user（同样是稳定的"同一个人"标识，照样能吃到缓存隔离）
     const mcRole = perm.role(mcQq || '');
@@ -2947,13 +2943,13 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         allowSkip: false,
         allowSearch: searchEnabled(),
         userId: player,
-        ctx: buildAgentCtx(key, mcQq || player),
+        ctx: buildAgentCtx(mcMemKey, mcQq || player),
     });
 
     // 标记已在 aiReply 里剥离；这里只兜底再清一次
     let reply = stripToolTags(String(result.reply || '')).trim();
     if (!reply) reply = '嗯？我没听懂，能再说一遍吗？';
-    recordMessage(key, 'ai', reply);
+    recordMessage(mcMemKey, 'ai', reply, { scene: mcScene });
     return reply;
 }
 
@@ -3524,15 +3520,15 @@ function formatPlanPlayer(name, p) {
         + rows.join('\n');
 }
 
-// ---------- 记忆指令（每会话可保存多条） ----------
+// ---------- 记忆指令（按人保存多条；同一个人在任何群里都是同一份） ----------
 function handleMemoryCmd(event, cmd, arg) {
-    const key = convKey(event);
+    const senderName = (event.sender && (event.sender.card || event.sender.nickname)) || '';
+    const key = memoryKeyOf(event, senderName);
     if (cmd === '/记住') {
         const text = arg.trim();
         if (!text) return sendReply(event, '❌ 用法：#记住 <要记住的内容>');
         const n = addMemory(key, text);
-        recordMessage(key, 'system', `保存长期记忆：${text.slice(0, 50)}`);
-        return sendReply(event, `🧠 已存入长期记忆（本会话共 ${n} 条）：${text.slice(0, 50)}`);
+        return sendReply(event, `🧠 已存入长期记忆（关于你共 ${n} 条）：${text.slice(0, 50)}`);
     }
     if (cmd === '/记忆') {
         const kw = arg.trim();
@@ -3541,21 +3537,20 @@ function handleMemoryCmd(event, cmd, arg) {
             return sendReply(event, hit ? `🔍 搜索"${kw}"结果：\n${hit}` : `❌ 没有找到包含 "${kw}" 的记忆。`);
         }
         const list = listMemory(key);
-        if (!list.length) return sendReply(event, '🧠 本会话暂无长期记忆。可用 #记住 <内容> 让我记住。');
+        if (!list.length) return sendReply(event, '🧠 暂时没有关于你的长期记忆。可用 #记住 <内容> 让我记住。');
         const lines = list.map((m, i) => `${i + 1}. ${m.text}`);
-        return sendReply(event, '🧠 本会话长期记忆：\n' + lines.join('\n'));
+        return sendReply(event, '🧠 关于你的长期记忆：\n' + lines.join('\n'));
     }
     if (cmd === '/忘记') {
         const idx = Number(arg.trim());
         if (!Number.isInteger(idx) || idx < 1) return sendReply(event, '❌ 用法：#忘记 <序号>（用 #记忆 查看序号）');
         return removeMemory(key, idx)
-            ? (recordMessage(key, 'system', `删除第 ${idx} 条长期记忆`), sendReply(event, `🗑️ 已删除第 ${idx} 条记忆。`))
+            ? sendReply(event, `🗑️ 已删除第 ${idx} 条记忆。`)
             : sendReply(event, `❌ 没有第 ${idx} 条记忆。`);
     }
     // /清除记忆
     clearMemory(key);
-    recordMessage(key, 'system', '清空全部记忆');
-    return sendReply(event, '🗑️ 已清空本会话的全部记忆。');
+    return sendReply(event, '🗑️ 已清空关于你的全部记忆。');
 }
 
 // ---------- 主人改昵称 / 换头像（OneBot/NapCat 扩展接口 set_qq_profile / set_qq_avatar） ----------

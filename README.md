@@ -34,7 +34,7 @@
 
 ## 功能特性
 
-- **AI 对话**：群聊 @ 或含「小钠」关键词触发；私聊直接对话；支持会话记忆与联网搜索。
+- **AI 对话**：群聊 @ 或含「小钠」关键词触发；私聊直接对话；记忆按人存（跨群通用、带来源群标注），支持联网搜索。
 - **唤起会话**：被叫到之后，接下来即使没有 @ 也没提名字，也会继续判断有没有在跟它说话（像真人被叫住后会接着聊）。额度：首先唤起的人多接几条，别人插嘴只接一条；用完自动回到"不叫不理"。
 - **联网搜索**：接入百度智能搜索（千帆 ai_search），小钠自己判断何时需要搜索（无手动命令）。
 - **QQ ↔ 游戏ID 绑定**：**只能在桥接群**里发 `#绑定 <游戏ID>`（其他群和私聊都不行），过图形验证码即可把群里消息转发进游戏（每人最多 3 个）。
@@ -72,7 +72,7 @@ QQBot/
 │  ├─ logger.js         统一日志出口（终端 + 面板 + 按天文件）
 │  ├─ mcbridge.js       与服务器 mod 的加签通信（HTTP + SSE）
 │  ├─ binding.js        QQ ↔ 游戏ID 绑定（验证码）
-│  ├─ memory.js         会话记忆（SQLite）   db.js          建表 / FTS5 / 旧数据迁移
+│  ├─ memory.js         按人记忆（SQLite）   db.js          建表 / FTS5 / 旧数据迁移
 │  ├─ help.js           #帮助 菜单           scheduler.js   定时任务
 │  ├─ search.js         联网搜索（百度智能搜索）
 │  ├─ qzone.js          QQ 空间自动说说（随机间隔 / 自评 / 回复评论）
@@ -155,8 +155,8 @@ gradlew.bat build
 | 搜索 | `BAIDU_SEARCH_KEY` | 百度智能搜索密钥（千帆 ai_search）；不填则联网搜索关闭 |
 | 语音 | `TTS_VOICE_ID` | 玉峰语音合成（kktts，免密钥）；音色 ID 默认甜妹音，列表见 `kktts.php?action=list` |
 | 余额统计 | `#余额矫正 <充值总金额> <已使用> [币种]` | `#余额` 的累计充值/已使用直接用命令设定（元），之后充值在该基数上累加；不设则自首次查询起记账 |
-| 记忆 | `MEMORY_MAX_RECENT` / `MEMORY_MAX_LONGTERM` / `MEMORY_MAX_AGE_DAYS` | 记忆保留上限与超时清理 |
-| 上下文 | `MEMORY_CONTEXT_RECENT` | 每次对话注入给 AI 的「最近对话」条数（默认 20，建议 20~30） |
+| 记忆 | `MEMORY_MAX_LONGTERM` / `MEMORY_MAX_AGE_DAYS` | 长期记忆条数上限、消息超时清理天数；每人保留的对话条数见 config.json 的 `memory.maxUserMessages`（5~20） |
+| AI / 上下文 | config.json 的 `ai` 段 | `thinking` 是否思考、`reasoningEffort` 思考强度（auto/low/high/max）、`contextMessages` 注入条数（5~50）、`temperature`；网页「全局设置」可改，热加载生效 |
 | 唤起会话 | `ENGAGE_DEBUG` | 置 `true` 打印唤起判断的额度消耗，便于排查 |
 | 面板 | `WEBUI_HOST` / `WEBUI_HTTPS` / `WEBUI_PORT` / `WEBUI_HTTP_PORT` / `WEBUI_USER` / `WEBUI_PASSWORD` | 密码留空则面板不启动；默认 HTTP 80，设 `WEBUI_HTTPS=true` 即切回 HTTPS（443）；`WEBUI_HTTP_PORT` 为 HTTP→HTTPS 跳转端口，仅 HTTPS 模式生效（0=关闭） |
 | 面板证书 | `WEBUI_TLS_TRUST` / `OPENSSL_BIN` | 仅 `WEBUI_HTTPS=true` 时生效；默认 `true` 自动把本地根 CA 装进当前用户受信任根证书（Chrome/Edge 不再报不安全）；设 `false` 不改系统证书库。`OPENSSL_BIN` 指定 openssl 路径 |
@@ -298,10 +298,13 @@ gradlew.bat build
 
 ### 记忆存储
 
-会话记忆存在 `data/memory.db`（SQLite，由 Node 内置的 `node:sqlite` 驱动，**不需要编译原生模块**）：
+记忆存在 `data/memory.db`（SQLite，由 Node 内置的 `node:sqlite` 驱动，**不需要编译原生模块**）：
 
+- **按「人」记，不按会话**：同一个 QQ 号在不同群、私聊里的对话归到同一份记忆（游戏内绑过 QQ 的玩家也共用这一份）；没绑 QQ 的游戏玩家用玩家名。
+- **只记触发过 AI 回复的消息**：群里没人叫它时的闲聊不会入库；每人最多留 5~20 条（config.json 的 `memory.maxUserMessages`），超了直接丢最老的。
+- 每条记忆带**来源标注**（`[群号]` / `[私聊]` / `[游戏]`），AI 读记忆时仍知道那句话是在哪个群说的。
 - 全文搜索用 **FTS5 + trigram 分词**；中文查询需 **≥ 3 个字符**，更短的自动回退 `LIKE`。
-- 首次启动若发现旧的 `data/memory.json`，会**一次性导入并保留原文件**作为回滚点。
+- 首次启动若发现旧的 `data/memory.json`，会**一次性导入并保留原文件**作为回滚点；旧的按会话数据自动迁移到按人（原群号记入来源）。
 - `data/` 已在 `.gitignore` 中排除。
 
 ### 宽松限速

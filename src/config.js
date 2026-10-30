@@ -56,6 +56,21 @@ export const DEFAULTS = {
         // 会被改写成目标名字的错字（逗号分隔）；也可写「错字=正确词」精确指定
         homophones: '小娜,小纳,小呐,小哪,小那,晓娜,晓纳,晓钠,筱钠,筱娜,小拿,笑纳',
     },
+    // AI 模型行为（网页「全局设置」可改，热加载生效）：
+    //   thinking       是否让模型先思考（关闭后回复更快、更省钱）
+    //   reasoningEffort 思考强度：auto 跟随模型默认 / low / high / max（DeepSeek 2026 的取值）
+    //   contextMessages 每次注入给 AI 的「最近对话」条数（5~50）
+    //   temperature     采样温度（0~2）
+    ai: {
+        thinking: true,
+        reasoningEffort: 'auto',
+        contextMessages: 20,
+        temperature: 0.7,
+    },
+    // 记忆按「人」存（QQ号 / 游戏玩家），不按会话；每人只留触发过 AI 的最近若干条
+    memory: {
+        maxUserMessages: 12,   // 5~20（超出范围会在 memory.js 里被夹到边界）
+    },
     // 会话层的全局默认（网页「会话管理」里会话可单独覆盖，见 chatSettings.js）
     chat: {
         botReply: true,        // AI 是否回复（全局开关；会话可单独静音）

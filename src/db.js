@@ -36,6 +36,7 @@ const SCHEMA = [
      name     TEXT    NOT NULL DEFAULT '',
      qq       TEXT    NOT NULL DEFAULT '',
      is_bot   INTEGER NOT NULL DEFAULT 0,
+     scene    TEXT    NOT NULL DEFAULT '',
      ts       INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_key, id)`,
@@ -98,6 +99,13 @@ export function openMemoryDb(file) {
   }
 
   for (const sql of SCHEMA) db.exec(sql);
+
+  // 旧库升级：messages 新增 scene（记录这条消息发生在哪个群 / 私聊 / 游戏里）。
+  // SQLite 的 CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，必须显式 ALTER。
+  const cols = db.prepare('PRAGMA table_info(messages)').all();
+  if (!cols.some((c) => String(c.name) === 'scene')) {
+    db.exec("ALTER TABLE messages ADD COLUMN scene TEXT NOT NULL DEFAULT ''");
+  }
 
   // FTS5 可用性：个别构建可能没有；没有就整体降级为 LIKE 查询
   let ftsEnabled = true;

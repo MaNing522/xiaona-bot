@@ -167,6 +167,30 @@ function readBody(req) {
   });
 }
 
+// ---------- 全局设置的取值校正（AI / 记忆） ----------
+/** AI 段：思考开关、思考强度白名单、上下文 5~50 条、温度 0~2 */
+function normalizeAi(raw) {
+  const a = raw && typeof raw === 'object' ? raw : {};
+  const effort = String(a.reasoningEffort || 'auto').trim().toLowerCase();
+  const temp = Number(a.temperature);
+  const ctx = Number(a.contextMessages);
+  return {
+    thinking: a.thinking !== false,
+    reasoningEffort: ['auto', 'low', 'high', 'max'].includes(effort) ? effort : 'auto',
+    contextMessages: Number.isFinite(ctx) ? Math.min(50, Math.max(5, Math.round(ctx))) : 20,
+    temperature: Number.isFinite(temp) ? Math.min(2, Math.max(0, temp)) : 0.7,
+  };
+}
+
+/** 记忆段：每人保留 5~20 条 */
+function normalizeMemory(raw) {
+  const m = raw && typeof raw === 'object' ? raw : {};
+  const n = Number(m.maxUserMessages);
+  return {
+    maxUserMessages: Number.isFinite(n) ? Math.min(20, Math.max(5, Math.round(n))) : 12,
+  };
+}
+
 // ---------- 面板认证：账号密码 + 图形人机验证 + 会话 Cookie ----------
 // 面板能以机器人身份发消息、管理授权，公开到局域网后必须挡一层。
 const PANEL_USER = process.env.WEBUI_USER || 'admin';
@@ -989,15 +1013,20 @@ async function route(req, res, url) {
       vision: { ...base.vision },
       bridge: { ...base.bridge },
       qzone: { ...base.qzone },
+      ai: { ...base.ai },
+      memory: { ...base.memory },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge', 'qzone']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge', 'qzone', 'ai', 'memory']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
     }
     // 空间动态参数做边界校正：间隔 1~7 天、评论频率 0~10、查看权限只允许支持的值
     next.qzone = normalizeQzone(next.qzone);
+    // AI / 记忆参数做边界校正：上下文 5~50 条、温度 0~2、每人记忆 5~20 条、思考强度只认已知值
+    next.ai = normalizeAi(next.ai);
+    next.memory = normalizeMemory(next.memory);
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
     reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
     return sendJSON(res, 200, { ok: true, config: config() });

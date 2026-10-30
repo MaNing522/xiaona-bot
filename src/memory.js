@@ -1,17 +1,17 @@
 // ============================================================
 // memory.js - 记忆模块（SQLite 存储）
 //
-// 结构（与旧版 JSON 完全对应）：
-//   messages 最近对话滑动窗口（role: user/ai/system，带发言人署名）
-//   summary  窗口溢出压缩出的摘要
-//   memory   长期记忆（#记住）
+// 记忆主体是「人」而不是「会话」：同一个 QQ 号在不同群、私聊里说的话，
+// 都归到同一个记忆桶（键形如 u:QQ号；游戏内没绑 QQ 的玩家用 n:玩家名）。
+// 每条消息额外记 scene，标注它当时来自哪个群 / 私聊 / 游戏，
+// 这样 AI 读记忆时仍然知道"这句话是在哪个群说的"。
 //
-// 存储从 memory.json 换成 data/memory.db（详见 db.js）：
-// 旧版每记录一条消息都要把整份 ~100KB JSON 重写一次，是明确的 IO 热点；
-// 换库后写入是单行 INSERT，读取按会话走索引。
+// 只记录**触发过 AI 回复**的对话（由 index.js 在真正调用 AI 时写入），
+// 每人最多保留 maxUserMessages 条（5~20，config.json 的 memory.maxUserMessages）。
 //
-// 对外 8 个导出与旧版**完全一致**（含同步语义），因此 index.js 的调用点零改动；
-// 旧 memory.json 在首次启动时一次性导入，并保留不删，作为回滚点。
+// 长期记忆（#记住）同样按人存；旧的按会话数据会在首次启动时迁移：
+//   带 QQ 号的 user 消息 → u:QQ号，原会话键写进 scene（AI 行没有发言人，留在旧键下）。
+// 旧的 memory.json 仍一次性导入，原文件保留作回滚点。
 // ============================================================
 import path from 'path';
 import { openMemoryDb, isDbEmpty, importLegacyJson } from './db.js';
@@ -19,17 +19,29 @@ import { logger } from './logger.js';
 
 let db = null;
 
+/** 每人最多保留几条「触发过 AI」的消息：只允许 5~20 */
+const MIN_USER_MESSAGES = 5;
+const MAX_USER_MESSAGES = 20;
+
 const CFG = {
-  maxRecent: 30, // 最近消息保留条数（滑动窗口）
+  maxUserMessages: 12, // 每个用户保留的对话条数（5~20）
   maxLongterm: 50, // 长期记忆条数上限
-  maxAgeDays: 30, // 超过该天数的最近消息/摘要自动清理
-  summaryKeep: 5, // 窗口溢出时每次压缩的条数
-  summaryCap: 800, // 摘要总字符上限
-  contextRecent: 20, // 每次对话注入给 AI 的「最近对话」条数（20~30 比较合适）
+  maxAgeDays: 30, // 超过该天数的消息/摘要自动清理
+  contextRecent: 20, // 每次对话注入给 AI 的「最近对话」条数
 };
 
+function clampUserMessages(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return CFG.maxUserMessages;
+  return Math.min(MAX_USER_MESSAGES, Math.max(MIN_USER_MESSAGES, v));
+}
+
 export function initMemory(saveDir, cfg = {}) {
-  Object.assign(CFG, cfg);
+  if (cfg.maxUserMessages !== undefined) CFG.maxUserMessages = clampUserMessages(cfg.maxUserMessages);
+  for (const k of ['maxLongterm', 'maxAgeDays', 'contextRecent']) {
+    const v = Number(cfg[k]);
+    if (Number.isFinite(v) && v > 0) CFG[k] = v;
+  }
   if (db) {
     try {
       db.close();
@@ -42,10 +54,85 @@ export function initMemory(saveDir, cfg = {}) {
   db = openMemoryDb(file);
   // 库为空且存在旧的 memory.json → 一次性导入（原文件保留）
   if (isDbEmpty(db)) importLegacyJson(db, path.join(saveDir, 'memory.json'));
+  migrateLegacyConvKeys();
+  trimAllUsers();
   pruneAge();
 }
 
-/** 超时清理：超过 maxAgeDays 的最近消息/摘要移除（长期记忆保留） */
+/**
+ * 配置热更新（config.json 改动后由 index.js 调用）：
+ * 只刷新条目上限与上下文条数，不重开数据库。
+ */
+export function setMemoryOptions(cfg = {}) {
+  if (!db) return;
+  if (cfg.maxUserMessages !== undefined) CFG.maxUserMessages = clampUserMessages(cfg.maxUserMessages);
+  const ctx = Number(cfg.contextRecent);
+  if (Number.isFinite(ctx) && ctx > 0) CFG.contextRecent = ctx;
+  trimAllUsers();
+}
+
+/**
+ * 旧版按会话（g:群号 / p:QQ号）存消息；新版按人存。
+ * 只迁移带 QQ 号的 user 行：把它们改到 u:QQ号，并原会话键写进 scene，
+ * 这样历史上的"在哪个群说的"不会丢。AI 行没有发言人，无法归属，留在旧键下。
+ */
+function migrateLegacyConvKeys() {
+  const rows = db
+    .prepare(
+      "SELECT id, conv_key, qq FROM messages WHERE qq <> '' AND conv_key NOT LIKE 'u:%' AND conv_key NOT LIKE 'n:%'",
+    )
+    .all();
+  // 旧版 #记住 的长期记忆：私聊键 p:QQ号 明确属于那个人，可以安全搬到 u:QQ号；
+  // 群聊键 g:群号 分不清是谁存的，留在原键下不动。
+  const ltRows = db
+    .prepare("SELECT DISTINCT conv_key FROM memory WHERE conv_key LIKE 'p:%'")
+    .all()
+    .filter((r) => /^p:\d{5,14}$/.test(String(r.conv_key)));
+  if (!rows.length && !ltRows.length) return;
+  const upd = db.prepare('UPDATE messages SET conv_key = ?, scene = ? WHERE id = ?');
+  const mov = db.prepare('UPDATE memory SET conv_key = ? WHERE conv_key = ?');
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) upd.run('u:' + r.qq, r.conv_key, r.id);
+    for (const r of ltRows) mov.run('u:' + String(r.conv_key).slice(2), r.conv_key);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    logger.warn('[记忆] 旧会话数据迁移失败（不影响新记忆）:', e.message);
+    return;
+  }
+  if (rows.length) logger.info(`[记忆] 已把 ${rows.length} 条旧会话消息迁移到按人记忆（原群/私聊记入来源）`);
+  if (ltRows.length) logger.info(`[记忆] 已把 ${ltRows.length} 个私聊的长期记忆迁移到按人记忆`);
+}
+
+/** 把所有用户记忆裁到上限（迁移/配置改小后调用一次） */
+function trimAllUsers() {
+  const keys = db
+    .prepare("SELECT DISTINCT conv_key FROM messages WHERE conv_key LIKE 'u:%' OR conv_key LIKE 'n:%'")
+    .all();
+  for (const r of keys) trimUser(String(r.conv_key));
+}
+
+/** 某人超出上限时丢掉最老的（按 id 顺序） */
+function trimUser(key) {
+  const max = clampUserMessages(CFG.maxUserMessages);
+  const n = Number(db.prepare('SELECT count(*) AS n FROM messages WHERE conv_key = ?').get(key).n);
+  if (n <= max) return;
+  const victims = db
+    .prepare('SELECT id FROM messages WHERE conv_key = ? ORDER BY id LIMIT ?')
+    .all(key, n - max);
+  const del = db.prepare('DELETE FROM messages WHERE id = ?');
+  db.exec('BEGIN');
+  try {
+    for (const r of victims) del.run(r.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+/** 超时清理：超过 maxAgeDays 的消息/摘要移除（长期记忆保留） */
 function pruneAge() {
   const limit = Date.now() - CFG.maxAgeDays * 86400000;
   db.prepare('DELETE FROM messages WHERE ts < ?').run(limit);
@@ -54,7 +141,7 @@ function pruneAge() {
 
 /**
  * 对外暴露的过期清理（供闲时维护任务调用）。
- * 启动时会清一次，但长期运行的进程也得定期清，否则最近对话/摘要会一直堆到下次重启。
+ * 启动时会清一次，但长期运行的进程也得定期清，否则消息/摘要会一直堆到下次重启。
  * @returns {{messages:number, summary:number}} 清掉的条数
  */
 export function pruneExpired() {
@@ -73,53 +160,29 @@ function label(m) {
   return m.name ? `${m.name}${m.qq ? `(${m.qq})` : ''}${isBot ? '[机器人]' : ''}` : '用户';
 }
 
-/** 摘要总量封顶：从最老的开始丢，但至少留 1 条 */
-function trimSummary(key) {
-  const rows = db.prepare('SELECT id, text FROM summary WHERE conv_key = ? ORDER BY id').all(key);
-  let total = rows.reduce((s, r) => s + String(r.text).length, 0);
-  let drop = 0;
-  while (rows.length - drop > 1 && total > CFG.summaryCap) {
-    total -= String(rows[drop].text).length;
-    drop += 1;
-  }
-  const del = db.prepare('DELETE FROM summary WHERE id = ?');
-  for (let i = 0; i < drop; i++) del.run(rows[i].id);
+/** 来源标注：这条记忆是当时在哪个群 / 私聊 / 游戏里说的 */
+function sceneTag(scene) {
+  const s = String(scene || '');
+  if (/^g:\d+$/.test(s)) return `[群${s.slice(2)}]`;
+  if (s.startsWith('p:')) return '[私聊]';
+  if (s.startsWith('mc:')) return '[游戏]';
+  return '';
 }
 
-/** 压缩：窗口超限时把最老的 summaryKeep 条压进摘要（逐条截断，总量封顶） */
-function compress(key) {
-  const n = Number(db.prepare('SELECT count(*) AS n FROM messages WHERE conv_key = ?').get(key).n);
-  if (n <= CFG.maxRecent) return;
-
-  const overflow = db
-    .prepare(
-      'SELECT id, role, content, name, qq, is_bot, ts FROM messages WHERE conv_key = ? ORDER BY id LIMIT ?',
-    )
-    .all(key, CFG.summaryKeep);
-  const insSum = db.prepare('INSERT INTO summary(conv_key, text, ts) VALUES (?,?,?)');
-  const delMsg = db.prepare('DELETE FROM messages WHERE id = ?');
-
-  db.exec('BEGIN');
-  try {
-    for (const m of overflow) {
-      insSum.run(key, `${label(m)}: ${m.content}`.slice(0, 120), m.ts);
-      delMsg.run(m.id);
-    }
-    trimSummary(key);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+/** 历史的一行：发言人 + 来源 + 内容 */
+function lineOf(m) {
+  return `${label(m)}${sceneTag(m.scene)}: ${m.content}`;
 }
 
 /**
  * 记录一条消息（role: user/ai/system）。
- * @param {{name?:string,qq?:string,isBot?:boolean}} [who] 发言人（群名片/昵称 + QQ号），供历史署名
+ * 只应由「真正触发 AI」的流程调用（见 index.js 的 runAI），避免把群里所有闲聊都存下来。
+ * @param {{name?:string,qq?:string,isBot?:boolean,scene?:string}} [who]
+ *   发言人（群名片/昵称 + QQ号），以及当时的来源会话（g:群号 / p:QQ号 / mc:玩家）
  */
 export function recordMessage(key, role, text, who) {
   db.prepare(
-    'INSERT INTO messages(conv_key, role, content, name, qq, is_bot, ts) VALUES (?,?,?,?,?,?,?)',
+    'INSERT INTO messages(conv_key, role, content, name, qq, is_bot, scene, ts) VALUES (?,?,?,?,?,?,?,?)',
   ).run(
     String(key),
     String(role),
@@ -127,9 +190,10 @@ export function recordMessage(key, role, text, who) {
     who && who.name ? String(who.name).slice(0, 24) : '',
     who && who.qq ? String(who.qq) : '',
     who && who.isBot ? 1 : 0,
+    who && who.scene ? String(who.scene) : '',
     Date.now(),
   );
-  compress(String(key));
+  trimUser(String(key));
 }
 
 /** 保存长期记忆（#记住），返回当前条数 */
@@ -168,7 +232,7 @@ export function removeMemory(key, index) {
   return true;
 }
 
-/** 清空某会话全部记忆 */
+/** 清空某个人的全部记忆（长期 + 历史消息 + 旧摘要） */
 export function clearMemory(key) {
   const k = String(key);
   const n =
@@ -198,7 +262,7 @@ function likeSearch(key, kw) {
     .all(key, p);
   const rec = db
     .prepare(
-      `SELECT role, content, name, qq, is_bot FROM messages WHERE conv_key = ? AND content LIKE ? ESCAPE '\\' ORDER BY id`,
+      `SELECT role, content, name, qq, is_bot, scene FROM messages WHERE conv_key = ? AND content LIKE ? ESCAPE '\\' ORDER BY id`,
     )
     .all(key, p);
   return { mem, sum, rec };
@@ -222,7 +286,7 @@ function ftsSearch(key, kw) {
     else rec.push({ ref: r.ref, text: r.text });
   }
   // 最近对话需要按原顺序 + 带发言人署名，回表取一次
-  const getMsg = db.prepare('SELECT role, content, name, qq, is_bot FROM messages WHERE id = ?');
+  const getMsg = db.prepare('SELECT role, content, name, qq, is_bot, scene FROM messages WHERE id = ?');
   const recFull = rec
     .map((r) => ({ id: Number(r.ref), ...getMsg.get(r.ref) }))
     .filter((m) => m.id)
@@ -251,17 +315,20 @@ export function searchMemory(key, kw) {
   if (hit.mem.length) out.push('【长期记忆】\n' + hit.mem.map((m) => '- ' + m.text).join('\n'));
   if (hit.sum.length) out.push('【对话摘要】\n' + hit.sum.map((m) => '- ' + m.text).join('\n'));
   if (hit.rec.length) {
-    out.push(
-      '【最近对话】\n'
-        + hit.rec.map((m) => `${label({ ...m, role: m.role })}: ${m.content}`).join('\n'),
-    );
+    out.push('【最近对话】\n' + hit.rec.map((m) => lineOf({ ...m, role: m.role })).join('\n'));
   }
   return out.join('\n');
 }
 
-/** 生成注入 AI 的上下文片段（无内容返回空串） */
-export function memoryContext(key) {
+/**
+ * 生成注入 AI 的上下文片段（无内容返回空串）。
+ * @param {string} key 人的记忆键（u:QQ号 / n:玩家名）
+ * @param {number} [limit] 本次注入的历史消息条数（默认取 contextRecent，来自 config.json 的 ai.contextMessages）
+ */
+export function memoryContext(key, limit) {
   const k = String(key);
+  const n = Number(limit);
+  const take = Number.isFinite(n) && n > 0 ? Math.round(n) : CFG.contextRecent;
   const lt = db.prepare('SELECT text FROM memory WHERE conv_key = ? ORDER BY rowid').all(k);
   const sum = db
     .prepare('SELECT text FROM summary WHERE conv_key = ? ORDER BY id DESC LIMIT 3')
@@ -269,9 +336,9 @@ export function memoryContext(key) {
     .reverse();
   const last = db
     .prepare(
-      'SELECT role, content, name, qq, is_bot FROM messages WHERE conv_key = ? ORDER BY id DESC LIMIT ?',
+      'SELECT role, content, name, qq, is_bot, scene FROM messages WHERE conv_key = ? ORDER BY id DESC LIMIT ?',
     )
-    .all(k, Math.max(1, CFG.contextRecent))
+    .all(k, Math.max(1, take))
     .reverse();
 
   if (!lt.length && !sum.length && !last.length) return '';
@@ -281,8 +348,8 @@ export function memoryContext(key) {
   if (sum.length) parts.push('【对话摘要】\n' + sum.map((m) => `- ${m.text}`).join('\n'));
   if (last.length) {
     parts.push(
-      '【最近对话】（下面每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
-        + last.map((m) => `${label(m)}: ${m.content}`).join('\n'),
+      '【最近对话】（按人记录，方括号里是当时所在的群 / 私聊；每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
+        + last.map((m) => lineOf(m)).join('\n'),
     );
   }
   return parts.join('\n');

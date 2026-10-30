@@ -651,7 +651,7 @@ function gcRender(){
   }
   $('gcfgNum').innerHTML=html;
   // 功能后端：联网搜索 / 图像识别 / MC 服务器连接模式
-  const s=c.search||{}, v=c.vision||{}, b=c.bridge||{};
+  const s=c.search||{}, v=c.vision||{}, b=c.bridge||{}, ai=c.ai||{}, mem=c.memory||{};
   const bridgeMode = Object.prototype.hasOwnProperty.call(BRIDGE_NAMES, String(b.mode||'')) ? String(b.mode||'') : '';
   $('gcfgFunc').innerHTML=
     '<h2 style="font-size:14px;margin:18px 0 4px">联网搜索</h2>'+
@@ -669,10 +669,24 @@ function gcRender(){
     '<div><label>端口（回环 / 局域网用）</label><input id="gcBridgePort" type="number" min="1" max="65535" step="1" value="'+((Number(b.port)>=1&&Number(b.port)<=65535)?Number(b.port):'')+'" placeholder="25565"></div></div>'+
     '<label>服务器局域网地址（仅局域网模式）</label><input id="gcBridgeLan" type="text" value="'+esc(b.lanHost||'')+'" placeholder="192.168.1.x 或主机名">'+
     '<label>公网完整地址（仅公网模式，含 http:// 与端口）</label><input id="gcBridgePub" type="text" value="'+esc(b.publicUrl||'')+'" placeholder="http://1.2.3.4:43733">'+
-    '<div class="hint">密钥（MC_BRIDGE_SECRET）与桥接群（MC_BRIDGE_GROUP）仍在 .env 里配置。切换模式保存后约 1 秒生效并自动重连。</div>';
+    '<div class="hint">密钥（MC_BRIDGE_SECRET）与桥接群（MC_BRIDGE_GROUP）仍在 .env 里配置。切换模式保存后约 1 秒生效并自动重连。</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">AI 模型</h2>'+
+    '<div class="row">'+
+    '<div><label>是否思考</label><select id="gcThink"><option value="true">思考（更聪明，较慢）</option><option value="false">不思考（更快，省钱）</option></select></div>'+
+    '<div><label>思考强度</label><select id="gcEffort"><option value="auto">跟随模型默认</option><option value="low">低</option><option value="high">高</option><option value="max">最高</option></select></div>'+
+    '</div>'+
+    '<div class="row">'+
+    '<div><label>上下文条数（5~50）</label><input id="gcCtx" type="number" min="5" max="50" step="1" value="'+(Number(ai.contextMessages)||20)+'"></div>'+
+    '<div><label>温度（0~2）</label><input id="gcTemp" type="number" min="0" max="2" step="0.1" value="'+(Number(ai.temperature))+'"></div>'+
+    '</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">记忆</h2>'+
+    '<label>每人保留对话条数（5~20）</label><input id="gcMemMax" type="number" min="5" max="20" step="1" value="'+(Number(mem.maxUserMessages)||12)+'">'+
+    '<div class="hint">记忆按「人」存（QQ 号 / 游戏玩家），只记录真正触发 AI 回复的消息；条数越少越省 token，越多越能记住以前聊过的事。来源群会以 [群号] / [私聊] / [游戏] 标注在记忆里。</div>';
   $('gcSearch').value=Object.prototype.hasOwnProperty.call(SEARCH_NAMES,String(s.provider||'baidu'))?String(s.provider||'baidu'):'baidu';
   $('gcVision').value=Object.prototype.hasOwnProperty.call(VISION_NAMES,String(v.provider||'ai'))?String(v.provider||'ai'):'ai';
   $('gcBridge').value=bridgeMode;
+  $('gcThink').value=String(ai.thinking!==false);
+  $('gcEffort').value=['auto','low','high','max'].includes(String(ai.reasoningEffort||'auto'))?String(ai.reasoningEffort||'auto'):'auto';
   // QQ 空间自动说说
   const qz=c.qzone||{};
   $('qzOn').value=String(qz.enabled!==false);
@@ -801,6 +815,9 @@ $('gcSave').onclick=async()=>{
     search:{provider:$('gcSearch').value,limit:Number($('gcSearchLimit').value)||5,customUrl:$('gcSearchUrl').value.trim()},
     vision:{provider:$('gcVision').value,customUrl:$('gcVisionUrl').value.trim(),customModel:$('gcVisionModel').value.trim()},
     bridge:{mode:$('gcBridge').value,port:Number($('gcBridgePort').value)||25565,lanHost:$('gcBridgeLan').value.trim(),publicUrl:$('gcBridgePub').value.trim()},
+    ai:{thinking:$('gcThink').value==='true',reasoningEffort:$('gcEffort').value,
+      contextMessages:Number($('gcCtx').value)||20,temperature:$('gcTemp').value===''?0.7:Number($('gcTemp').value)},
+    memory:{maxUserMessages:Number($('gcMemMax').value)||12},
     qzone:{enabled:$('qzOn').value==='true',minDays:Number($('qzMin').value),maxDays:Number($('qzMax').value),
       commentEvery:Number($('qzEvery').value),replyComments:$('qzReply').value==='true',
       checkMinutes:Number($('qzCheck').value),ugcRight:Number($('qzRight').value),
