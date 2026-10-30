@@ -18,9 +18,13 @@ import java.util.Set;
  *
  * <p>用文档提供的视图 {@code paradigm_v_active_bans}，以 {@code mode=ro} 打开，
  * 绝不在 Paradigm 的库里写任何东西（写入统一走它的 /ban、/unban 命令）。
+ *
+ * <p>字段名按 Paradigm 2.x 的实际视图（{@code paradigm_v_punishments_public}）取：
+ * 类型列是 {@code punishment_type}、执行者是 {@code actor_name}，
+ * 不是老版本误用的 {@code type} / {@code actor}。
  */
 final class ParadigmDb {
-    private static final String SQL = "SELECT type, player_name, player_uuid, reason, actor, "
+    private static final String SQL = "SELECT player_name, player_uuid, reason, actor_name, "
             + "created_at_ms, expires_at_ms FROM paradigm_v_active_bans ORDER BY created_at_ms DESC";
 
     private ParadigmDb() {}
@@ -54,7 +58,7 @@ final class ParadigmDb {
                             name,
                             trim(rs.getString("player_uuid")),
                             trim(rs.getString("reason")),
-                            trim(rs.getString("actor")),
+                            trim(rs.getString("actor_name")),
                             longOf(rs, "created_at_ms"),
                             longOf(rs, "expires_at_ms")));
                 }

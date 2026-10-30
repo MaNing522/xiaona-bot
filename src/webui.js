@@ -1106,7 +1106,6 @@ export async function startWebUI() {
     logger.info('   面板当前为 HTTP 明文；要启用 HTTPS 只需在 .env 设 WEBUI_HTTPS=true（证书代码已保留）。');
   }
   if (host === '0.0.0.0') logger.info('   面板已公开到局域网，请确保密码足够强，并在系统防火墙里放行端口。');
-  if (PANEL_PASS === 'mn123456') logger.info('⚠️  面板密码仍是弱口令 mn123456，局域网内请尽快改掉 .env 的 WEBUI_PASSWORD。');
 
   // 仅 HTTPS 模式提供「HTTP → HTTPS 跳转」；设 WEBUI_HTTP_PORT=0 可关闭
   const redirectPort = httpsOn
