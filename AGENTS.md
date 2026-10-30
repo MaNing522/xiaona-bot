@@ -73,6 +73,13 @@ cd c:\QQBot; .\restart.bat
 ```
 
 - 后台隐藏启动：`background.vbs`（wscript 调用，未提权会自动弹一次 UAC；`restart.bat` / `启动.bat` 都走它）。
+- **AI 用工具跑 `.\restart.bat` 的坑（2026-10-30 实测）**：起服后的 `node start.js` 仍挂在「执行重启的那条命令」的进程树下，命令一结束就被连坐杀掉（表现为重启成功、日志也正常，但几分钟后机器人凭空消失、80/3001 端口全空）。稳定做法是用**计划任务**把它摘出去（需管理员，先建后删，不留在系统里）：
+  ```powershell
+  schtasks /create /tn "XiaonaTmpStart" /tr "wscript.exe C:\QQBot\background.vbs" /sc once /st 23:59 /rl highest /f
+  schtasks /run /tn "XiaonaTmpStart"
+  schtasks /delete /tn "XiaonaTmpStart" /f        # 等 wscript 把 node 拉起来后再删（约 8 秒）
+  ```
+  验证：用管理员 PowerShell 读 `Get-CimInstance Win32_Process -Filter "Name='node.exe'"` 的 `CommandLine`（普通权限读不到管理员进程的命令行，会全空）；同时看 `logs/YYYY-MM-DD.log` 里有没有新的「=== 功能状态」。
 - **SnowLuma（2026-10 起替代 NapCat）**：它是注入**真实桌面 QQ.exe** 的 OneBot v11 框架，**只能扫码登录**，二维码显示在 QQ 自己的窗口里（不在网页）。启动器 `start.js` 会自动拉起 QQ（`QQ_PATH`，默认 `C:\Program Files\Tencent\QQNT\QQ.exe`；`QQ_AUTOLAUNCH=false` 可关）和 `snowluma/index.mjs`（cwd 必须是 `snowluma/`，配置目录相对 cwd），并设置 `SNOWLUMA_HOOK_AUTOLOAD=1` 让 QQ 登录后自动注入。QQ 没登录时 OneBot WS 不会监听，机器人会一直自动重连，属正常现象。**注意**：桌面 QQ 必须保持在机器人账号上（别让它自动登录成主人号）；QQ 退出或被换号后，SnowLuma 不一定能自己重新注入新开的 QQ——若 3001 端口长时间不恢复，直接 `.\restart.bat`，不要手动单跑 SnowLuma。
 - **SnowLuma 配置与 token**：`start.js` 会确保 `snowluma/config/onebot.json` 的 `ws-default` 为 `127.0.0.1:<ONEBOT_WS 端口>`、`messageFormat: array`、token = `.env` 的 `ONEBOT_TOKEN`（留空则沿用已有/自动生成并持久化）。已存在的 `onebot_<uin>.json`（snapshot 模式会完全覆盖全局）也会被同步同样的 host/port/token，否则换号后旧的端口/token 会把机器人挡在门外。SnowLuma 自己的控制台默认 `http://127.0.0.1:5099`（端口在 `snowluma/config/runtime.json`）。控制台密码与 OneBot token 是**两回事**：密码存 `snowluma/config/webui.json`（scrypt N=16384,r=8,p=1,keylen=64、16 字节 salt hex），`mustChangePassword:true` 时每次启动都会重新随机生成且只打印在 SnowLuma 控制台（隐藏启动看不到）；忘记密码就按同样参数重写该文件并把 `mustChangePassword` 置 `false`，再 `.\restart.bat`。
 - **OneBot action 差异**：SnowLuma 把群公告叫 `_send_group_notice`（NapCat 是 `send_group_notice`），`index.js` 已做未知 action 时自动换名重试；其余用到的 action（`send_group_msg`/`get_record(out_format=wav)`/`set_group_ban`/`get_group_member_list` 等）均已确认存在。
