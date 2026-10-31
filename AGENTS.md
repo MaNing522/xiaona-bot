@@ -104,6 +104,7 @@ cd c:\QQBot; .\restart.bat
 - **配置分工**：`.env` 放密钥/账号/开关等部署项；**数值类可调项（限速、冷却、唤起会话、AI 模型行为）与「会话层全局默认（chat：是否回复/关键词/语音/补充提示词）放 `config.json`**，由 `src/config.js` 读取（支持 `//` 注释，缺字段自动兜底）。改这些数值请改 config.json，不要再往 .env 加 `RL_*` / `FORWARD_*`。
   - `ai`：`thinking` 是否思考、`reasoningEffort`（auto/low/high/max，DeepSeek 2026 的 `reasoning_effort`，auto 不传）、`contextMessages` 注入条数（5~50）、`temperature`（0~2）；`aiService.js` 的 `aiSettings()` / `reasoningParams()` 每次请求现读，热加载生效。
   - `memory`：`maxUserMessages` 每人保留条数（5~20，`memory.js` 会夹边界）。
+- **游戏内 #指令作用到桥接群（2026-10-31）**：`src/index.js` 的 `runGameCommand` 给游戏伪事件填 `group_id = MC_BRIDGE_GROUP`（配了桥接群时 `message_type` 一律 `group`），所以 `#禁言/#解禁/#踢出/#拉黑/#全体禁言/#解除全体禁言/#群公告/#聊天记录` 都作用在转发群上；回复依旧走 `__replySink` 回注游戏、不发 QQ。`#撤回` 看 `__bridgeConvKey`（`g:<桥接群>`）取 `botSentMsgs`；`__convKey` 仍是 `mc:<玩家名>`，只给记忆/AI 隔离用，别把两者合并。
 - **记忆按「人」存（2026-10 改）**：`memory.js` 的键是 `u:QQ号` / `n:玩家名`，**不再是会话键**；`messages` 表新增 `scene` 记来源（`g:群号` / `p:QQ号` / `mc:玩家`），注入上下文时以 `[群123]` / `[私聊]` / `[游戏]` 标注。**只记录真正触发 AI 回复的消息**（`index.js` 的 `runAI` 内写入，入口处不再全量记录），每人超上限直接删最老（旧「压缩进 summary」逻辑已移除，`summary` 表只保留给旧数据）。旧数据启动时自动迁移：带 `qq` 的 user 行 → `u:qq`（原会话键写进 `scene`），私聊的旧长期记忆 `p:QQ号` → `u:QQ号`。
 - **可切换后端（都在 config.json，网页「全局设置」可改，热加载即生效）**：
   - `search`：`provider` = `off`/`baidu`/`deepseek`/`custom`，`limit`、`customUrl`。deepseek 复用 `.env` 的 `AI_API_KEY`（`POST https://api.deepseek.com/v1/tools/search`，{query,count}）；baidu 用 `BAIDU_SEARCH_KEY`（千帆 ai_search，**不要传 model**，否则走没权限的智能总结模式）；custom 用 `SEARCH_CUSTOM_KEY`。

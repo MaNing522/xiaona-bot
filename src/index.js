@@ -994,7 +994,9 @@ async function handleRecall(event, arg, roleName) {
     if (roleName !== 'owner' && roleName !== 'master' && roleName !== 'admin') {
         return sendReply(event, '❌ 无权限（需主人/管理员）。');
     }
-    const key = convKey(event);
+    // 游戏内触发时 __convKey 是 'mc:<玩家名>'（记忆用），但消息其实是发在桥接群里，
+    // 所以要先看 __bridgeConvKey，否则取不到任何"我发过的消息"
+    const key = String(event.__bridgeConvKey || '') || convKey(event);
     const list = botSentMsgs.get(key) || [];
     const segs = Array.isArray(event.message) ? event.message : [];
     const replySeg = segs.find((s) => s && s.type === 'reply');
@@ -2879,13 +2881,20 @@ async function runGameCommand({ player, text, isPrivate }) {
 
     const sink = [];
     const qq = getQqOf(player);
+    // 游戏里不知道自己对应哪个 QQ 群，所以群管类指令（禁言/解禁/踢出/全体禁言/群公告…）
+    // 一律作用到桥接群（.env 的 MC_BRIDGE_GROUP）—— 就是这台服务器对应的转发群。
+    // 回复仍走 __replySink 回注游戏，不会真的发到 QQ。
+    const bridgeGid = Number(MC_BRIDGE_GROUP) || 0;
     const event = {
-        message_type: isPrivate ? 'private' : 'group',
+        message_type: bridgeGid ? 'group' : (isPrivate ? 'private' : 'group'),
         user_id: qq || 'mc:' + player,
-        group_id: 0,                 // 群管类指令在游戏里没有意义，喂 0 让它自然失败
+        group_id: bridgeGid,
         // 记忆按键和游戏内 AI 用同一套（'mc:<玩家名>'），
         // 这样 #记住 存的东西，游戏里聊天时 AI 也读得到
         __convKey: 'mc:' + player,
+        // #撤回 要找回"我在那个群里发过的消息"（botSentMsgs 按群会话记），
+        // 而 __convKey 是记忆用的，不能混，所以另给一个桥接群会话键
+        __bridgeConvKey: bridgeGid ? 'g:' + bridgeGid : '',
         __replySink: sink,
     };
     let handled = true;
