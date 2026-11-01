@@ -3,19 +3,21 @@
 # 小钠 QQ 机器人 · Linux（Ubuntu / Debian）一键部署
 #
 # 用法（在服务器上、项目目录里执行）：
-#   sudo bash deploy/linux/install.sh                  # 只装机器人本体（systemd 常驻）
-#   sudo bash deploy/linux/install.sh --with-napcat    # 顺带用 Docker 起 NapCat（Linux 上的 QQ 登录）
-#   sudo bash deploy/linux/install.sh --with-asr       # 顺带装本地语音识别（FunASR，约 1GB 模型）
+#   sudo bash deploy/linux/install.sh                    # 只装机器人本体（systemd 常驻）
+#   sudo bash deploy/linux/install.sh --with-snowluma    # 顺带用 Docker 起 SnowLuma（Linux 登录真实 QQ，推荐）
+#   sudo bash deploy/linux/install.sh --with-napcat      # 或用 NapCat（Docker 版 QQ NT，备选）
+#   sudo bash deploy/linux/install.sh --with-asr         # 顺带装本地语音识别（FunASR，约 1GB 模型）
 #
-# 为什么 Linux 不用 SnowLuma：
-#   SnowLuma 靠注入桌面 QQ.exe 工作，原生模块只有 win32-x64，
-#   Linux 上改用 NapCat（Docker 版 QQ NT）+ OneBot11，机器人照样连 ws://127.0.0.1:3001。
+# 关于 Linux 上的 QQ 登录：
+#   SnowLuma 注入的是桌面 QQ；Linux 上官方走 Docker 镜像（内置 Linux QQ + Xvfb + noVNC），
+#   机器人只是 OneBot11 客户端，连 ws://127.0.0.1:3001 即可（已有容器只启动、不重建）。
 #
 # 脚本可重复执行（幂等）：已装好的 Node 会跳过，systemd 单元会覆盖重写。
 # 可选环境变量：
 #   NODE_VER=24.22.1                 要装的 Node 版本
 #   NPM_REGISTRY=https://registry.npmmirror.com
 #   PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+#   SNOWLUMA_IMAGE=motricseven7/snowluma:latest
 #   NAPCAT_IMAGE=mlikiowa/napcat-docker:latest
 # ============================================================
 set -euo pipefail
@@ -24,22 +26,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NODE_VER="${NODE_VER:-24.22.1}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 PIP_INDEX="${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+SNOWLUMA_IMAGE="${SNOWLUMA_IMAGE:-motricseven7/snowluma:latest}"
 NAPCAT_IMAGE="${NAPCAT_IMAGE:-mlikiowa/napcat-docker:latest}"
 
+WITH_SNOWLUMA=0
 WITH_NAPCAT=0
 WITH_ASR=0
 for arg in "$@"; do
     case "$arg" in
+        --with-snowluma) WITH_SNOWLUMA=1 ;;
         --with-napcat) WITH_NAPCAT=1 ;;
         --with-asr) WITH_ASR=1 ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-        *) echo "未知参数：$arg（可用：--with-napcat / --with-asr）"; exit 1 ;;
+        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        *) echo "未知参数：$arg（可用：--with-snowluma / --with-napcat / --with-asr）"; exit 1 ;;
     esac
 done
 
 log() { printf '\033[1;36m[部署]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[部署]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[部署]\033[0m %s\n' "$*" >&2; exit 1; }
+[ $((WITH_SNOWLUMA + WITH_NAPCAT)) -le 1 ] || die "--with-snowluma 与 --with-napcat 只能选一个"
 
 [ "$(id -u)" -eq 0 ] || die "请用 root 执行：sudo bash deploy/linux/install.sh"
 [ -f "$ROOT/package.json" ] || die "没找到 $ROOT/package.json，请在项目目录里执行"
@@ -133,7 +139,50 @@ systemctl enable xiaona-bot >/dev/null
 systemctl restart xiaona-bot
 log "服务已启动：systemctl status xiaona-bot"
 
-# ---------- 6. （可选）NapCat：Linux 上的 QQ 登录 ----------
+# ---------- 6a. （可选）SnowLuma：Linux 上的 QQ 登录（官方 Docker 镜像，推荐） ----------
+if [ "$WITH_SNOWLUMA" = "1" ]; then
+    WS_URL="$(grep -E '^ONEBOT_WS=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\r')"
+    WS_PORT=3001
+    if [[ "$WS_URL" =~ :([0-9]+) ]]; then WS_PORT="${BASH_REMATCH[1]}"; fi
+
+    if (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -qE ":${WS_PORT}([[:space:]]|$)"; then
+        log "检测到 ${WS_PORT} 端口已有 OneBot 在监听，跳过 SnowLuma 部署（直接用现成的）"
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx snowluma; then
+        # 已有同名容器：保留登录态与配置，只确保它在运行
+        docker start snowluma >/dev/null 2>&1 \
+            && log "已启动已有的 snowluma 容器（未改动其配置）" \
+            || warn "snowluma 容器启动失败，请手动看 docker logs snowluma"
+    else
+        if ! command -v docker >/dev/null 2>&1; then
+            log "安装 Docker…"
+            apt-get install -y docker.io || die "Docker 安装失败"
+        fi
+        systemctl enable --now docker
+
+        log "拉取 SnowLuma 镜像：$SNOWLUMA_IMAGE（国内可能较慢，可先配 Docker 镜像加速）…"
+        docker pull "$SNOWLUMA_IMAGE" || die "拉取镜像失败：$SNOWLUMA_IMAGE"
+
+        # 官方要求：ptrace 能力（注入 QQ）+ 放开 seccomp + 1G shm（QQ 基于 Chromium）
+        # 6081 是 noVNC 远程桌面（扫码用，可开公网，有随机密码）；5099 和 WS 只绑本机
+        docker run -d --name snowluma --restart unless-stopped \
+            --shm-size=1g --ulimit nofile=65536:1048576 \
+            --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+            -e SNOWLUMA_WEBUI_HOST=0.0.0.0 -e SNOWLUMA_WEBUI_PORT=5099 \
+            -e SNOWLUMA_QQ_FLAGS="--disable-gpu --disable-software-rasterizer --disable-gpu-compositing" \
+            -p 0.0.0.0:6081:6081 \
+            -p 127.0.0.1:5099:5099 \
+            -p "127.0.0.1:${WS_PORT}:3001" \
+            -v qq-gateway-data:/app/data \
+            -v qq-client-config:/app/.config \
+            -v qq-client-data:/app/.local/share \
+            "$SNOWLUMA_IMAGE" >/dev/null || die "SnowLuma 容器启动失败"
+        log "SnowLuma 已启动：noVNC 0.0.0.0:6081（扫码）、WebUI 127.0.0.1:5099、OneBot WS 127.0.0.1:${WS_PORT}"
+        log "远程桌面密码：docker logs snowluma 2>&1 | grep -E '远程桌面密码|remote desktop password' | tail -n 1"
+    fi
+    log "若机器人连不上：核对 .env 的 ONEBOT_TOKEN 与容器内 /app/data/config 里的 OneBot token 是否一致"
+fi
+
+# ---------- 6b. （可选·备选）NapCat：Linux 上的 QQ 登录 ----------
 if [ "$WITH_NAPCAT" = "1" ]; then
     # 先确认 .env 期望的 WS 端口：已经有 OneBot 在监听（现成的 NapCat / 其它实现）就跳过，
     # 绝不删除/重建用户已有的容器（那会连登录态和配置一起没了）。
@@ -243,9 +292,9 @@ cat <<EOF
 配置文件 : $ENV_LINE
 
 接下来还要做三件事：
- 1) 阿里云安全组放行 80 端口（面板）；端口只在系统防火墙/安全组里开，别把 3001/6099 开到公网
+ 1) 阿里云安全组放行 80 端口（面板）；3001 / 5099（NapCat 是 6099）不要开到公网，6081（noVNC 扫码）用完可关
  2) 编辑 .env：至少填 AI_API_KEY、MC_BRIDGE_SECRET（要用游戏桥的话）
- 3) 登录 QQ：$( [ "$WITH_NAPCAT" = "1" ] && echo 'docker logs -f napcat 看二维码扫码（WS 已在 onebot11.json 预开；NapCat 低于 4.5.3 时需在 WebUI 手动新建 WS 服务器 127.0.0.1:3001）' || echo '需要先装 NapCat（--with-napcat）或其它 OneBot11 实现，监听 127.0.0.1:3001' )
+ 3) 登录 QQ：$( if [ "$WITH_SNOWLUMA" = "1" ]; then echo '浏览器打开 http://<服务器IP>:6081 在远程桌面里扫码；密码见 docker logs snowluma 的「远程桌面密码」'; elif [ "$WITH_NAPCAT" = "1" ]; then echo 'docker logs -f napcat 看二维码扫码（WS 已在 onebot11.json 预开；NapCat 低于 4.5.3 时需在 WebUI 手动新建 WS 服务器 127.0.0.1:3001）'; else echo '已有 SnowLuma / NapCat 容器就直接用；没有就加 --with-snowluma（推荐）或 --with-napcat'; fi )
 
 改完配置重启：systemctl restart xiaona-bot
 拉取更新    ：sudo bash deploy/linux/update.sh

@@ -139,22 +139,26 @@ gradlew.bat build
 
 ### 3) Linux 服务器（Ubuntu / Debian）一键部署
 
-> **Linux 不能用 SnowLuma**：它靠注入桌面 `QQ.exe`，原生模块只有 `win32-x64`。服务器上改用 **NapCat（Docker 版 QQ NT）+ OneBot11**，机器人照旧连 `ws://127.0.0.1:3001`，其余功能完全一致。
+> **Linux 上的 QQ 登录**：SnowLuma 官方提供 Docker 镜像（内置 Linux QQ + Xvfb + noVNC），扫码后就是**真实 QQ**，和 Windows 用法一致；也可以用 NapCat（Docker 版 QQ NT）。机器人本身只当 OneBot11 客户端，连 `ws://127.0.0.1:3001`，两者都支持。
 
 ```bash
 git clone https://<token>@github.com/MaNing522/xiaona-bot.git /opt/xiaona-bot   # 私有仓库需带 token（或改用 deploy key）
 cd /opt/xiaona-bot
 
-sudo bash deploy/linux/install.sh                 # 机器人本体（systemd 常驻 + 开机自启）
-sudo bash deploy/linux/install.sh --with-napcat   # 顺带用 Docker 起 NapCat（扫码登录 QQ）
-sudo bash deploy/linux/install.sh --with-asr      # 顺带装本地语音识别 FunASR（约 1GB 模型）
+sudo bash deploy/linux/install.sh                    # 机器人本体（systemd 常驻 + 开机自启）
+sudo bash deploy/linux/install.sh --with-snowluma    # 顺带用 Docker 起 SnowLuma（推荐，扫码登录真实 QQ）
+sudo bash deploy/linux/install.sh --with-napcat      # 或用 NapCat（备选）
+sudo bash deploy/linux/install.sh --with-asr         # 顺带装本地语音识别 FunASR（约 1GB 模型）
 ```
 
-脚本会：装 Node `24.22.1`（跑 `npm install --omit=dev`，国内镜像）→ 生成/补齐 `.env`（面板密码随机生成）→ 写 `xiaona-bot.service` 并启动。重复执行是安全的。
+脚本会：装 Node `24.22.1`（跑 `npm install --omit=dev`，国内镜像）→ 生成/补齐 `.env`（面板密码随机生成）→ 写 `xiaona-bot.service` 并启动。重复执行是安全的；**已经有 SnowLuma / NapCat 容器（3001 已监听）时只启动、不删不改**，登录态和配置都保留。
 
-装完还要做三件事：阿里云安全组放行 **80**（面板，`3001`/`6099` 别开到公网）→ 编辑 `.env` 填 `AI_API_KEY` 等 → `docker logs -f napcat` 扫码登录 QQ。NapCat 的 WebUI 只监听本机，走 SSH 隧道：`ssh -L 6099:127.0.0.1:6099 root@<服务器IP>`，再开 `http://127.0.0.1:6099`。
+装完还要做三件事：阿里云安全组放行 **80**（面板）→ 编辑 `.env` 填 `AI_API_KEY` 等 → 登录 QQ。
 
-> `--with-napcat` 已把 OneBot 的 WS 预写进 `/opt/napcat/config/onebot11.json`（NapCat ≥ 4.5.3 登录后自动生效，`ONEBOT_TOKEN` 与 `.env` 一致），不用再去 WebUI 手工新建；更老的 NapCat 才需要手动加一个 WebSocket 服务器（`127.0.0.1:3001`、`array` 格式）。官方镜像里的 QQ NT 是 x86_64，**ARM 实例跑不了**（会给出提示）。**已有现成的 NapCat（容器或原生、3001 已监听）时脚本只跳过、不删不改**，登录态和配置都保留。
+- **SnowLuma**：浏览器开 `http://<服务器IP>:6081`（noVNC 远程桌面，随机密码见 `docker logs snowluma` 里的「远程桌面密码」），在桌面里扫码；WebUI 在 `127.0.0.1:5099`，走 SSH 隧道 `ssh -L 5099:127.0.0.1:5099 root@<服务器IP>`。**3001 / 5099 别开到公网，6081 用完可关**。
+- **NapCat**：`docker logs -f napcat` 看二维码扫码；WS 已预写进 `/opt/napcat/config/onebot11.json`（NapCat ≥ 4.5.3 登录即生效，`ONEBOT_TOKEN` 与 `.env` 一致），更老的版本才去 WebUI 手动加 WebSocket 服务器（`127.0.0.1:3001`、`array` 格式）。镜像里的 QQ NT 是 x86_64，**ARM 实例跑不了**（会给出提示）。
+
+> 机器人连不上时，先核对两边 token：`.env` 的 `ONEBOT_TOKEN` 与容器内 SnowLuma 的 `config/onebot*.json`（NapCat 是 `onebot11*.json`）里的 token 必须一致，空对空也算一致。
 
 日常运维：
 

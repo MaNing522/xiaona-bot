@@ -334,10 +334,10 @@ async function main() {
 
   // ---------- Linux：不碰桌面 QQ / SnowLuma ----------
   // SnowLuma 的注入模块只有 win32-x64 版本，Linux 上跑不起来；
-  // Linux 请先用 NapCat（Docker）等 OneBot11 实现监听同一个端口（见 deploy/linux/install.sh）。
+  // Linux 上 OneBot11 由 SnowLuma（官方 Docker 镜像）或 NapCat 提供，监听同一个端口（见 deploy/linux/install.sh）。
   if (!IS_WIN) {
-    console.log(`[启动器] Linux：跳过桌面 QQ / SnowLuma，等待 OneBot11 在 ${ONEBOT_WS} 就绪…`);
-    console.log('[启动器] 若还没起 OneBot，执行 sudo bash deploy/linux/install.sh --with-napcat');
+    console.log(`[启动器] Linux：跳过桌面 QQ / SnowLuma 拉起，等待 OneBot11 在 ${ONEBOT_WS} 就绪…`);
+    console.log('[启动器] 若还没有 OneBot：sudo bash deploy/linux/install.sh --with-snowluma（或 --with-napcat）');
     const bot = spawnBot();
     bot.on('exit', (code) => {
       console.log(`[启动器] 机器人已退出（code=${code}）`);
