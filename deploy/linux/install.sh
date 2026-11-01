@@ -135,30 +135,41 @@ log "服务已启动：systemctl status xiaona-bot"
 
 # ---------- 6. （可选）NapCat：Linux 上的 QQ 登录 ----------
 if [ "$WITH_NAPCAT" = "1" ]; then
-    if ! command -v docker >/dev/null 2>&1; then
-        log "安装 Docker…"
-        apt-get install -y docker.io || die "Docker 安装失败"
-    fi
-    systemctl enable --now docker
-
-    log "拉取 NapCat 镜像：$NAPCAT_IMAGE（国内可能较慢，可先配 Docker 镜像加速）…"
-    docker pull "$NAPCAT_IMAGE" || die "拉取镜像失败：请配置 Docker 加速器或手动 docker pull $NAPCAT_IMAGE"
-
-    if [ "$(uname -m)" = "aarch64" ]; then
-        warn "注意：NapCat 官方镜像里的 QQ NT 是 x86_64，ARM 实例上大概率起不来（可自行了解 box64 方案）"
-    fi
-
-    docker rm -f napcat >/dev/null 2>&1 || true
-    mkdir -p /opt/napcat/config /opt/napcat/qq
-
-    # 预写 NapCat 的 OneBot 默认配置（v4.5.3+ 支持 config/onebot11.json 作为任意账号的默认值）：
-    # 登录后自动开启正向 WS，省掉去 WebUI 手工「新建 WebSocket 服务器」这一步。
-    # 容器内必须绑 0.0.0.0（只对外暴露到宿主机 127.0.0.1），token 与 .env 的 ONEBOT_TOKEN 保持一致。
+    # 先确认 .env 期望的 WS 端口：已经有 OneBot 在监听（现成的 NapCat / 其它实现）就跳过，
+    # 绝不删除/重建用户已有的容器（那会连登录态和配置一起没了）。
     WS_URL="$(grep -E '^ONEBOT_WS=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\r')"
     WS_PORT=3001
     if [[ "$WS_URL" =~ :([0-9]+) ]]; then WS_PORT="${BASH_REMATCH[1]}"; fi
     ONE_TOKEN="$(grep -E '^ONEBOT_TOKEN=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\r')"
-    ONE_TOKEN="$ONE_TOKEN" ONE_PORT="$WS_PORT" node -e '
+
+    if (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -qE ":${WS_PORT}([[:space:]]|$)"; then
+        log "检测到 ${WS_PORT} 端口已有 OneBot 在监听，跳过 NapCat 部署（直接用现成的）"
+        log "若机器人连不上：确认它监听 127.0.0.1:${WS_PORT}，且 token 与 .env 的 ONEBOT_TOKEN 一致"
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx napcat; then
+        # 已有同名容器：保留原配置与登录态，只确保它在运行
+        docker start napcat >/dev/null 2>&1 \
+            && log "已启动已有的 napcat 容器（未改动其配置；确认映射到 127.0.0.1:${WS_PORT}）" \
+            || warn "napcat 容器启动失败，请手动看 docker logs napcat"
+    else
+        if ! command -v docker >/dev/null 2>&1; then
+            log "安装 Docker…"
+            apt-get install -y docker.io || die "Docker 安装失败"
+        fi
+        systemctl enable --now docker
+
+        log "拉取 NapCat 镜像：$NAPCAT_IMAGE（国内可能较慢，可先配 Docker 镜像加速）…"
+        docker pull "$NAPCAT_IMAGE" || die "拉取镜像失败：请配置 Docker 加速器或手动 docker pull $NAPCAT_IMAGE"
+
+        if [ "$(uname -m)" = "aarch64" ]; then
+            warn "注意：NapCat 官方镜像里的 QQ NT 是 x86_64，ARM 实例上大概率起不来（可自行了解 box64 方案）"
+        fi
+
+        mkdir -p /opt/napcat/config /opt/napcat/qq
+
+        # 预写 NapCat 的 OneBot 默认配置（v4.5.3+ 支持 config/onebot11.json 作为任意账号的默认值）：
+        # 登录后自动开启正向 WS，省掉去 WebUI 手工「新建 WebSocket 服务器」这一步。
+        # 容器内必须绑 0.0.0.0（只对外暴露到宿主机 127.0.0.1），token 与 .env 的 ONEBOT_TOKEN 保持一致。
+        ONE_TOKEN="$ONE_TOKEN" ONE_PORT="$WS_PORT" node -e '
 const fs = require("fs");
 const cfg = {
   network: {
@@ -184,16 +195,17 @@ const cfg = {
 };
 fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2));
 ' /opt/napcat/config/onebot11.json
-    log "已预写 NapCat OneBot 配置（WS 0.0.0.0:${WS_PORT} → 宿主机 127.0.0.1:${WS_PORT}）"
+        log "已预写 NapCat OneBot 配置（WS 0.0.0.0:${WS_PORT} → 宿主机 127.0.0.1:${WS_PORT}）"
 
-    # 只绑定 127.0.0.1：WS 给本机机器人用，WebUI 走 SSH 隧道，避免把 QQ 登录口暴露到公网
-    docker run -d --name napcat --restart unless-stopped \
-        -p 127.0.0.1:3001:3001 -p 127.0.0.1:6099:6099 \
-        -e NAPCAT_UID=0 -e NAPCAT_GID=0 \
-        -v /opt/napcat/config:/app/napcat/config \
-        -v /opt/napcat/qq:/app/.config/QQ \
-        "$NAPCAT_IMAGE" >/dev/null || die "NapCat 容器启动失败"
-    log "NapCat 已启动（容器名 napcat，WS 127.0.0.1:3001，WebUI 127.0.0.1:6099）"
+        # 只绑定 127.0.0.1：WS 给本机机器人用，WebUI 走 SSH 隧道，避免把 QQ 登录口暴露到公网
+        docker run -d --name napcat --restart unless-stopped \
+            -p "127.0.0.1:${WS_PORT}:${WS_PORT}" -p 127.0.0.1:6099:6099 \
+            -e NAPCAT_UID=0 -e NAPCAT_GID=0 \
+            -v /opt/napcat/config:/app/napcat/config \
+            -v /opt/napcat/qq:/app/.config/QQ \
+            "$NAPCAT_IMAGE" >/dev/null || die "NapCat 容器启动失败"
+        log "NapCat 已启动（容器名 napcat，WS 127.0.0.1:${WS_PORT}，WebUI 127.0.0.1:6099）"
+    fi
 fi
 
 # ---------- 7. （可选）FunASR 本地语音识别 ----------

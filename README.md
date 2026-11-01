@@ -154,7 +154,7 @@ sudo bash deploy/linux/install.sh --with-asr      # 顺带装本地语音识别 
 
 装完还要做三件事：阿里云安全组放行 **80**（面板，`3001`/`6099` 别开到公网）→ 编辑 `.env` 填 `AI_API_KEY` 等 → `docker logs -f napcat` 扫码登录 QQ。NapCat 的 WebUI 只监听本机，走 SSH 隧道：`ssh -L 6099:127.0.0.1:6099 root@<服务器IP>`，再开 `http://127.0.0.1:6099`。
 
-> `--with-napcat` 已把 OneBot 的 WS 预写进 `/opt/napcat/config/onebot11.json`（NapCat ≥ 4.5.3 登录后自动生效，`ONEBOT_TOKEN` 与 `.env` 一致），不用再去 WebUI 手工新建；更老的 NapCat 才需要手动加一个 WebSocket 服务器（`127.0.0.1:3001`、`array` 格式）。官方镜像里的 QQ NT 是 x86_64，**ARM 实例跑不了**（会给出提示）。
+> `--with-napcat` 已把 OneBot 的 WS 预写进 `/opt/napcat/config/onebot11.json`（NapCat ≥ 4.5.3 登录后自动生效，`ONEBOT_TOKEN` 与 `.env` 一致），不用再去 WebUI 手工新建；更老的 NapCat 才需要手动加一个 WebSocket 服务器（`127.0.0.1:3001`、`array` 格式）。官方镜像里的 QQ NT 是 x86_64，**ARM 实例跑不了**（会给出提示）。**已有现成的 NapCat（容器或原生、3001 已监听）时脚本只跳过、不删不改**，登录态和配置都保留。
 
 日常运维：
 
