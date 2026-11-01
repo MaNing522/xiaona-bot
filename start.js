@@ -20,6 +20,10 @@ import { writeJsonAtomic } from './src/datafile.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 
+// Windows 用 SnowLuma（注入桌面 QQ.exe）；Linux 上没有桌面 QQ，改用 NapCat 等
+// 外部 OneBot11 实现，启动器只负责拉起机器人（和本地语音识别）
+const IS_WIN = process.platform === 'win32';
+
 // ---------- SnowLuma / OneBot 连接参数 ----------
 const SNOWLUMA_DIR = path.join(__dirname, 'snowluma');
 const SNOWLUMA_ENTRY = path.join(SNOWLUMA_DIR, 'index.mjs');
@@ -269,9 +273,12 @@ async function ensureAsrService() {
     asrLog(`语音识别服务已在运行（127.0.0.1:${port}）`);
     return null;
   }
-  const exe = path.join(__dirname, 'asr-venv', 'Scripts', 'funasr-server.exe');
+  // Windows 的 venv 脚本在 Scripts\，Linux 在 bin/
+  const exe = IS_WIN
+    ? path.join(__dirname, 'asr-venv', 'Scripts', 'funasr-server.exe')
+    : path.join(__dirname, 'asr-venv', 'bin', 'funasr-server');
   if (!fs.existsSync(exe)) {
-    asrLog('未找到本地语音识别服务（asr-venv\\Scripts\\funasr-server.exe），语音消息将只显示 [语音]');
+    asrLog(`未找到本地语音识别服务（${path.relative(__dirname, exe)}），语音消息将只显示 [语音]`);
     return null;
   }
   asrLog(`启动本地语音识别服务（FunASR SenseVoice，端口 ${port}），模型加载需要十几秒...`);
@@ -319,16 +326,36 @@ function linkExit(bot, snowluma) {
 
 async function main() {
   console.log('==========================================');
-  console.log('     小钠 QQ 机器人 · 启动器（SnowLuma）');
+  console.log('     小钠 QQ 机器人 · 启动器' + (IS_WIN ? '（SnowLuma）' : '（Linux）'));
   console.log('==========================================');
+
+  // 语音识别服务模型加载十几秒，先异步拉起来，不阻塞 QQ / 机器人
+  ensureAsrService().catch(() => {});
+
+  // ---------- Linux：不碰桌面 QQ / SnowLuma ----------
+  // SnowLuma 的注入模块只有 win32-x64 版本，Linux 上跑不起来；
+  // Linux 请先用 NapCat（Docker）等 OneBot11 实现监听同一个端口（见 deploy/linux/install.sh）。
+  if (!IS_WIN) {
+    console.log(`[启动器] Linux：跳过桌面 QQ / SnowLuma，等待 OneBot11 在 ${ONEBOT_WS} 就绪…`);
+    console.log('[启动器] 若还没起 OneBot，执行 sudo bash deploy/linux/install.sh --with-napcat');
+    const bot = spawnBot();
+    bot.on('exit', (code) => {
+      console.log(`[启动器] 机器人已退出（code=${code}）`);
+      process.exit(code || 0);
+    });
+    try {
+      await waitPort(WS_PORT, 180000);
+      console.log(`[启动器] OneBot WS 端口 ${WS_PORT} 已就绪。`);
+    } catch {
+      console.log('[启动器] 等待 OneBot WS 超时（QQ 可能还没扫码登录），机器人会继续自动重连。');
+    }
+    return;
+  }
 
   if (!fs.existsSync(SNOWLUMA_ENTRY)) {
     console.error(`[启动器] 缺少 ${SNOWLUMA_ENTRY}，请先下载 SnowLuma 并放到项目根的 snowluma/ 目录。`);
     process.exit(1);
   }
-
-  // 语音识别服务模型加载十几秒，先异步拉起来，不阻塞 QQ / 机器人
-  ensureAsrService().catch(() => {});
 
   ensureOneBotConfig();
   await ensureQQ();

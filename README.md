@@ -100,7 +100,7 @@ QQBot/
 
 | 组件 | 要求 |
 |---|---|
-| 系统 | Windows 10 / 11 |
+| 系统 | Windows 10 / 11（机器人本体）；Linux（Ubuntu/Debian）见 `deploy/linux/install.sh`，QQ 登录用 NapCat 而非 SnowLuma |
 | 运行时 | **Node.js ≥ 24.22.1**（SnowLuma 2.1.1 要求 `^24.22.1 \|\| >=26.12.1`；记忆存储用内置 `node:sqlite`，无需编译原生依赖） |
 | QQ | 一个真实 QQ 账号（作机器人）+ 桌面 QQ 客户端；SnowLuma 自备 |
 | 服务端桥 | Java 21 · Fabric Loader ≥ 0.18.1 · Fabric API · Minecraft 1.21.11 |
@@ -136,6 +136,35 @@ gradlew.bat build
 产物在 `xiaona-mod/build/libs/xiaona-mod-<版本>.jar`，连同 **Fabric API** 一起放进服务端 `mods/`。
 
 首次启动会生成 `config/xiaona/config.json`，把其中的 `bridge.secret` 填成与 `.env` 的 **`MC_BRIDGE_SECRET` 完全一致**（且 ≥ 32 位；不填则桥拒绝启动）。
+
+### 3) Linux 服务器（Ubuntu / Debian）一键部署
+
+> **Linux 不能用 SnowLuma**：它靠注入桌面 `QQ.exe`，原生模块只有 `win32-x64`。服务器上改用 **NapCat（Docker 版 QQ NT）+ OneBot11**，机器人照旧连 `ws://127.0.0.1:3001`，其余功能完全一致。
+
+```bash
+git clone https://<token>@github.com/MaNing522/xiaona-bot.git /opt/xiaona-bot   # 私有仓库需带 token（或改用 deploy key）
+cd /opt/xiaona-bot
+
+sudo bash deploy/linux/install.sh                 # 机器人本体（systemd 常驻 + 开机自启）
+sudo bash deploy/linux/install.sh --with-napcat   # 顺带用 Docker 起 NapCat（扫码登录 QQ）
+sudo bash deploy/linux/install.sh --with-asr      # 顺带装本地语音识别 FunASR（约 1GB 模型）
+```
+
+脚本会：装 Node `24.22.1`（跑 `npm install --omit=dev`，国内镜像）→ 生成/补齐 `.env`（面板密码随机生成）→ 写 `xiaona-bot.service` 并启动。重复执行是安全的。
+
+装完还要做三件事：阿里云安全组放行 **80**（面板，`3001`/`6099` 别开到公网）→ 编辑 `.env` 填 `AI_API_KEY` 等 → `docker logs -f napcat` 扫码登录 QQ。NapCat 的 WebUI 只监听本机，走 SSH 隧道：`ssh -L 6099:127.0.0.1:6099 root@<服务器IP>`，再开 `http://127.0.0.1:6099`。
+
+> `--with-napcat` 已把 OneBot 的 WS 预写进 `/opt/napcat/config/onebot11.json`（NapCat ≥ 4.5.3 登录后自动生效，`ONEBOT_TOKEN` 与 `.env` 一致），不用再去 WebUI 手工新建；更老的 NapCat 才需要手动加一个 WebSocket 服务器（`127.0.0.1:3001`、`array` 格式）。官方镜像里的 QQ NT 是 x86_64，**ARM 实例跑不了**（会给出提示）。
+
+日常运维：
+
+```bash
+systemctl restart xiaona-bot          # 重启（改完 .env / config.json 后）
+journalctl -u xiaona-bot -f           # 实时日志（文件日志在 logs/YYYY-MM-DD.log）
+sudo bash deploy/linux/update.sh      # 拉代码 + 补依赖 + 重启
+```
+
+Linux 上的差异：`#截图`（本机屏幕）不可用（服务器没有桌面，会提示改用 `#shot <网址>`）；`#shot` 需要 `chromium`；`#换头像` 的图片裁剪由 ImageMagick 完成（install.sh 已装）；`push.bat` / `restart.bat` / `启动.bat` 是 Windows 专用，Linux 用 systemd 与 `update.sh`。
 
 ---
 

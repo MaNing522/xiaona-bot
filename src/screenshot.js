@@ -1,15 +1,31 @@
 // ============================================================
 // screenshot.js - 本机屏幕截图 + 指定网址截图
 // ============================================================
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 
+const IS_WIN = process.platform === 'win32';
+
+// Windows 用 Edge；Linux 服务器用 Chrome / Chromium（装了哪个用哪个）
 const EDGE_CANDIDATES = [
     'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
 ];
+const LINUX_BROWSERS = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge'];
+
+/** 找一个能用来做网址截图的浏览器；找不到返回 '' */
+function findBrowser() {
+    if (IS_WIN) return EDGE_CANDIDATES.find((p) => fs.existsSync(p)) || '';
+    for (const name of LINUX_BROWSERS) {
+        try {
+            execFileSync('which', [name], { stdio: 'ignore', timeout: 3000 });
+            return name;
+        } catch { /* 换下一个 */ }
+    }
+    return '';
+}
 
 function run(cmd, args, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -34,6 +50,8 @@ function uniqueName(dir, ext) {
 
 // 截取本机主屏幕（DPI 感知 + 超大图等比缩小，避免尺寸错误）
 export async function captureScreen(saveDir) {
+    // 服务器（Linux）一般没有桌面环境：截图必然失败，直接给一句人话，别抛 PowerShell 的报错
+    if (!IS_WIN) throw new Error('当前系统没有可截取的桌面（服务器无桌面环境），请改用 #shot <网址>');
     const out = uniqueName(path.resolve(saveDir), '.png');
     const ps = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -65,14 +83,16 @@ $g.Dispose(); $bmp.Dispose()
     return out;
 }
 
-// 用 Edge 无头模式给网址截图
+// 用浏览器无头模式给网址截图
 export async function captureUrl(url, saveDir) {
-    const edge = EDGE_CANDIDATES.find((p) => fs.existsSync(p));
-    if (!edge) throw new Error('未找到 Edge，无法进行网址截图');
+    const browser = findBrowser();
+    if (!browser) throw new Error(IS_WIN ? '未找到 Edge，无法进行网址截图'
+        : '未找到 Chrome/Chromium，无法进行网址截图（apt install -y chromium-browser）');
     const out = uniqueName(path.resolve(saveDir), '.png');
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-edge-'));
-    await run(edge, [
-        '--headless', '--disable-gpu', '--no-first-run',
+    // Linux 上通常以 root 跑（systemd），Chrome 必须加 --no-sandbox 才肯启动
+    await run(browser, [
+        '--headless', '--disable-gpu', '--no-first-run', '--no-sandbox',
         '--disable-features=msEdgeFirstRunExperience',
         `--user-data-dir=${profile}`, '--window-size=1280,800',
         `--screenshot=${out}`, url,
@@ -80,11 +100,34 @@ export async function captureUrl(url, saveDir) {
     return out;
 }
 
+/** 找 ImageMagick 的命令（Linux 上用来裁剪头像；Windows 走 PowerShell） */
+function findMagick() {
+    for (const [bin, args] of [['magick', ['-version']], ['convert', ['-version']], ['gm', ['version']]]) {
+        try {
+            execFileSync(bin, args, { stdio: 'ignore', timeout: 3000 });
+            return bin;
+        } catch { /* 换下一个 */ }
+    }
+    return '';
+}
+
 // 居中裁剪为正方形（QQ 头像要求），输出 PNG；outPath 提供时写入该路径（用于缓存复用）
 export async function cropSquare(srcPath, outDir, outPath = null) {
     const out = outPath || uniqueName(path.resolve(outDir), '.png');
     if (outPath && fs.existsSync(outPath)) return outPath;
     if (outPath) fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    // Linux 没有 System.Drawing，用 ImageMagick 做同样的居中裁剪
+    if (!IS_WIN) {
+        const magick = findMagick();
+        if (!magick) throw new Error('服务器换头像需要 ImageMagick（apt install -y imagemagick）');
+        const prefix = magick === 'gm' ? ['convert'] : [];
+        const dims = execFileSync(magick, [...prefix, 'identify', '-format', '%w %h', srcPath], { encoding: 'utf8' });
+        const [w, h] = dims.trim().split(/\s+/).map(Number);
+        if (!w || !h) throw new Error('读取图片尺寸失败');
+        const size = Math.min(w, h);
+        execFileSync(magick, [...prefix, 'convert', srcPath, '-gravity', 'center', '-crop', `${size}x${size}+0+0`, '+repage', out]);
+        return out;
+    }
     const safeSrc = String(srcPath).replace(/'/g, "''");
     const safeOut = out.replace(/'/g, "''");
     const ps = `
