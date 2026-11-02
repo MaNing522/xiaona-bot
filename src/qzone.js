@@ -406,6 +406,7 @@ async function checkComments(q, now) {
       detail = await fetchPostDetail(p.tid);
     } catch (e) {
       errors.push(`${p.tid}：${e.message}`);
+      if (errors.length >= 2) break;   // 连续失败多半是登录态问题，别再逐条打接口
       continue;
     }
     const all = flattenComments(detail.comments);
