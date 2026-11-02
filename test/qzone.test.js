@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { randomDelayMs, normalizeQzone, qzoneStatus, postQzoneNow } from '../src/qzone.js';
+import { randomDelayMs, normalizeQzone, qzoneStatus, postQzoneNow, flattenComments, pickNewComments } from '../src/qzone.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -37,5 +37,46 @@ describe('QQ 空间自动说说', () => {
 
   it('未初始化时手动发布给出明确错误', async () => {
     await expect(postQzoneNow()).rejects.toThrow('机器人未连接');
+  });
+
+  it('评论拍平：一级评论带昵称，二级回复标注回复谁，空内容剔除', () => {
+    const list = flattenComments([
+      {
+        comment_id: 'c1',
+        uin: 111,
+        name: '阿伟',
+        content: '真好听\n我也想唱',
+        replies: [{ comment_id: 'r1', uin: 222, name: '小美', content: '那就来啊' }],
+      },
+      { comment_id: 'c2', uin: 999, name: '小钠', content: '自己接一句' },
+      { comment_id: 'c3', uin: 333, name: '', content: '   ' },
+      null,
+    ]);
+    expect(list).toHaveLength(4);
+    expect(list[0]).toMatchObject({ id: 'c1', uin: '111', name: '阿伟', content: '真好听 我也想唱', replyTo: '' });
+    expect(list[1]).toMatchObject({ id: 'c1/r1', uin: '222', name: '小美', content: '那就来啊', replyTo: '阿伟' });
+    expect(list[2]).toMatchObject({ id: 'c2', uin: '999', name: '小钠', replyTo: '' });
+    expect(list[3]).toMatchObject({ id: 'c3', name: '好友', content: '' });
+    expect(flattenComments(null)).toEqual([]);
+  });
+
+  it('挑新评论：剔除自己的评论、已知 id 和空内容', () => {
+    const detail = [
+      {
+        comment_id: 'c1',
+        uin: 111,
+        name: '阿伟',
+        content: '真好听',
+        replies: [{ comment_id: 'r1', uin: 222, name: '小美', content: '那就来啊' }],
+      },
+      { comment_id: 'c2', uin: 999, name: '小钠', content: '自己接一句' },
+      { comment_id: 'c3', uin: 333, name: '路人', content: '   ' },
+    ];
+    const fresh = pickNewComments(detail, '999', new Set(['c1']));
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toMatchObject({ id: 'c1/r1', name: '小美', replyTo: '阿伟' });
+    // knownIds 传数组也照常处理
+    expect(pickNewComments(detail, '999', ['c1', 'c1/r1'])).toEqual([]);
+    expect(pickNewComments(null, '999', [])).toEqual([]);
   });
 });

@@ -2,7 +2,8 @@
 // qzone.js - QQ 空间自动说说（随机间隔 + 自评 + 回复评论）
 //
 // 依赖 SnowLuma 的 qzone 扩展动作：
-//   send_qzone_msg / get_qzone_msg_list / comment_qzone
+//   get_qzone_msg_list（列说说）/ get_qzone_msg_detail（读评论，含评论人昵称）
+// 发布与评论走自建 CGI（SnowLuma 的 send_qzone_msg / comment_qzone 缺 qzone_check，会报 -3000）
 //
 // 参数全部来自 config.json 的 qzone 段（网页「全局设置」可改，热加载生效）。
 // 调度状态落盘到 data/qzone.json，重启不会重置下次发布时间。
@@ -18,6 +19,9 @@ const MINUTE_MS = 60 * 1000;
 const RETRY_MS = 30 * MINUTE_MS;
 const REPLY_COOLDOWN_MS = 60 * MINUTE_MS;
 const MAX_POSTS = 30;
+const CHECK_POSTS = 5;          // 每次最多查最近几条说说的评论（详情是逐条请求，别一次查 30 条）
+const MAX_COMMENT_IDS = 80;     // 每条说说记住的评论 id 上限
+const PROMPT_COMMENTS = 4;      // 喂给 AI 的评论条数上限
 const AUTH_TTL_MS = 5 * MINUTE_MS;
 const AUTH_ERROR_RETRY_MS = 6 * 60 * MINUTE_MS;
 const QZONE_API = 'https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin';
@@ -260,20 +264,70 @@ async function genPost(q) {
 
 async function genSelfComment(q, postContent) {
   const prompt = [
-    '你刚在 QQ 空间发了这条说说：',
+    '你（小钠）刚在 QQ 空间发了这条说说（这条说说是你自己发的）：',
     `「${postContent}」`,
     '现在给自己补一条评论，像朋友接话一样补充一句，口语化，不要提你是机器人，不要加引号。只输出评论。',
   ].join('\n');
   return aiText(prompt, Math.min(q.maxLength, 80));
 }
 
-async function genReply(q, postContent, newCount) {
+/** 评论内容清洗：压成一行、截断，避免把整段长评塞进提示词 */
+function cleanComment(text, max) {
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/**
+ * 把说说详情里的评论拍平：一级评论 + 内联二级回复（二级回复标注回复的是谁）。
+ * SnowLuma 的 get_qzone_msg_detail 返回 { comment_id, uin, name, content, replies }。
+ */
+export function flattenComments(comments) {
+  const out = [];
+  for (const c of Array.isArray(comments) ? comments : []) {
+    if (!c) continue;
+    const name = cleanComment(c.name, 20) || '好友';
+    const pid = String(c.comment_id || '');
+    out.push({
+      id: pid,
+      uin: String(c.uin || ''),
+      name,
+      content: cleanComment(c.content, 80),
+      replyTo: '',
+    });
+    for (const r of Array.isArray(c.replies) ? c.replies : []) {
+      if (!r) continue;
+      out.push({
+        // 二级回复的 comment_id 只在父评论内唯一，加父 id 前缀避免和一级评论撞号
+        id: `${pid}/${String(r.comment_id || '')}`,
+        uin: String(r.uin || ''),
+        name: cleanComment(r.name, 20) || '好友',
+        content: cleanComment(r.content, 80),
+        replyTo: name,
+      });
+    }
+  }
+  return out;
+}
+
+/** 挑出「没见过、且不是机器人自己发的」评论（AI 之前完全不知道评论人是谁） */
+export function pickNewComments(comments, selfUin, knownIds) {
+  const known = knownIds instanceof Set ? knownIds : new Set((knownIds || []).map(String));
+  const me = String(selfUin || '');
+  return flattenComments(comments).filter((c) => c.content && (!me || c.uin !== me) && !known.has(c.id));
+}
+
+async function genReply(q, postContent, comments) {
+  const cap = Math.min(q.maxLength, 80);
+  const lines = comments.slice(0, PROMPT_COMMENTS).map((c) => `- ${c.name}${c.replyTo ? `（回复 ${c.replyTo}）` : ''}：${c.content}`);
   const prompt = [
-    '你在 QQ 空间发了这条说说：',
+    '你在 QQ 空间发过这条说说（这条说说是你自己发的，不是别人转发的）：',
     `「${postContent}」`,
-    `这条说说刚多了 ${newCount} 条评论。写一句友善的回应（感谢、接话或卖萌），1 句，口语化，不要提你是机器人，不要加引号。只输出评论。`,
+    '最近有好友在下面评论：',
+    ...lines,
+    `请写一条回应：可以点名回应（用对方昵称），1~2 句，口语化，不超过 ${cap} 字。`,
+    '不要说「这是谁发的」「不知道是谁发的」这类话；不要提你是 AI 或机器人，不要加引号。只输出评论正文。',
   ].join('\n');
-  return aiText(prompt, Math.min(q.maxLength, 80));
+  return aiText(prompt, cap);
 }
 
 async function publishPost(q, now) {
@@ -308,41 +362,85 @@ async function publishPost(q, now) {
   return { tid, content };
 }
 
+/** 读某条说说的详情（get_qzone_msg_detail 带评论人昵称与内容） */
+async function fetchPostDetail(tid) {
+  if (!callApi) throw new Error('机器人未连接 SnowLuma');
+  const r = await callApi('get_qzone_msg_detail', { tid, pos: 0, num: 30 });
+  const comments = Array.isArray(r && r.comments) ? r.comments : [];
+  const n = Number(r && r.comment_num);
+  return { comments, commentNum: Number.isFinite(n) ? n : flattenComments(comments).length };
+}
+
+let selfUinCache = '';
+async function selfUin() {
+  if (selfUinCache) return selfUinCache;
+  if (!callApi) throw new Error('机器人未连接 SnowLuma');
+  const r = await callApi('get_login_info', {});
+  const uin = String((r && r.user_id) || '');
+  if (!uin) throw new Error('拿不到机器人 QQ 号');
+  selfUinCache = uin;
+  return uin;
+}
+
+/** 把这次看到的评论 id 记进说说，只留最近 MAX_COMMENT_IDS 条 */
+function mergeKnownIds(p, all) {
+  const set = new Set(Array.isArray(p.knownIds) ? p.knownIds.map(String) : []);
+  for (const c of all) if (c.id) set.add(c.id);
+  p.knownIds = [...set].slice(-MAX_COMMENT_IDS);
+}
+
 async function checkComments(q, now) {
-  let r;
+  let myUin = '';
   try {
-    r = await callApi('get_qzone_msg_list', { pos: 0, num: 30 });
+    myUin = await selfUin();
   } catch (e) {
-    state.lastCheckAt = now;
-    state.lastError = e.message;
-    save();
-    logger.warn('[空间] 读取说说列表失败:', e.message);
-    return;
+    logger.warn('[空间] 取机器人 QQ 号失败，判断自己评论时按空号处理:', e.message);
   }
-  const list = Array.isArray(r && r.msglist) ? r.msglist : [];
-  const byTid = new Map(list.map((x) => [String(x && x.tid), x]));
+
   let replied = 0;
-  for (const p of state.posts) {
-    const item = byTid.get(String(p.tid));
-    if (!item) continue;
-    const n = Number(item.comment_num) || 0;
-    if (n < p.knownComments) p.knownComments = n;
-    const external = n - p.knownComments;
-    if (external <= 0) continue;
-    if (now - Number(p.lastReplyAt || 0) < REPLY_COOLDOWN_MS) continue;
+  const errors = [];
+  // 只查最近几条说说：详情接口是逐条请求，一次查 30 条会被风控
+  for (const p of state.posts.slice(0, CHECK_POSTS)) {
+    let detail;
     try {
-      const text = await genReply(q, p.content, external);
+      detail = await fetchPostDetail(p.tid);
+    } catch (e) {
+      errors.push(`${p.tid}：${e.message}`);
+      continue;
+    }
+    const all = flattenComments(detail.comments);
+    const firstLook = !Array.isArray(p.knownIds);
+    // 旧数据没有评论 id：按条数差推断「上次之后新来的」，只回一次，避免升级后把历史评论全回一遍
+    const others = all.filter((c) => c.content && (!myUin || c.uin !== myUin));
+    const extra = detail.commentNum - Number(p.knownComments || 0);
+    const fresh = firstLook
+      ? (extra > 0 ? others.slice(-extra) : [])
+      : pickNewComments(detail.comments, myUin, p.knownIds);
+
+    if (!fresh.length) {
+      mergeKnownIds(p, all);
+      p.knownComments = detail.commentNum;
+      continue;
+    }
+    if (now - Number(p.lastReplyAt || 0) < REPLY_COOLDOWN_MS) continue;   // 冷却中不记 id，攒到冷却结束一起回
+
+    try {
+      const text = await genReply(q, p.content, fresh);
       await commentViaQzone(p.tid, text);
-      p.knownComments = n + 1;   // 自己这条回复也会 +1
+      mergeKnownIds(p, all);
+      p.knownComments = detail.commentNum + 1;   // 自己这条回复也算一条
       p.lastReplyAt = now;
       replied += 1;
+      logger.info(`[空间] 回复 ${p.tid} 下的 ${fresh.length} 条评论（${fresh.map((c) => c.name).join('、')}）`);
     } catch (e) {
       logger.warn('[空间] 回复评论失败:', e.message);
     }
   }
   state.lastCheckAt = now;
+  if (errors.length) state.lastError = `读取评论详情失败：${errors[0]}`;
   save();
   if (replied) logger.info(`[空间] 已在 ${replied} 条说说下回复评论`);
+  if (errors.length) logger.warn(`[空间] ${errors.length} 条说说的评论详情读取失败：${errors.join('；')}`);
 }
 
 /** 初始化调度（由 index.js 传入 callApi / 存档目录 / 连接状态） */
