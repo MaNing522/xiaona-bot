@@ -385,6 +385,7 @@ button:disabled{opacity:.6;cursor:default}
   <button id="b">登录</button>
   <div class="err" id="e">${msg}</div>
   <a class="alt" href="/trial">🧪 先试用一下（无需登录）</a>
+  <a class="alt" href="/">← 返回首页</a>
 </form>
 <script>
 var $ = function (i) { return document.getElementById(i); };
@@ -407,7 +408,7 @@ $('f').onsubmit = function (ev) {
     if (xhr.readyState !== 4) return;
     var j = {};
     try { j = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-    if (xhr.status >= 200 && xhr.status < 300 && j.ok) { location.reload(); return; }
+    if (xhr.status >= 200 && xhr.status < 300 && j.ok) { location.href = '/'; return; }
     $('e').textContent = j.error || ('登录失败（HTTP ' + xhr.status + '）');
     if (j.captchaRequired) showCaptcha(true);
     $('b').disabled = false; $('c').value = ''; $('p').value = '';
@@ -462,7 +463,7 @@ button:disabled{opacity:.6;cursor:default}
   <div class="head">
     <div class="logo">🤖</div>
     <div><h1>小钠 · 私聊试用</h1><div class="sub">发消息看看小钠怎么回</div></div>
-    <div class="who">你是 小锂 · 普通用户 · <a href="/">登录面板</a></div>
+    <div class="who">你是 小锂 · 普通用户 · <a href="/login">登录面板</a></div>
   </div>
   <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。登录面板后会以所有者身份试用。</div></div>
   <div class="foot">
@@ -650,13 +651,21 @@ async function route(req, res, url) {
   // 健康检查：放在一切鉴权之前（探活工具不该需要登录），且不返回任何敏感信息
   if (url.pathname === '/health') return handleHealth(res);
 
+  // 主页：面板外壳对所有访客开放（数据接口仍需登录），登录入口在顶栏右上角
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    // 未登录只给登录页，真实面板不落给未认证的人
-    if (!authed(req)) return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
     if (!fs.existsSync(WEB_DIR)) return sendJSON(res, 500, { error: '缺少 web/index.html' });
     const html = fs.readFileSync(WEB_DIR);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(html);
+  }
+
+  // 登录页单独一个地址；已登录访问时直接回主页
+  if (url.pathname === '/login' || url.pathname === '/login.html') {
+    if (authed(req)) {
+      res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
   }
 
   // 试用页：登录前也能用（普通用户身份）；登录后再打开会按所有者身份跑

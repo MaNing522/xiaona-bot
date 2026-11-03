@@ -63,6 +63,16 @@ h1{font-size:17px;margin:0}
   padding:14px 20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .topbar .tb-title{font-size:16px;font-weight:600}
 .topbar .tb-sub{color:var(--sub);font-size:12.5px}
+.topbar .tb-right{display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0}
+.topbar .tb-right .tb-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 顶栏右上角：未登录是「登录」入口，登录后变成「退出登录」 */
+.tb-auth{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 14px;
+  border:1px solid var(--accent);border-radius:8px;background:var(--card);color:var(--accent);
+  font-size:13.5px;font-weight:500;text-decoration:none;cursor:pointer;transition:.15s}
+.tb-auth:hover{background:#e6f4ff}
+.tb-auth.on{color:var(--sub);border-color:#d9d9d9}
+.tb-auth.on:hover{color:var(--danger);border-color:var(--danger);background:var(--card)}
+@media (max-width:520px){.topbar{flex-wrap:wrap}.topbar .tb-right{width:100%;justify-content:space-between}}
 .panel{display:none}
 .panel.active{display:grid;grid-template-columns:1fr;gap:16px}
 @media (min-width:1100px){.panel.active{grid-template-columns:1fr 1fr}}
@@ -180,21 +190,6 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 </style>
 </head>
 <body>
-<script>
-// 会话过期/被登出时，任何接口都会回 401 —— 直接回登录页，避免面板卡在报错
-(function () {
-  const _f = window.fetch;
-  window.fetch = async function (...a) {
-    const r = await _f(...a);
-    if (r.status === 401) location.reload();
-    return r;
-  };
-  document.addEventListener('DOMContentLoaded', () => {
-    const b = document.getElementById('logoutBtn');
-    if (b) b.onclick = async () => { try { await _f('/api/logout', { method: 'POST' }); } catch {} location.reload(); };
-  });
-})();
-</script>
 <div class="app">
   <aside class="side">
     <div class="brand">
@@ -221,14 +216,16 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
         <span class="pill" id="lvLogin">—</span>
         <span class="pill" id="lvAuth">—</span>
       </div>
-      <button class="btn ghost" id="logoutBtn" style="min-height:46px;font-size:15px;margin-top:0">退出登录</button>
     </div>
   </aside>
 
   <main class="main">
     <header class="topbar">
       <div class="tb-title" id="tbTitle">连接状态</div>
-      <div class="tb-sub" id="tbSub">小钠控制面板</div>
+      <div class="tb-right">
+        <span class="tb-sub" id="tbSub">小钠控制面板</span>
+        <a class="tb-auth" id="authBtn" href="/login">登录</a>
+      </div>
     </header>
     <div class="grid" id="main">
       <!-- 连接状态 -->
@@ -424,8 +421,27 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 
 <script>
 const $=(id)=>document.getElementById(id);
+// 登录态：null 未知 / true 已登录 / false 未登录。
+// 未登录时主页照常打开（登录入口在顶栏右上角），但接口全是 401，轮询要停下。
+let xnLoggedIn=null;
+function setAuth(on){
+  xnLoggedIn=!!on;
+  const b=$('authBtn'); if(!b) return;
+  if(on){
+    b.textContent='退出登录'; b.href='#'; b.classList.add('on');
+    b.onclick=async(e)=>{e.preventDefault();
+      try{await fetch('/api/logout',{method:'POST'});}catch(err){}
+      setAuth(false);location.href='/';};
+  }else{
+    b.textContent='登录'; b.href='/login'; b.classList.remove('on'); b.onclick=null;
+    const sub=$('sub'); if(sub) sub.textContent='未登录 · 点右上角「登录」查看面板';
+  }
+}
 async function api(p,o){const r=await fetch(p,Object.assign({'Content-Type':'application/json'},o||{}));
-  const d=await r.json().catch(()=>({}));if(d.error)throw new Error(d.error);return d;}
+  if(r.status===401){setAuth(false);throw new Error('未登录');}
+  const d=await r.json().catch(()=>({}));if(d.error)throw new Error(d.error);
+  if(xnLoggedIn!==true)setAuth(true);
+  return d;}
 const set=($id,s,c)=>{const el=$($id);el.textContent=s;el.className='pill '+c;};
 
 // ---------- 动效小工具 ----------
@@ -512,7 +528,7 @@ $('pmReq').onclick=async()=>{const qq=$('pmApply').value.trim();if(!qq)return;
   try{const d=await api('/api/perm/request',{method:'POST',body:JSON.stringify({qq})});
     $('pmApplyMsg').textContent=d.msg||'';$('pmApply').value='';perms();}catch(e){$('pmApplyMsg').textContent='失败: '+e.message;}};
 
-async function load(){try{const s=await api('/api/status');
+async function load(){if(xnLoggedIn===false)return;try{const s=await api('/api/status');
   set('stUp','正常','ok');set('stBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
   set('stSnowluma',s.snowlumaUp?'在线':'离线',s.snowlumaUp?'ok':'warn');
   $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
@@ -528,7 +544,7 @@ async function load(){try{const s=await api('/api/status');
   set('lvAuth','授权由所有者 / 主人管理','warn');
 }catch(e){set('stUp','离线','red');set('lvUp','服务离线','red');}}
 
-async function perms(){try{const d=await api('/api/perms');
+async function perms(){if(xnLoggedIn===false)return;try{const d=await api('/api/perms');
   $('pmOwner').textContent=d.owner||'未设置';$('pmMaster2').textContent=d.master2||'未设置';
   $('pmMasters').textContent=(d.extraOwners||[]).join('、')||'无';$('pmAdmins').textContent=d.admins.join('、')||'无';
   $('pmList').innerHTML=d.authorized.length?d.authorized.map(q=>'<span class="chip">'+q+'</span>').join(''):'<span class="hint">暂无</span>';
@@ -536,7 +552,7 @@ async function perms(){try{const d=await api('/api/perms');
   rollNum($('pmListN'), d.authorized.length); rollNum($('pmPendingN'), d.pending.length);
 }catch(e){}}
 
-async function refresh(){try{const s=await api('/api/connection/status');
+async function refresh(){if(xnLoggedIn===false)return;try{const s=await api('/api/connection/status');
   // SnowLuma 只有 QQ 登录成功后才会监听 OneBot WS，所以端口在线 ≈ 已登录
   const up=!!s.snowlumaUp;
   const lgTxt=up?'已登录':(s.qqRunning?'等待扫码登录':'QQ 未运行');
@@ -556,7 +572,7 @@ async function refresh(){try{const s=await api('/api/connection/status');
 }catch(e){}}
 
 // 终端实时日志（与终端输出一致）
-async function logs(){try{const d=await api('/api/logs');
+async function logs(){if(xnLoggedIn===false)return;try{const d=await api('/api/logs');
   renderLog('lgLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
 }catch(e){}}
 
@@ -565,6 +581,7 @@ let ftCmds=null, ftTiers=[], ftCat='全部';
 const FT_ROLE_NAME={all:'普通用户',auth:'授权用户',admin:'管理员',master:'主人',owner:'所有者'};
 const FT_ROLE_CLASS={all:'mut',auth:'ok',admin:'warn',master:'red',owner:'red'};
 async function ftLoad(){
+  if(xnLoggedIn===false){$('ftList').innerHTML='<span class="hint">登录后可查看指令表</span>';return;}
   if(!ftCmds){
     try{ const d=await api('/api/features'); ftCmds=d.commands||[]; ftTiers=d.tiers||[]; }
     catch(e){ $('ftList').innerHTML='<span class="hint">加载失败：'+esc(e.message)+'</span>'; return; }
@@ -788,6 +805,7 @@ function cvRenderForm(){
 }
 
 async function convLoad(full){
+  if(xnLoggedIn===false)return;
   try{
     const d=await api('/api/chat-settings');
     cvGlobal=d.global||{}; cvOver=d.conversations||{};
@@ -1030,6 +1048,7 @@ function bdFmt(ms){
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 async function bindLoad(){
+  if(xnLoggedIn===false)return;
   try{
     const d=await api('/api/bindings');
     $('bdRetain').textContent=String(d.retainDays||15);
