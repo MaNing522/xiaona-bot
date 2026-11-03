@@ -148,6 +148,41 @@ describe('setLevelBy / canManage（管理员及以上受限放权）', () => {
   });
 });
 
+describe('拉黑来源保护（所有者拉黑的，主人以下不能恢复）', () => {
+  it('所有者拉黑的人，管理员恢复不了，主人可以', () => {
+    expect(setLevelBy(ENV_OWNER, '3001', 4).ok).toBe(true);
+    expect(isBlacklisted('3001')).toBe(true);
+    expect(setLevelBy(ENV_ADMIN, '3001', 2).ok).toBe(false);
+    expect(setLevelBy(ENV_ADMIN, '3001', 3).ok).toBe(false);
+    expect(isBlacklisted('3001')).toBe(true);
+    expect(setLevelBy(ENV_OWNER, '3002', 0).ok).toBe(true);   // 授一个主人
+    expect(setLevelBy('3002', '3001', 3).ok).toBe(true);      // 主人可以恢复
+    expect(isBlacklisted('3001')).toBe(false);
+  });
+
+  it('主人拉黑的，管理员同样不能恢复', () => {
+    expect(setLevelBy(ENV_OWNER, '3002', 0).ok).toBe(true);
+    expect(setLevelBy('3002', '3001', 4).ok).toBe(true);
+    expect(setLevelBy(ENV_ADMIN, '3001', 2).ok).toBe(false);
+    expect(setLevelBy('3002', '3001', 2).ok).toBe(true);
+  });
+
+  it('管理员自己拉黑的，管理员可以恢复', () => {
+    expect(setLevelBy(ENV_ADMIN, '3001', 4).ok).toBe(true);
+    expect(setLevelBy(ENV_ADMIN, '3001', 2).ok).toBe(true);
+    expect(role('3001')).toBe('authorized');
+  });
+
+  it('旧存档里的黑名单没有来源记录，按所有者处理', () => {
+    fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ blacklist: ['3009'] }));
+    init(dir);
+    expect(isBlacklisted('3009')).toBe(true);
+    expect(setLevelBy(ENV_ADMIN, '3009', 2).ok).toBe(false);
+    expect(setLevelBy(ENV_OWNER, '3002', 0).ok).toBe(true);
+    expect(setLevelBy('3002', '3009', 2).ok).toBe(true);
+  });
+});
+
 describe('所有者 / 主人2（.env）', () => {
   it('所有者来自 BOT_OWNER，角色为 owner；主人2 留空时不生效', () => {
     expect(getOwner()).toBe(ENV_OWNER);

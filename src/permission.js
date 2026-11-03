@@ -29,6 +29,7 @@ let extraOwners = [];   // 命令授予的主人（持久化）
 let extraAdmins = [];   // 命令授予的管理员（持久化）
 let authorized = [];    // 已授权（持久化）
 let blacklist = [];     // 黑名单：不响应其消息（转发除外，持久化）
+let blacklistBy = {};   // 黑名单来源：QQ -> owner/master/admin（谁拉黑的，决定谁能解除）
 let pending = [];       // 待主人审批的申请（持久化）
 let favors = {};        // 好感度：QQ(或游戏ID) -> 0-100 的数值（持久化，默认 FAVOR_DEFAULT）
 
@@ -36,7 +37,7 @@ let favors = {};        // 好感度：QQ(或游戏ID) -> 0-100 的数值（持�
 export const LEVEL_NAMES = { 0: '主人', 1: '管理员', 2: '授权用户', 3: '普通用户', 4: '黑名单' };
 
 function save() {
-  writeJsonAtomic(AUTH_FILE, { authorized, extraOwners, extraAdmins, blacklist, favors });
+  writeJsonAtomic(AUTH_FILE, { authorized, extraOwners, extraAdmins, blacklist, blacklistBy, favors });
 }
 function savePending() {
   writeJsonAtomic(PENDING_FILE, { pending });
@@ -58,6 +59,9 @@ export function init(dir) {
   extraOwners = Array.isArray(a.extraOwners) ? a.extraOwners.map(String) : [];
   extraAdmins = Array.isArray(a.extraAdmins) ? a.extraAdmins.map(String) : [];
   blacklist = Array.isArray(a.blacklist) ? a.blacklist.map(String) : [];
+  blacklistBy = (a.blacklistBy && typeof a.blacklistBy === 'object' && !Array.isArray(a.blacklistBy)) ? { ...a.blacklistBy } : {};
+  // 旧存档没有来源记录：按最高档视为所有者拉黑，避免管理员擅自解除历史黑名单
+  for (const q of blacklist) if (!blacklistBy[q]) blacklistBy[q] = 'owner';
   favors = (a.favors && typeof a.favors === 'object' && !Array.isArray(a.favors)) ? { ...a.favors } : {};
   const p = readJsonSafe(PENDING_FILE, {}, 'pending.json');
   pending = Array.isArray(p.pending) ? p.pending.map(String) : [];
@@ -93,6 +97,9 @@ export const TIER_META = {
   authorized: { name: '授权用户' },
   guest: { name: '普通用户' },
 };
+
+/** 档位高低（数字越大越高），判断「谁能解除谁的拉黑」用 */
+const ROLE_RANK = { guest: 0, authorized: 1, admin: 2, master: 3, owner: 4 };
 
 /** 好感度默认值（所有新用户从这里起步，由 AI 累积调整） */
 export const FAVOR_DEFAULT = 50;
@@ -205,7 +212,7 @@ export function isBlacklisted(userId) {
  * 3 = 普通用户（等价于取消授权，从所有名单移除）。待审批记录一并清除。
  * @returns {{ok:boolean, msg:string, level?:number}}
  */
-export function setLevel(userId, level) {
+export function setLevel(userId, level, byRole = 'owner') {
   const id = String(userId);
   const lv = Number(level);
   if (!Number.isInteger(lv) || lv < 0 || lv > 4) return { ok: false, msg: '❌ 等级需为 0-4' };
@@ -231,7 +238,14 @@ export function setLevel(userId, level) {
   if (lv === 0) extraOwners.push(id);
   else if (lv === 1) extraAdmins.push(id);
   else if (lv === 2) authorized.push(id);
-  else if (lv === 4) blacklist.push(id);
+  else if (lv === 4) {
+    blacklist.push(id);
+    // 记下拉黑来源；更高档位重新拉黑时覆盖，同级重复拉黑保持原来的来源
+    const by = ROLE_RANK[byRole] ? byRole : 'owner';
+    if (!blacklistBy[id] || ROLE_RANK[by] > ROLE_RANK[blacklistBy[id]]) blacklistBy[id] = by;
+  } else {
+    delete blacklistBy[id];   // lv === 3（或其它）：不再是黑名单，来源记录一并清掉
+  }
   // lv === 3 不加任何名单 = 普通用户
 
   // 档位变了，好感度要按新档位的上限重新夹一次（例如从授权降到普通，88% 会被压到 80%）
@@ -275,23 +289,32 @@ export function canManage(actorId, targetId) {
  * 由某个人（actor）设置另一个人的等级。
  * 所有者可设任意等级；主人只能设「低于自己」的（管理员/授权/普通/黑名单），
  * 管理员只能设授权用户/普通用户/黑名单。
+ * 另外，解除拉黑要够级别：所有者/主人拉黑的，管理员（主人以下）无权恢复。
  * @returns {{ok:boolean, msg:string, level?:number}}
  */
 export function setLevelBy(actorId, targetId, level) {
   const lv = Number(level);
   if (!Number.isInteger(lv) || lv < 0 || lv > 4) return { ok: false, msg: '❌ 等级需为 0-4' };
   const ar = role(actorId);
-  if (ar === 'owner') return setLevel(targetId, lv);
+  if (ar === 'owner') return setLevel(targetId, lv, 'owner');
   const gate = canManage(actorId, targetId);
   if (!gate.ok) return { ok: false, msg: gate.msg };
+  // 解除拉黑要看拉黑来源：所有者/主人拉黑的，管理员及以下无权恢复（至少需要主人档）
+  const t = String(targetId);
+  if (isBlacklisted(t) && lv !== 4) {
+    const by = ROLE_RANK[blacklistBy[t]] ? blacklistBy[t] : 'owner';
+    if (ROLE_RANK[ar] < (by === 'admin' ? 2 : 3)) {
+      return { ok: false, msg: `❌ QQ ${t} 是被${TIER_META[by].name}拉黑的，需主人及以上才能恢复。` };
+    }
+  }
   if (ar === 'master') {
     // 主人可以授管理员及以下，但增删主人是所有者专属
     if (lv < 1) return { ok: false, msg: '❌ 只有所有者可以授予/取消主人。' };
-    return setLevel(targetId, lv);
+    return setLevel(targetId, lv, 'master');
   }
   // 管理员：只能授予「低于自己」的档位（2 授权用户 / 3 普通 / 4 黑名单）
   if (lv < 2) return { ok: false, msg: '❌ 管理员只能设「授权用户/普通用户/黑名单」，不能授予主人或管理员。' };
-  return setLevel(targetId, lv);
+  return setLevel(targetId, lv, 'admin');
 }
 
 export function listBlacklist() { return blacklist.slice(); }
