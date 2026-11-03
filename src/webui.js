@@ -32,6 +32,7 @@ import { transcribe } from './asr.js';
 
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
+const HOME_FILE = path.join(ROOT, 'web', 'home.html');
 
 // 面板协议：默认 HTTP；设 WEBUI_HTTPS=true 才启用 HTTPS（证书代码保留在 tls.js）
 function useHttps() {
@@ -651,10 +652,11 @@ async function route(req, res, url) {
   // 健康检查：放在一切鉴权之前（探活工具不该需要登录），且不返回任何敏感信息
   if (url.pathname === '/health') return handleHealth(res);
 
-  // 主页：面板外壳对所有访客开放（数据接口仍需登录），登录入口在顶栏右上角
+  // 主页：未登录给空白主页（只有右上角登录入口），登录后才给控制面板
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    if (!fs.existsSync(WEB_DIR)) return sendJSON(res, 500, { error: '缺少 web/index.html' });
-    const html = fs.readFileSync(WEB_DIR);
+    const file = authed(req) ? WEB_DIR : HOME_FILE;
+    if (!fs.existsSync(file)) return sendJSON(res, 500, { error: `缺少 ${path.relative(ROOT, file)}` });
+    const html = fs.readFileSync(file);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(html);
   }

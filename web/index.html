@@ -422,23 +422,18 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 <script>
 const $=(id)=>document.getElementById(id);
 // 登录态：null 未知 / true 已登录 / false 未登录。
-// 未登录时主页照常打开（登录入口在顶栏右上角），但接口全是 401，轮询要停下。
+// 面板页只有登录后才下发；接口一旦 401 说明会话已过期，直接回空白主页（右上角有登录入口）。
 let xnLoggedIn=null;
 function setAuth(on){
   xnLoggedIn=!!on;
-  const b=$('authBtn'); if(!b) return;
-  if(on){
-    b.textContent='退出登录'; b.href='#'; b.classList.add('on');
-    b.onclick=async(e)=>{e.preventDefault();
-      try{await fetch('/api/logout',{method:'POST'});}catch(err){}
-      setAuth(false);location.href='/';};
-  }else{
-    b.textContent='登录'; b.href='/login'; b.classList.remove('on'); b.onclick=null;
-    const sub=$('sub'); if(sub) sub.textContent='未登录 · 点右上角「登录」查看面板';
-  }
+  const b=$('authBtn'); if(!b||!on) return;
+  b.textContent='退出登录'; b.href='#'; b.classList.add('on');
+  b.onclick=async(e)=>{e.preventDefault();
+    try{await fetch('/api/logout',{method:'POST'});}catch(err){}
+    location.href='/';};
 }
 async function api(p,o){const r=await fetch(p,Object.assign({'Content-Type':'application/json'},o||{}));
-  if(r.status===401){setAuth(false);throw new Error('未登录');}
+  if(r.status===401){xnLoggedIn=false;location.href='/';throw new Error('未登录');}
   const d=await r.json().catch(()=>({}));if(d.error)throw new Error(d.error);
   if(xnLoggedIn!==true)setAuth(true);
   return d;}
