@@ -464,7 +464,7 @@ button:disabled{opacity:.6;cursor:default}
   <div class="head">
     <div class="logo">🤖</div>
     <div><h1>小钠 · 私聊试用</h1><div class="sub">发消息看看小钠怎么回</div></div>
-    <div class="who">你是 小锂 · 普通用户 · <a href="/login">登录面板</a></div>
+    <div class="who">你是 小锂 · 普通用户 · <a href="/qq">QQ 风格客户端</a> · <a href="/login">登录面板</a></div>
   </div>
   <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。登录面板后会以所有者身份试用。</div></div>
   <div class="foot">
@@ -673,6 +673,13 @@ async function route(req, res, url) {
   // 试用页：登录前也能用（普通用户身份）；登录后再打开会按所有者身份跑
   if (url.pathname === '/trial' || url.pathname === '/trial.html') {
     return sendHtml(res, 200, trialPage());
+  }
+
+  // QQ 客户端风格的试用聊天页（公开，走 /api/trial/chat，未登录按访客限速）
+  if (url.pathname === '/qq' || url.pathname === '/qq.html') {
+    const qq = path.join(path.dirname(WEB_DIR), 'qq.html');
+    if (!fs.existsSync(qq)) return sendJSON(res, 500, { error: '缺少 web/qq.html' });
+    return sendHtml(res, 200, fs.readFileSync(qq));
   }
 
   // 老旧浏览器兼容页（纯 ES5 + XHR，只保留状态 / 登录 / 试用）

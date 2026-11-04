@@ -29,10 +29,29 @@ function findBrowser() {
 
 function run(cmd, args, timeoutMs) {
     return new Promise((resolve, reject) => {
-        execFile(cmd, args, { timeout: timeoutMs || 60000, windowsHide: true }, (err, stdout, _stderr) => {
-            if (err) reject(err); else resolve(stdout);
+        execFile(cmd, args, { timeout: timeoutMs || 60000, windowsHide: true }, (err, stdout, stderr) => {
+            if (err) {
+                err.stderr = String(stderr || '');   // 带上浏览器输出，失败时能看出原因
+                reject(err);
+            } else {
+                resolve({ stdout, stderr });
+            }
         });
     });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 等截图文件落盘（浏览器退出时可能还没写完） */
+async function waitFile(p, ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+        try {
+            if (fs.statSync(p).size > 0) return true;
+        } catch { /* 还没生成 */ }
+        await sleep(200);
+    }
+    return false;
 }
 
 // 将 PS 脚本写入临时文件再以 -File 执行（避免 -Command 方式下引号被二次解析破坏）
@@ -84,20 +103,38 @@ $g.Dispose(); $bmp.Dispose()
 }
 
 // 用浏览器无头模式给网址截图
+// Edge 有时候会「正常退出但没写出截图」（比如被转交给已开着的浏览器实例、链接是下载文件、
+// 或者截图还没落盘），所以这里重试两种 headless 参数并等文件出现，失败时带上浏览器输出。
 export async function captureUrl(url, saveDir) {
     const browser = findBrowser();
     if (!browser) throw new Error(IS_WIN ? '未找到 Edge，无法进行网址截图'
         : '未找到 Chrome/Chromium，无法进行网址截图（apt install -y chromium-browser）');
     const out = uniqueName(path.resolve(saveDir), '.png');
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-edge-'));
-    // Linux 上通常以 root 跑（systemd），Chrome 必须加 --no-sandbox 才肯启动
-    await run(browser, [
-        '--headless', '--disable-gpu', '--no-first-run', '--no-sandbox',
+    fs.rmSync(out, { force: true });
+    const common = [
+        '--disable-gpu', '--no-first-run', '--no-sandbox',
         '--disable-features=msEdgeFirstRunExperience',
-        `--user-data-dir=${profile}`, '--window-size=1280,800',
+        '--window-size=1280,800', '--virtual-time-budget=8000',
         `--screenshot=${out}`, url,
-    ]);
-    return out;
+    ];
+    let lastLog = '';
+    for (const headless of ['--headless=new', '--headless']) {
+        const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-edge-'));
+        try {
+            try {
+                const r = await run(browser, [headless, `--user-data-dir=${profile}`, ...common], 60000);
+                lastLog = String((r && r.stderr) || '').trim();
+            } catch (e) {
+                lastLog = String((e && (e.stderr || e.message)) || e).trim();
+            }
+            if (await waitFile(out, 5000)) return out;
+            fs.rmSync(out, { force: true });
+        } finally {
+            try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 3 }); } catch { /* 临时目录删不掉就算了 */ }
+        }
+    }
+    const tail = lastLog.split(/\r?\n/).filter(Boolean).pop() || '';
+    throw new Error(`浏览器没有生成截图${tail ? `（${tail.slice(0, 120)}）` : '，可能该链接是下载文件或被拦截'}`);
 }
 
 /** 找 ImageMagick 的命令（Linux 上用来裁剪头像；Windows 走 PowerShell） */
