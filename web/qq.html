@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#eef1f5">
-<title>小钠 · 网页版 QQ</title>
+<title>小钠 · 网页 QQ</title>
 <style>
 :root{
   --blue:#12b7f5; --blue-deep:#0099ff; --blue-soft:#e8f6ff;
@@ -46,6 +46,7 @@ body{
 .search input::placeholder{color:#aab0b8}
 .conv-list{flex:1;overflow-y:auto;padding:4px 8px}
 .conv{display:flex;gap:10px;padding:10px;border-radius:10px;cursor:pointer;position:relative}
+.conv:hover{background:#f0f2f5}
 .conv.on{background:var(--blue-soft)}
 .conv.on::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:2px;background:var(--blue-deep)}
 .conv-main{min-width:0;flex:1;display:flex;flex-direction:column;justify-content:center;gap:3px}
@@ -54,6 +55,8 @@ body{
 .conv-time{font-size:11px;color:#aab0b8;flex:0 0 auto}
 .conv-prev{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .na-av{background:linear-gradient(135deg,#59d3ff,#0aa6ff);box-shadow:0 4px 10px rgba(18,183,245,.28)}
+.badge{min-width:17px;height:17px;padding:0 5px;border-radius:9px;background:var(--danger);color:#fff;
+  font-size:11px;line-height:17px;text-align:center;position:absolute;right:14px;bottom:10px}
 .side-foot{padding:10px 14px 14px;font-size:11.5px;color:#aab0b8;line-height:1.6;border-top:1px solid var(--line)}
 
 /* ---------- 右侧聊天区 ---------- */
@@ -61,9 +64,10 @@ body{
 .chat-head{height:64px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
   padding:0 22px;background:var(--card);border-bottom:1px solid var(--line)}
 .chat-title{display:flex;flex-direction:column;gap:3px;min-width:0}
-.chat-name{font-size:16px;font-weight:600}
+.chat-name{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-status{font-size:11.5px;color:var(--sub);display:flex;align-items:center;gap:6px}
 .dot{width:7px;height:7px;border-radius:50%;background:#2fbf71;box-shadow:0 0 0 3px rgba(47,191,113,.14)}
+.dot.off{background:#c9ced6;box-shadow:0 0 0 3px rgba(201,206,214,.25)}
 .head-actions{display:flex;align-items:center;gap:6px}
 .head-link{font-size:12.5px;color:var(--blue-deep);text-decoration:none;padding:7px 12px;border-radius:8px;border:1px solid #cdeaff;background:#f4fbff}
 .head-link:hover{background:#e6f6ff}
@@ -81,6 +85,7 @@ body{
 .row.me .bub{background:linear-gradient(135deg,#3ec3ff,#12a9f5);color:#fff;border-top-right-radius:4px;box-shadow:0 4px 12px rgba(18,183,245,.24)}
 .row .avatar{width:34px;height:34px;border-radius:9px;font-size:13px}
 .row.me .avatar{background:linear-gradient(135deg,#b3c7d9,#8ea6bb)}
+.who{font-size:11.5px;color:#9aa1aa;margin:0 4px 4px}
 .sys{text-align:center;margin:0 0 16px}
 .sys span{display:inline-block;max-width:80%;padding:5px 12px;border-radius:8px;background:#e7eaef;
   color:#8a9099;font-size:12px;line-height:1.5}
@@ -130,45 +135,35 @@ body{
 <div class="app">
   <aside class="side">
     <div class="me">
-      <div class="avatar me-av">访</div>
+      <div class="avatar me-av">钠</div>
       <div class="me-info">
-        <div class="me-name">访客</div>
-        <div class="me-sub">试用模式 · 无需登录</div>
+        <div class="me-name">小钠</div>
+        <div class="me-sub">已登录 · 网页 QQ</div>
       </div>
-      <button class="icon-btn" title="登录面板" onclick="location.href='/login'">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
+      <button class="icon-btn" title="控制面板" onclick="location.href='/'">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
       </button>
     </div>
     <div class="search">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="search" placeholder="搜索" aria-label="搜索会话">
     </div>
-    <div class="conv-list">
-      <div class="conv on" id="convNa">
-        <div class="avatar na-av">钠</div>
-        <div class="conv-main">
-          <div class="conv-top"><span class="conv-name">小钠</span><span class="conv-time" id="convTime">在线</span></div>
-          <div class="conv-prev" id="convPrev">网页版试用，发消息就能聊</div>
-        </div>
-      </div>
-    </div>
-    <div class="side-foot">更多会话请到 QQ 里找我</div>
+    <div class="conv-list" id="convList"></div>
+    <div class="side-foot" id="sideFoot">机器人收到的群聊/私聊会出现在这里</div>
   </aside>
 
   <main class="chat">
     <header class="chat-head">
       <div class="chat-title">
-        <div class="chat-name">小钠</div>
-        <div class="chat-status"><i class="dot"></i>在线 · 网页试用</div>
+        <div class="chat-name" id="chatName">小钠</div>
+        <div class="chat-status"><i class="dot" id="connDot"></i><span id="chatStatus">在线 · 网页直聊</span></div>
       </div>
       <div class="head-actions">
-        <a class="head-link" href="/login">登录面板</a>
+        <a class="head-link" href="/">控制面板</a>
       </div>
     </header>
 
-    <div class="msgs" id="msgs">
-      <div class="time-sep" id="timeSep">今天</div>
-    </div>
+    <div class="msgs" id="msgs"></div>
     <div class="typing" id="typing">
       <span>小钠正在输入</span>
       <span class="dots"><i></i><i></i><i></i></span>
@@ -176,10 +171,10 @@ body{
 
     <footer class="composer">
       <div class="tools">
-        <button class="tool" data-tip="网页试用暂不支持发送图片" title="图片">
+        <button class="tool" data-tip="网页版暂不支持发送图片" title="图片">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg>
         </button>
-        <button class="tool" data-tip="网页试用暂不支持发送文件" title="文件">
+        <button class="tool" data-tip="网页版暂不支持发送文件" title="文件">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
         </button>
         <button class="tool" id="clearBtn" title="清屏">
@@ -188,7 +183,7 @@ body{
       </div>
       <textarea id="input" rows="3" placeholder="输入消息，Enter 发送，Shift + Enter 换行"></textarea>
       <div class="send-row">
-        <span class="hint">未登录访客有发送频率限制</span>
+        <span class="hint" id="hint">小钠的回复会直接发到真实 QQ</span>
         <button id="send">发送</button>
       </div>
     </footer>
@@ -198,12 +193,21 @@ body{
 
 <script>
 (function () {
+  var AI_KEY = 'ai';
   var msgs = document.getElementById('msgs');
   var input = document.getElementById('input');
   var sendBtn = document.getElementById('send');
   var typing = document.getElementById('typing');
   var toastEl = document.getElementById('toast');
-  var busy = false;
+  var listEl = document.getElementById('convList');
+  var searchEl = document.getElementById('search');
+  var aiBusy = false;
+  var activeKey = AI_KEY;
+  var convList = [];
+  var lastIds = {};
+  var shownIds = {};
+  var meta = {};
+  var aiShown = [];
   var toastTimer = 0;
 
   function toast(text) {
@@ -213,31 +217,134 @@ body{
     toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 1800);
   }
 
-  function scrollBottom() {
-    msgs.scrollTop = msgs.scrollHeight;
+  function nearBottom() {
+    return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
+  }
+  function scrollBottom() { msgs.scrollTop = msgs.scrollHeight; }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function fmtTime(t) {
+    var d = new Date(t || Date.now());
+    var now = new Date();
+    if (d.toDateString() === now.toDateString()) return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var y = new Date(now.getTime() - 86400000);
+    if (d.toDateString() === y.toDateString()) return '昨天';
+    return pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
 
-  function timeText() {
-    var d = new Date();
-    function pad(n) { return n < 10 ? '0' + n : String(n); }
-    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  var GRADS = [
+    'linear-gradient(135deg,#7aa7ff,#4c7dff)',
+    'linear-gradient(135deg,#59d3ff,#0aa6ff)',
+    'linear-gradient(135deg,#ffb36b,#ff8a3d)',
+    'linear-gradient(135deg,#8fd6a8,#3fbf7f)',
+    'linear-gradient(135deg,#c39bff,#8f6bf0)',
+    'linear-gradient(135deg,#ff9db1,#f06286)',
+  ];
+  function avatarFor(name) {
+    var s = String(name || '?');
+    var sum = 0;
+    for (var i = 0; i < s.length; i++) sum = (sum + s.charCodeAt(i)) % 997;
+    return GRADS[sum % GRADS.length];
+  }
+  function initial(name) { return String(name || '?').slice(0, 1); }
+
+  function makeAvatar(name, cls) {
+    var d = document.createElement('div');
+    d.className = 'avatar' + (cls ? ' ' + cls : '');
+    d.textContent = initial(name);
+    if (!cls) d.style.background = avatarFor(name);
+    return d;
   }
 
-  function addRow(who, text) {
+  function api(path, opts) {
+    return fetch(path, opts || {}).then(function (r) {
+      if (r.status === 401) { location.href = '/login'; throw new Error('未登录'); }
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status < 200 || r.status >= 300 || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+
+  function postJSON(path, body) {
+    return api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /* ---------- 渲染会话列表 ---------- */
+  function renderConvs() {
+    var q = searchEl.value.trim().toLowerCase();
+    listEl.innerHTML = '';
+    var aiItem = { key: AI_KEY, name: '小钠', kind: 'ai', lastText: '网页直聊 · AI 对话', lastAt: 0, unread: 0 };
+    var items = convList.slice();
+    if (!q || aiItem.name.toLowerCase().indexOf(q) >= 0) items.unshift(aiItem);
+
+    items.forEach(function (c) {
+      if (q) {
+        var hay = (c.name + ' ' + (c.lastText || '')).toLowerCase();
+        if (hay.indexOf(q) < 0) return;
+      }
+      var row = document.createElement('div');
+      row.className = 'conv' + (c.key === activeKey ? ' on' : '');
+      row.appendChild(makeAvatar(c.name, c.kind === 'ai' ? 'na-av' : ''));
+
+      var main = document.createElement('div');
+      main.className = 'conv-main';
+      var top = document.createElement('div');
+      top.className = 'conv-top';
+      var nm = document.createElement('span');
+      nm.className = 'conv-name';
+      nm.textContent = c.name;
+      var tm = document.createElement('span');
+      tm.className = 'conv-time';
+      tm.textContent = c.kind === 'ai' ? '在线' : (c.lastAt ? fmtTime(c.lastAt) : '');
+      top.appendChild(nm); top.appendChild(tm);
+
+      var prev = document.createElement('div');
+      prev.className = 'conv-prev';
+      var body = c.lastText || '';
+      if (c.kind === 'group' && c.lastSender) body = c.lastSender + '：' + body;
+      prev.textContent = body || '还没有消息';
+
+      main.appendChild(top);
+      main.appendChild(prev);
+      row.appendChild(main);
+
+      if (c.unread > 0 && c.key !== activeKey) {
+        var b = document.createElement('span');
+        b.className = 'badge';
+        b.textContent = c.unread > 99 ? '99+' : String(c.unread);
+        row.appendChild(b);
+      }
+      row.onclick = function () { openConv(c.key); };
+      listEl.appendChild(row);
+    });
+  }
+
+  /* ---------- 渲染消息 ---------- */
+  function addRow(opts) {
+    var stick = nearBottom();
     var row = document.createElement('div');
-    row.className = 'row ' + who;
-    var av = document.createElement('div');
-    av.className = 'avatar ' + (who === 'na' ? 'na-av' : '');
-    av.textContent = who === 'na' ? '钠' : '访';
+    row.className = 'row ' + opts.side;
+    row.appendChild(makeAvatar(opts.avatarName, opts.side === 'me' ? '' : (opts.kind === 'ai' ? 'na-av' : '')));
+    var wrap = document.createElement('div');
+    if (opts.who) {
+      var who = document.createElement('div');
+      who.className = 'who';
+      who.textContent = opts.who;
+      wrap.appendChild(who);
+    }
     var bub = document.createElement('div');
     bub.className = 'bub';
-    bub.textContent = text;
-    row.appendChild(av);
-    row.appendChild(bub);
+    bub.textContent = opts.text;
+    wrap.appendChild(bub);
+    if (opts.time) bub.title = new Date(opts.time).toLocaleString('zh-CN', { hour12: false });
+    row.appendChild(wrap);
     msgs.appendChild(row);
-    scrollBottom();
-    document.getElementById('convTime').textContent = timeText();
-    document.getElementById('convPrev').textContent = text.slice(0, 30);
+    if (stick) scrollBottom();
     return bub;
   }
 
@@ -247,13 +354,186 @@ body{
     var span = document.createElement('span');
     span.textContent = text;
     box.appendChild(span);
+    var stick = nearBottom();
     msgs.appendChild(box);
-    scrollBottom();
+    if (stick) scrollBottom();
   }
+
+  function clearMsgs() { msgs.innerHTML = ''; }
 
   function setTyping(on) {
     typing.classList.toggle('show', !!on);
-    if (on) scrollBottom();
+  }
+
+  function updateHead(name, kind, connected) {
+    document.getElementById('chatName').textContent = name;
+    var st = document.getElementById('chatStatus');
+    if (kind === 'ai') st.textContent = '在线 · 网页直聊（不经过 QQ）';
+    else st.textContent = (kind === 'group' ? '群聊' : '私聊') + (connected === false ? ' · 机器人未连接' : ' · 实时同步');
+    var dot = document.getElementById('connDot');
+    dot.classList.toggle('off', connected === false);
+    document.getElementById('hint').textContent = kind === 'ai'
+      ? '小钠的回复留在网页里，不会发到 QQ'
+      : '从网页发送的消息会用机器人 QQ 号发出去';
+  }
+
+  /* ---------- 消息记录 ---------- */
+  function renderStored(list, kind, name) {
+    var showWho = kind === 'group';
+    list.forEach(function (m) {
+      if (!m || !m.id || shownIds[m.id]) return;
+      shownIds[m.id] = true;
+      addRow({
+        side: m.dir === 'out' ? 'me' : 'na',
+        avatarName: m.dir === 'out' ? '钠' : (m.senderName || name),
+        who: (m.dir === 'in' && showWho) ? (m.senderName || '') : '',
+        text: m.text,
+        time: m.t,
+        kind: kind,
+      });
+    });
+  }
+
+  function appendMessages(key, list) {
+    if (!list || !list.length) return;
+    var kind = (meta[key] && meta[key].kind) || (key.indexOf('g:') === 0 ? 'group' : 'private');
+    var name = (meta[key] && meta[key].name) || '';
+    list.forEach(function (m) {
+      if (shownIds[m.id]) return;
+      shownIds[m.id] = true;
+      addRow({
+        side: m.dir === 'out' ? 'me' : 'na',
+        avatarName: m.dir === 'out' ? '钠' : (m.senderName || name),
+        who: (m.dir === 'in' && kind === 'group') ? (m.senderName || '') : '',
+        text: m.text,
+        time: m.t,
+        kind: kind,
+      });
+    });
+    lastIds[key] = list[list.length - 1].id;
+  }
+
+  function showAiHistory() {
+    if (!aiShown.length) {
+      aiShown.push({ dir: 'in', text: '你好呀，我是小钠。这里是网页直聊，登录后就能用。' });
+      aiShown.push({ dir: 'in', text: '左边会列出机器人收到的群聊和私聊，点开就能看，也能直接在这里回消息。' });
+    }
+    aiShown.forEach(function (m, i) {
+      addRow({ side: m.dir === 'out' ? 'me' : 'na', avatarName: m.dir === 'out' ? '钠' : '小钠', text: m.text, kind: 'ai', time: Date.now() + i });
+    });
+  }
+
+  /* ---------- 切换会话 ---------- */
+  function openConv(key) {
+    activeKey = key;
+    setTyping(false);
+    clearMsgs();
+    renderConvs();
+    var c = convList.filter(function (x) { return x.key === key; })[0];
+    if (key === AI_KEY) {
+      updateHead('小钠', 'ai', true);
+      showAiHistory();
+      return;
+    }
+    updateHead(c ? c.name : key.slice(2), key.indexOf('g:') === 0 ? 'group' : 'private', true);
+    api('/api/qq/messages?key=' + encodeURIComponent(key)).then(function (j) {
+      meta[key] = { name: j.name, kind: j.kind };
+      updateHead(j.name, j.kind, j.connected);
+      renderStored(j.messages || [], j.kind, j.name);
+      if (j.messages && j.messages.length) lastIds[key] = j.messages[j.messages.length - 1].id;
+      loadConvs();
+    }).catch(function (e) {
+      addSys('读取消息失败：' + e.message);
+    });
+  }
+
+  /* ---------- 轮询：会话列表 + 当前会话新消息 ---------- */
+  function loadConvs() {
+    return api('/api/qq/conversations').then(function (j) {
+      var oldActive = activeKey;
+      convList = j.list || [];
+      document.getElementById('sideFoot').textContent = j.connected
+        ? '机器人收到的群聊/私聊会出现在这里'
+        : '机器人未连接 SnowLuma，暂时收不到新消息';
+      renderConvs();
+      if (oldActive !== AI_KEY) {
+        var c = convList.filter(function (x) { return x.key === oldActive; })[0];
+        if (c && meta[oldActive]) {
+          meta[oldActive].name = c.name;
+          updateHead(c.name, c.kind, j.connected);
+        }
+      }
+    }).catch(function () { /* 轮询失败静默 */ });
+  }
+
+  function pollActive() {
+    var key = activeKey;
+    if (key === AI_KEY) return;
+    api('/api/qq/messages?key=' + encodeURIComponent(key) + '&after=' + (lastIds[key] || 0)).then(function (j) {
+      meta[key] = { name: j.name, kind: j.kind };
+      if (j.messages && j.messages.length) {
+        appendMessages(key, j.messages);
+        updateHead(j.name, j.kind, j.connected);
+        loadConvs();
+      }
+    }).catch(function () { /* 单次轮询失败静默 */ });
+  }
+
+  /* ---------- 发送 ---------- */
+  function finish() {
+    aiBusy = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+
+  function sendAi(text) {
+    aiBusy = true;
+    sendBtn.disabled = true;
+    input.value = '';
+    autoGrow();
+    aiShown.push({ dir: 'out', text: text });
+    addRow({ side: 'me', avatarName: '钠', text: text, kind: 'ai', time: Date.now() });
+    setTyping(true);
+    postJSON('/api/trial/chat', { text: text }).then(function (j) {
+      setTyping(false);
+      if (j.heard) addSys('语音识别：' + j.heard);
+      var reply = String(j.reply || '');
+      if (reply) {
+        aiShown.push({ dir: 'in', text: reply });
+        addRow({ side: 'na', avatarName: '小钠', text: reply, kind: 'ai', time: Date.now() });
+      }
+    }).catch(function (e) {
+      setTyping(false);
+      addSys('没发出去：' + e.message);
+    }).then(finish);
+  }
+
+  function sendReal(key, text) {
+    sendBtn.disabled = true;
+    input.value = '';
+    autoGrow();
+    postJSON('/api/qq/send', { key: key, text: text }).then(function (j) {
+      if (j.message) {
+        if (!shownIds[j.message.id]) {
+          shownIds[j.message.id] = true;
+          lastIds[key] = j.message.id;
+          addRow({ side: 'me', avatarName: '钠', text: j.message.text, kind: key.indexOf('g:') === 0 ? 'group' : 'private', time: j.message.t });
+        }
+      } else {
+        pollActive();
+      }
+      loadConvs();
+    }).catch(function (e) {
+      addSys('发送失败：' + e.message);
+      toast('发送失败');
+    }).then(finish);
+  }
+
+  function send() {
+    var text = input.value.replace(/^\s+|\s+$/g, '');
+    if (!text || aiBusy) return;
+    if (activeKey === AI_KEY) sendAi(text);
+    else sendReal(activeKey, text);
   }
 
   function autoGrow() {
@@ -261,47 +541,8 @@ body{
     input.style.height = Math.min(160, input.scrollHeight) + 'px';
   }
 
-  function finish() {
-    busy = false;
-    sendBtn.disabled = false;
-    input.focus();
-  }
-
-  function send() {
-    var text = input.value.replace(/^\s+|\s+$/g, '');
-    if (!text || busy) return;
-    busy = true;
-    sendBtn.disabled = true;
-    input.value = '';
-    autoGrow();
-    addRow('me', text);
-    setTyping(true);
-
-    fetch('/api/trial/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text }),
-    })
-      .then(function (r) {
-        return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j }; });
-      })
-      .then(function (res) {
-        setTyping(false);
-        if (res.r.ok && res.j.ok && res.j.reply) {
-          addRow('na', String(res.j.reply));
-        } else {
-          addSys('没发出去：' + (res.j.error || 'HTTP ' + res.r.status));
-        }
-      })
-      .catch(function () {
-        setTyping(false);
-        addSys('网络错误，稍后再试');
-      })
-      .then(finish);
-  }
-
+  /* ---------- 事件 ---------- */
   sendBtn.onclick = send;
-
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -313,26 +554,25 @@ body{
   Array.prototype.forEach.call(document.querySelectorAll('.tool[data-tip]'), function (btn) {
     btn.addEventListener('click', function () { toast(btn.getAttribute('data-tip')); });
   });
-
   document.getElementById('clearBtn').addEventListener('click', function () {
-    Array.prototype.slice.call(msgs.querySelectorAll('.row,.sys')).forEach(function (el) { el.remove(); });
-    toast('已清空当前显示的聊天记录');
+    clearMsgs();
+    shownIds = {};
+    if (activeKey === AI_KEY) aiShown = [];
+    toast('已清空当前会话的显示');
   });
 
-  document.getElementById('search').addEventListener('input', function () {
-    var q = this.value.trim();
-    document.getElementById('convNa').style.display = (!q || '小钠'.indexOf(q) >= 0) ? '' : 'none';
-  });
+  searchEl.addEventListener('input', renderConvs);
 
-  (function boot() {
-    document.getElementById('timeSep').textContent = '今天 ' + timeText();
-    addRow('na', '你好呀，我是小钠。这个界面是照着 QQ 客户端做的，发消息会真的发给我。');
-    addRow('na', '直接输入试试吧，Enter 发送。');
-    document.getElementById('convTime').textContent = timeText();
-    document.getElementById('convPrev').textContent = '在线 · 有什么想说的直接发我';
-    input.focus();
-    void d;
-  })();
+  // 浏览器关闭/离开时丢弃本客户端的直聊内存历史
+  window.onpagehide = function () {
+    try { if (navigator.sendBeacon) navigator.sendBeacon('/api/trial/reset'); } catch (e) {}
+  };
+
+  /* ---------- 启动 ---------- */
+  updateHead('小钠', 'ai', true);
+  showAiHistory();
+  loadConvs().then(function () { setInterval(function () { loadConvs(); pollActive(); }, 2500); });
+  input.focus();
 })();
 </script>
 </body>

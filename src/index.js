@@ -32,6 +32,7 @@ import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
 import { initNotes, writeNote, readNote } from './notes.js';
 import { initQzone } from './qzone.js';
+import { recordIncoming, recordOutgoing } from './qqInbox.js';
 import { ROOT } from './paths.js';
 
 // 显式指定 .env 路径，避免受启动目录影响
@@ -391,7 +392,7 @@ const pending = new Map();
 function nextSeq() { msgSeq += 1; return msgSeq; }
 
 function callApi(action, params) {
-    return new Promise((resolve, reject) => {
+    const p = new Promise((resolve, reject) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return reject(new Error('WS_NOT_OPEN'));
         const echo = nextSeq();
         // 超时兜底：防止个别 API 无响应时把会话卡死（如群成员信息查询失败）
@@ -405,6 +406,21 @@ function callApi(action, params) {
         });
         ws.send(JSON.stringify({ action, params, echo }));
     });
+    // 发出去的消息也记进网页收件箱，网页 QQ 客户端才能看到机器人的回复
+    if (action === 'send_group_msg' || action === 'send_private_msg') {
+        return p.then((v) => {
+            try {
+                const gid = params && params.group_id;
+                const key = action === 'send_group_msg' ? 'g:' + gid : 'p:' + (params && params.user_id);
+                if (/^(g|p):\d{5,14}$/.test(key)) {
+                    const text = inlineTextOf(params && params.message, gid);
+                    if (text) recordOutgoing(key, text);
+                }
+            } catch { /* 记录失败不影响发送 */ }
+            return v;
+        });
+    }
+    return p;
 }
 
 /**
@@ -2587,6 +2603,20 @@ async function onMessage(event) {
 
     // 机器人自己发的消息（打开"上报自身消息"时）：绝不触发命令/回复/转发（否则会自己接自己）
     if (me && String(event.user_id) === me) return;
+
+    // 网页 QQ 客户端：先记进内存收件箱。即使这条会被禁言/黑名单拦下，网页里也应当能看到
+    if (raw && (event.message_type === 'group' || event.message_type === 'private')) {
+        try {
+            recordIncoming({
+                kind: event.message_type === 'group' ? 'group' : 'private',
+                id: event.message_type === 'group' ? event.group_id : event.user_id,
+                name: event.message_type === 'private' ? fromName : '',
+                senderId: uid,
+                senderName: fromName || uid,
+                text: raw,
+            });
+        } catch { /* 收件箱记不下不能影响主流程 */ }
+    }
 
     const isBridgeGroup = MC_BRIDGE_QQ_TO_MC && event.message_type === 'group'
         && MC_BRIDGE_GROUP && String(event.group_id) === MC_BRIDGE_GROUP

@@ -29,6 +29,10 @@ import {
 import { ROOT } from './paths.js';
 import { ensureTls, CERT_FILE } from './tls.js';
 import { transcribe } from './asr.js';
+import {
+  listConversations as inboxList, getMessages as inboxMessages,
+  markRead as inboxMarkRead, convName, setConvName,
+} from './qqInbox.js';
 
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
@@ -286,32 +290,6 @@ function trialClientId(req, res) {
   return id;
 }
 
-/**
- * 免登录试用限速：按浏览器（Cookie）+ IP 双维度，防止外人白嫖 AI 额度。
- * 只限制未登录访客；登录后的所有者试用不受影响。
- */
-const TRIAL_WINDOW_MS = 10 * 60 * 1000;
-const TRIAL_GUEST_LIMIT = 20;     // 每个浏览器 10 分钟最多 20 句
-const TRIAL_IP_LIMIT = 50;        // 每个 IP 10 分钟最多 50 句
-const TRIAL_GUEST_GAP_MS = 1200;  // 两句之间至少隔 1.2 秒
-const trialRate = new Map();
-let trialGuestBusy = 0;
-
-/** 记一次试用；超限返回需要等待的秒数，0 表示放行 */
-function trialRateHit(key, limit, gapMs, now) {
-  let v = trialRate.get(key);
-  if (!v || now - v.at > TRIAL_WINDOW_MS) { v = { at: now, n: 0, last: 0 }; trialRate.set(key, v); }
-  if (gapMs && v.last && now - v.last < gapMs) return Math.max(1, Math.ceil((gapMs - (now - v.last)) / 1000));
-  if (v.n >= limit) return Math.max(1, Math.ceil((TRIAL_WINDOW_MS - (now - v.at)) / 1000));
-  v.n++;
-  v.last = now;
-  return 0;
-}
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of trialRate) if (now - v.at > TRIAL_WINDOW_MS * 2) trialRate.delete(k);
-}, 10 * 60 * 1000).unref?.();
-
 function sendHtml(res, code, html) {
   res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(html);
@@ -385,7 +363,6 @@ button:disabled{opacity:.6;cursor:default}
   </div>
   <button id="b">登录</button>
   <div class="err" id="e">${msg}</div>
-  <a class="alt" href="/trial">🧪 先试用一下（无需登录）</a>
   <a class="alt" href="/">← 返回首页</a>
 </form>
 <script>
@@ -421,110 +398,6 @@ $('f').onsubmit = function (ev) {
   };
   xhr.send(JSON.stringify({ user: $('u').value, pass: $('p').value, captcha: $('c').value }));
 };
-</script></body></html>`;
-}
-
-/**
- * 试用页（登录前也能用）：以「小锂 · 普通用户」身份跟小钠私聊，不经过 QQ。
- * 刻意只用 ES5 + XHR + 老式 CSS，保证老旧手机浏览器也能打开。
- */
-function trialPage() {
-  return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#f0f2f5">
-<title>小钠 · 私聊试用</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#f0f2f5;color:#1f2329;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px}
-.card{width:100%;max-width:560px;background:#fff;border:1px solid #e8ebf0;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;height:86vh;max-height:1400px;min-height:420px;overflow:hidden}
-.head{padding:14px 16px;border-bottom:1px solid #e8ebf0;display:flex;align-items:center}
-.head .logo{font-size:22px;margin-right:10px}
-.head h1{margin:0;font-size:15px}
-.head .sub{font-size:12px;color:#8a919f}
-.head .who{margin-left:auto;font-size:12px;color:#8a919f;white-space:nowrap}
-.head .who a{color:#1677ff;text-decoration:none}
-.msgs{flex:1;overflow-y:auto;padding:16px;background:#fafbfc}
-.row{display:flex;margin-bottom:10px}
-.row.me{justify-content:flex-end}
-.bub{max-width:78%;padding:8px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
-.me .bub{background:#1677ff;color:#fff;border-bottom-right-radius:4px}
-.na .bub{background:#fff;border:1px solid #e8ebf0;border-bottom-left-radius:4px}
-.tip{color:#8a919f;font-size:12px;text-align:center;margin:6px 0}
-.foot{display:flex;padding:12px;border-top:1px solid #e8ebf0}
-textarea{flex:1;resize:none;height:44px;padding:10px 12px;border:1px solid #e8ebf0;border-radius:8px;font:inherit;outline:none}
-textarea:focus{border-color:#1677ff}
-button{border:0;background:#1677ff;color:#fff;border-radius:8px;padding:0 18px;font:inherit;cursor:pointer;margin-left:8px}
-button:disabled{opacity:.6;cursor:default}
-.bub.wait{color:#8a919f}
-.bub.err{background:#fff5f5;border:1px solid #ffd6d6;color:#c0392b}
-</style></head><body>
-<div class="card">
-  <div class="head">
-    <div class="logo">🤖</div>
-    <div><h1>小钠 · 私聊试用</h1><div class="sub">发消息看看小钠怎么回</div></div>
-    <div class="who">你是 小锂 · 普通用户 · <a href="/qq">QQ 风格客户端</a> · <a href="/login">登录面板</a></div>
-  </div>
-  <div class="msgs" id="m"><div class="tip">这里模拟普通用户「小锂」跟小钠私聊，不经过 QQ。登录面板后会以所有者身份试用。</div></div>
-  <div class="foot">
-    <textarea id="t" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-    <button id="s">发送</button>
-  </div>
-</div>
-<script>
-var $=function(i){return document.getElementById(i);};
-var busy=false;
-function add(cls,text,kind){var r=document.createElement('div');r.className='row '+cls;var b=document.createElement('div');b.className='bub'+(kind?' '+kind:'');b.textContent=text;$('m').appendChild(r);r.appendChild(b);$('m').scrollTop=$('m').scrollHeight;return b;}
-// 逐字显示：约 60 帧吐完；老浏览器没有 matchMedia 时也能正常走
-function typeInto(b,text,done){
-  var reduce=false;
-  try{reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;}catch(e){}
-  if(reduce){b.className='bub';b.textContent=text;done();return;}
-  var n=text.length,step=Math.max(1,Math.round(n/60)),i=0;
-  (function tick(){
-    i=Math.min(n,i+step);
-    b.textContent=text.slice(0,i);
-    $('m').scrollTop=$('m').scrollHeight;
-    if(i<n) setTimeout(tick,26);
-    else {b.className='bub';done();}
-  })();
-}
-function fail(b,msg){b.className='bub err';b.textContent='⚠️ 小钠这次没回成：'+msg;}
-function send(){
-  if(busy)return;
-  var t=$('t').value.replace(/^\\s+|\\s+$/g,''); if(!t)return;
-  busy=true;$('s').disabled=true;$('t').value='';
-  add('me',t);
-  var b=add('na','小钠正在输入…','wait');
-  var xhr=new XMLHttpRequest();
-  xhr.open('POST','/api/trial/chat',true);
-  xhr.setRequestHeader('Content-Type','application/json');
-  xhr.onreadystatechange=function(){
-    if(xhr.readyState!==4)return;
-    var j={};
-    try{j=JSON.parse(xhr.responseText||'{}');}catch(e){}
-    if(xhr.status>=200&&xhr.status<300&&j.ok){
-      var reply=String(j.reply||'');
-      if(!reply){fail(b,'返回内容为空');}
-      else {b.className='bub';b.textContent='';typeInto(b,reply,function(){busy=false;$('s').disabled=false;$('t').focus();});return;}
-    }else{
-      fail(b,j.error||('HTTP '+xhr.status));
-    }
-    busy=false;$('s').disabled=false;$('t').focus();
-  };
-  xhr.onerror=function(){fail(b,'网络错误');busy=false;$('s').disabled=false;};
-  xhr.send(JSON.stringify({text:t}));
-}
-$('s').onclick=send;
-$('t').onkeydown=function(e){
-  e=e||window.event;
-  var k=e.keyCode||e.which;
-  if(k===13&&!e.shiftKey){if(e.preventDefault)e.preventDefault();send();return false;}
-};
-$('t').focus();
-// 试用会话不落盘：浏览器关闭/离开时通知服务端丢弃内存历史
-window.onpagehide=function(){try{if(navigator.sendBeacon)navigator.sendBeacon('/api/trial/reset');}catch(e){}};
 </script></body></html>`;
 }
 
@@ -670,13 +543,18 @@ async function route(req, res, url) {
     return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
   }
 
-  // 试用页：登录前也能用（普通用户身份）；登录后再打开会按所有者身份跑
+  // 原来的私聊试用入口 → 网页 QQ 客户端
   if (url.pathname === '/trial' || url.pathname === '/trial.html') {
-    return sendHtml(res, 200, trialPage());
+    res.writeHead(302, { Location: '/qq', 'Cache-Control': 'no-store' });
+    return res.end();
   }
 
-  // QQ 客户端风格的试用聊天页（公开，走 /api/trial/chat，未登录按访客限速）
+  // 网页 QQ 客户端：必须登录，未登录先去登录页
   if (url.pathname === '/qq' || url.pathname === '/qq.html') {
+    if (!authed(req)) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     const qq = path.join(path.dirname(WEB_DIR), 'qq.html');
     if (!fs.existsSync(qq)) return sendJSON(res, 500, { error: '缺少 web/qq.html' });
     return sendHtml(res, 200, fs.readFileSync(qq));
@@ -760,17 +638,14 @@ async function route(req, res, url) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // 试用聊天：登录前是「小锂 · 普通用户」，登录后按所有者身份跑；都不经过 QQ
+  // 网页直聊（原「私聊试用」）：必须登录，按所有者身份跑；不经过 QQ
   if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
-    if (!trialChat) return sendJSON(res, 503, { ok: false, error: '试用聊天未就绪（机器人还没起来）' });
-    const isOwner = authed(req);
+    if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '请先登录', login: true });
+    if (!trialChat) return sendJSON(res, 503, { ok: false, error: '聊天未就绪（机器人还没起来）' });
     const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
     const body = await readBody(req);
     let t = String(body.text || '').trim();
     const isVoice = !t && !!body.audio;
-    if (isVoice && !isOwner) {
-      return sendJSON(res, 403, { ok: false, error: '语音试用需要先登录面板' });
-    }
     if (isVoice) {
       // 浏览器录的是 16k 单声道 WAV（前端已重采样），直接落临时文件交给 FunASR
       const buf = Buffer.from(String(body.audio), 'base64');
@@ -787,19 +662,9 @@ async function route(req, res, url) {
       if (!t) return sendJSON(res, 400, { ok: false, error: '语音没听清，再说一遍？' });
     }
     if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
-    const maxLen = isOwner ? 500 : 300;
-    if (t.length > maxLen) return sendJSON(res, 400, { ok: false, error: `太长了（最多 ${maxLen} 字）` });
-    // 未登录访客限速，避免外人白嫖 AI 额度
-    if (!isOwner) {
-      const now = Date.now();
-      let wait = trialRateHit('c:' + cid, TRIAL_GUEST_LIMIT, TRIAL_GUEST_GAP_MS, now);
-      if (!wait) wait = trialRateHit('ip:' + clientIp(req), TRIAL_IP_LIMIT, 0, now);
-      if (wait) return sendJSON(res, 429, { ok: false, error: `试用太频繁，请 ${wait} 秒后再试` });
-      if (trialGuestBusy >= 2) return sendJSON(res, 503, { ok: false, error: '当前试用的人有点多，稍后再试' });
-    }
-    if (!isOwner) trialGuestBusy++;
+    if (t.length > 500) return sendJSON(res, 400, { ok: false, error: '太长了（最多 500 字）' });
     try {
-      const result = await trialChat(cid, t, { owner: isOwner });
+      const result = await trialChat(cid, t, { owner: true });
       const reply = typeof result === 'string' ? result : String((result && result.reply) || '');
       const voices = (result && Array.isArray(result.voices)) ? result.voices : [];
       if (!reply && !voices.length) return sendJSON(res, 502, { ok: false, error: '小钠没有返回内容' });
@@ -807,15 +672,14 @@ async function route(req, res, url) {
     } catch (e) {
       // 把失败原因原样带回前端展示（如「AI 请求失败 (401)：...」「AI 超时」）
       const reason = String((e && e.message) || e || '未知错误');
-      logger.warn(`[试用] 这轮没回成：${reason}`);
+      logger.warn(`[网页直聊] 这轮没回成：${reason}`);
       return sendJSON(res, 502, { ok: false, error: reason });
-    } finally {
-      if (!isOwner) trialGuestBusy--;
     }
   }
 
-  // 试用会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
+  // 直聊会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
   if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
+    if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
     if (trialReset) trialReset(trialClientId(req, res));
     return sendJSON(res, 200, { ok: true });
   }
@@ -1009,6 +873,60 @@ async function route(req, res, url) {
     const r = chatCfg.setPin(key, !!pinned);
     if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
     return sendJSON(res, 200, { ok: true, pinned: chatCfg.pinnedKeys() });
+  }
+
+  // ---------- 网页 QQ 客户端：最近会话 / 消息 / 发消息 ----------
+  // 会话列表来自内存收件箱（机器人收到的 + 发出的消息），名字用群列表/好友列表补全
+  if (url.pathname === '/api/qq/conversations' && req.method === 'GET') {
+    const fx = await fetchGroupsAndFriends();
+    const names = new Map([...fx.groups, ...fx.friends].map((x) => [x.key, x.name]));
+    const list = inboxList().map((c) => {
+      const name = names.get(c.key) || c.name || c.id;
+      if (name !== c.name) setConvName(c.key, name);
+      return { ...c, name };
+    });
+    return sendJSON(res, 200, { ok: true, connected: bot.connected, list });
+  }
+
+  // 某会话的消息：after 用于增量拉取（只返回 id 更大的），打开即清未读
+  if (url.pathname === '/api/qq/messages' && req.method === 'GET') {
+    const key = String(url.searchParams.get('key') || '');
+    if (!/^(g|p):\d{5,14}$/.test(key)) return sendJSON(res, 400, { ok: false, error: 'key 格式错误' });
+    const after = Number(url.searchParams.get('after') || 0) || 0;
+    const fx = await fetchGroupsAndFriends();
+    const hit = [...fx.groups, ...fx.friends].find((x) => x.key === key);
+    if (hit) setConvName(key, hit.name);
+    const name = hit ? hit.name : (convName(key) || key.slice(2));
+    const list = inboxMessages(key, after);
+    inboxMarkRead(key);
+    return sendJSON(res, 200, {
+      ok: true, key, name,
+      kind: key.startsWith('g:') ? 'group' : 'private',
+      messages: list,
+      connected: bot.connected,
+    });
+  }
+
+  // 从网页发消息到真实 QQ（走机器人自己的 OneBot 连接）
+  if (url.pathname === '/api/qq/send' && req.method === 'POST') {
+    const { key, text } = await readBody(req);
+    const k = String(key || '');
+    const t = String(text || '').trim();
+    if (!/^(g|p):\d{5,14}$/.test(k)) return sendJSON(res, 400, { ok: false, error: 'key 格式错误' });
+    if (!t) return sendJSON(res, 400, { ok: false, error: '内容为空' });
+    if (t.length > 2000) return sendJSON(res, 400, { ok: false, error: '太长了（最多 2000 字）' });
+    const send = getSendMsg();
+    if (!send) return sendJSON(res, 200, { ok: false, error: '机器人未连接 SnowLuma' });
+    try {
+      if (k.startsWith('g:')) await send('send_group_msg', { group_id: k.slice(2), message: [{ type: 'text', data: { text: t } }] });
+      else await send('send_private_msg', { user_id: k.slice(2), message: [{ type: 'text', data: { text: t } }] });
+      // callApi 里已经记了这条外发消息，这里把最新一条带回去让网页立刻显示
+      const msgs = inboxMessages(k, 0);
+      const last = msgs[msgs.length - 1] || null;
+      return sendJSON(res, 200, { ok: true, message: last && last.dir === 'out' ? last : null });
+    } catch (e) {
+      return sendJSON(res, 200, { ok: false, error: e.message });
+    }
   }
 
   // 全局设置 = config.json：查看 / 编辑（写入后热加载生效）
