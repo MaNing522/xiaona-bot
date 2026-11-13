@@ -11,7 +11,7 @@ import { getSearchContext, isSearchEnabled, searchSettings } from './search.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
 import { chatCompletionRaw, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
-import { toolsForRole, runAgentLoop, decideSkip } from './agent.js';
+import { toolsForRole, runAgentReply } from './agent.js';
 import { buildToolPrompt } from './promptTools.js';
 import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
@@ -579,30 +579,17 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         toolChoice: 'auto',
     });
 
-    // 记录本轮是否调用过工具：调了工具 = 明确在回应，绝不能再被"是否接话"判成跳过
-    let usedTool = false;
-    let reply = await runAgentLoop({
+    // 工具调用循环、【REPLY】/【VOICE】标记解析、是否跳过，统一由 agent 内核处理
+    const result = await runAgentReply({
         messages,
         tools,
         chat,
         ctx,
-        onTool: (name, args) => { usedTool = true; logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
+        onTool: (name, args) => { logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
     });
 
-    // 解析格式标记（容忍全角冒号、空格等写法）
-    // 调过工具=明确在办事，即使没写【REPLY:是】也不能跳过（见 decideSkip）
-    const skip = decideSkip(reply, allowSkip, usedTool);
-    reply = reply.replace(/[【[]\s*REPLY\s*[:：][^】\]]*[】\]]/g, '');
-
-    let wantVoice = false;
-    const voiceMatch = reply.match(/[【[]\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*[】\]]/i);
-    if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
-    reply = reply.replace(/[【[]\s*VOICE\s*[:：][^】\]]*[】\]]/gi, '');
-
     // 兜底：清掉漏写结尾、以及元数据/上下文标题被回吐等所有畸形片段
-    reply = stripToolTags(reply);
-
-    return { reply: reply.trim(), wantVoice, skip };
+    return { reply: stripToolTags(result.reply).trim(), wantVoice: result.wantVoice, skip: result.skip };
 }
 
 // ---------- agent 工具的执行上下文（把真实能力注入给 agent.js 的工具） ----------
@@ -649,33 +636,32 @@ async function imageSegToDataUrl(seg) {
     throw new Error('拿不到图片内容');
 }
 
-/** 调自定义视觉接口识别图片（OpenAI 兼容 /chat/completions，支持 image_url 输入） */
-async function analyzeImagesViaCustom(urls, question, v) {
+/** 识图子 agent 的系统提示：只做识别，不要人设/寒暄（结果会回灌给主 agent） */
+const VISION_SYSTEM_PROMPT = '你是识图能力。只描述、识别用户给的图片；图中有文字就原样摘出。'
+    + '回答简短准确，不寒暄、不反问、不提工具，也不要说自己是谁。';
+
+/**
+ * 自定义视觉接口适配器：把和主模型一样的 messages 原样转给它，
+ * 这样识图也能复用同一个 agent 内核（runAgentReply），只是换了 chat 后端。
+ */
+function customVisionChat(v) {
     const key = String(process.env.VISION_CUSTOM_KEY || '').trim();
-    const headers = { 'Content-Type': 'application/json' };
-    if (key) headers.Authorization = `Bearer ${key}`;
-    const body = {
-        messages: [{
-            role: 'user',
-            content: [
-                { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
-                ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
-            ],
-        }],
-        temperature: 0.3,
-        max_tokens: 2000,
+    return async (body) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (key) headers.Authorization = `Bearer ${key}`;
+        const payload = { messages: body.messages, temperature: 0.3, max_tokens: 2000 };
+        if (v.customModel) payload.model = v.customModel;
+        const res = await fetch(v.customUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(90000),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+        return { content: content ? String(content).trim() : '' };
     };
-    if (v.customModel) body.model = v.customModel;
-    const res = await fetch(v.customUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(90000),
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const j = await res.json();
-    const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    return content ? String(content).trim() : '（没识别出内容）';
 }
 
 /** 图片识别入口：后端由 config.json 的 vision.provider 决定（ai 主模型 / custom 自定义 / off 关闭） */
@@ -691,24 +677,35 @@ async function analyzeImages(segs, question) {
         logger.warn('[图片] 获取图片内容失败:', e.message);
         return '图片获取失败：' + e.message;
     }
-    try {
-        if (v.provider === 'custom') return await analyzeImagesViaCustom(urls, question, v);
+    // 与正常回复同一个内核：同一套消息结构、同一个工具循环（无工具）、同一套标记清理
+    const chat = v.provider === 'custom'
+        ? customVisionChat(v)
         // 默认（ai）：走主 AI 服务商的多模态接口。
         // 额度必须给足：deepseek-flash 这类推理模型会先花 token 想，图越复杂思考越长，
         // 给少了思维链会把额度吃光，正文 content 直接为空（表现为"识别不出内容"）
-        const { content } = await chatCompletionRaw({
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
-                    ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
-                ],
-            }],
+        : (body) => chatCompletionRaw({
+            messages: body.messages,
             temperature: 0.3,
             maxTokens: 2000,
             timeoutMs: 90000,
         });
-        return content ? content.trim() : '（没识别出内容）';
+    try {
+        const { reply } = await runAgentReply({
+            messages: [
+                { role: 'system', content: VISION_SYSTEM_PROMPT },
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: question || '这是什么？请描述这张图片的内容；若其中有文字，请原样识别出来。' },
+                        ...urls.map((u) => ({ type: 'image_url', image_url: { url: u } })),
+                    ],
+                },
+            ],
+            chat,
+            tools: [],
+            maxSteps: 1,
+        });
+        return reply || '（没识别出内容）';
     } catch (e) {
         logger.warn('[图片] 识别失败:', e.message);
         return '图片识别失败：' + e.message;

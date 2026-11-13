@@ -1,6 +1,6 @@
 // agent.js 的单测：工具按身份过滤（对应身份对应调用）+ 工具调用循环 + 越权拒绝。
 import { describe, it, expect } from 'vitest';
-import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, decideSkip } from '../src/agent.js';
+import { AGENT_TOOLS, ROLE_RANK, toolsForRole, runAgentLoop, runAgentReply, decideSkip } from '../src/agent.js';
 
 const names = (role) => toolsForRole(role).map((t) => t.function.name);
 
@@ -152,5 +152,39 @@ describe('decideSkip（是否跳过回复）', () => {
 
   it('关键：调过工具即使没写标记也不跳过（查服务器被吞的回归）', () => {
     expect(decideSkip('play.xxx 在线 3 人', true, true)).toBe(false);
+  });
+});
+
+describe('runAgentReply（统一回合内核）', () => {
+  it('普通回复：剥掉【VOICE】标记并给出 wantVoice', async () => {
+    const chat = async () => ({ content: '【VOICE:是】在呢～', tool_calls: null });
+    const out = await runAgentReply({ messages: [], chat });
+    expect(out).toEqual({ reply: '在呢～', wantVoice: true, skip: false });
+  });
+
+  it('【VOICE:否】→ 不发语音', async () => {
+    const chat = async () => ({ content: '行【VOICE:否】', tool_calls: null });
+    const out = await runAgentReply({ messages: [], chat });
+    expect(out.reply).toBe('行');
+    expect(out.wantVoice).toBe(false);
+  });
+
+  it('允许跳过时按【REPLY】判定，并清掉标记', async () => {
+    const chat = async () => ({ content: '【REPLY:否】嗯', tool_calls: null });
+    const out = await runAgentReply({ messages: [], chat, allowSkip: true });
+    expect(out.skip).toBe(true);
+    expect(out.reply).toBe('嗯');
+  });
+
+  it('调过工具后不会被判跳过（即使没写【REPLY:是】）', async () => {
+    let call = 0;
+    const chat = async () => {
+      call += 1;
+      if (call === 1) return { content: '', tool_calls: [{ id: '1', type: 'function', function: { name: 'mc_status', arguments: '{}' } }] };
+      return { content: '在线 3 人', tool_calls: null };
+    };
+    const out = await runAgentReply({ messages: [], tools: toolsForRole('guest'), chat, ctx: { mcStatus: async () => '在线 3 人' }, allowSkip: true });
+    expect(out.skip).toBe(false);
+    expect(out.reply).toBe('在线 3 人');
   });
 });

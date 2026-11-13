@@ -253,6 +253,45 @@ export function decideSkip(reply, allowSkip, usedTool) {
   return !yes && !usedTool;
 }
 
+/**
+ * 一轮完整的 agent 回合（所有 AI 能力共用这一个内核）：
+ * 跑工具循环 → 解析【REPLY】/【VOICE】标记 → 决定是否跳过。
+ * 正常回复、识图、空间文案…都调用这里，区别只在 messages / tools / chat 适配器。
+ *
+ * @param {object} opts
+ * @param {Array}  opts.messages  初始消息（含 system + user），会被就地追加
+ * @param {Array}  [opts.tools]   可用工具（已按身份过滤）
+ * @param {Function} opts.chat    (body) => {content, tool_calls}；可以是主模型，也可以是视觉/自定义后端适配器
+ * @param {object} [opts.ctx]     工具执行上下文
+ * @param {number} [opts.maxSteps] 最多循环几步，默认 5
+ * @param {boolean} [opts.allowSkip] 是否允许用【REPLY:是】判定"这条不接"
+ * @param {Function} [opts.onTool] 工具调用回调（日志用）
+ * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
+ */
+export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 5, allowSkip = false, onTool }) {
+  let usedTool = false;
+  const raw = await runAgentLoop({
+    messages,
+    tools,
+    chat,
+    ctx,
+    maxSteps,
+    // 调过工具 = 明确在办事，即使没写【REPLY:是】也不能被跳过（见 decideSkip）
+    onTool: (name, args) => { usedTool = true; if (onTool) onTool(name, args); },
+  });
+
+  const skip = decideSkip(raw, allowSkip, usedTool);
+  let text = String(raw || '');
+  text = text.replace(/[【[]\s*REPLY\s*[:：][^】\]]*[】\]]/g, '');
+
+  let wantVoice = false;
+  const voiceMatch = text.match(/[【[]\s*VOICE\s*[:：]\s*(YES|NO|是|否)\s*[】\]]/i);
+  if (voiceMatch) wantVoice = /^(YES|是)$/i.test(voiceMatch[1]);
+  text = text.replace(/[【[]\s*VOICE\s*[:：][^】\]]*[】\]]/gi, '');
+
+  return { reply: text.trim(), wantVoice, skip };
+}
+
 /** 执行单个工具：校验身份（工具是否在允许列表里）→ 解析参数 → 运行 → 返回文本结果 */
 async function execTool(name, rawArgs, ctx, allowedTools, onTool) {
   const def = AGENT_TOOLS.find((t) => t.function.name === name);

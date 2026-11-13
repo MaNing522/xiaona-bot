@@ -13,6 +13,7 @@ import { config, DEFAULTS } from './config.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger } from './logger.js';
 import { chatCompletionRaw, isAiEnabled } from './aiService.js';
+import { runAgentReply } from './agent.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -234,13 +235,19 @@ function cleanAiText(text, maxLen) {
 
 async function aiText(prompt, maxLen) {
   if (!isAiEnabled()) throw new Error('AI 未配置，无法生成内容');
-  const r = await chatCompletionRaw({
+  // 和聊天/识图同一个 agent 内核，只是没有工具、只跑一步
+  const { reply } = await runAgentReply({
     messages: [{ role: 'user', content: prompt }],
-    temperature: 0.9,
-    maxTokens: 400,
-    userId: 'qzone-scheduler',
+    chat: (body) => chatCompletionRaw({
+      messages: body.messages,
+      temperature: 0.9,
+      maxTokens: 400,
+      userId: 'qzone-scheduler',
+    }),
+    tools: [],
+    maxSteps: 1,
   });
-  const text = cleanAiText(r && r.content, maxLen);
+  const text = cleanAiText(reply, maxLen);
   if (!text) throw new Error('AI 返回了空内容');
   return text;
 }
