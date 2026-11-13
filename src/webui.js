@@ -10,6 +10,7 @@ import net from 'net';
 import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
+import { WebSocket, WebSocketServer } from 'ws';
 import * as perm from './permission.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { renderCaptcha } from './captcha.js';
@@ -37,6 +38,12 @@ import {
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 const HOME_FILE = path.join(ROOT, 'web', 'home.html');
+// 网页 QQ：照搬 Stapxs QQ Lite 官方网页版的静态资源（原样保留它的绝对路径前缀，不改编译产物）
+const SSQQ_DIR = path.join(ROOT, 'web', 'ssqq');
+const SSQQ_PREFIX = '/Stapxs-QQ-Lite-2.0/';
+// 网页 QQ 的 OneBot 反向代理目标：浏览器连同源 /ssqq/ws（不用带 token），服务端补 Authorization 再转给本机 OneBot
+const ONEBOT_WS_URL = String(process.env.ONEBOT_WS || 'ws://127.0.0.1:3001').trim();
+const ONEBOT_TOKEN = String(process.env.ONEBOT_TOKEN || '').trim();
 
 // 面板协议：默认 HTTP；设 WEBUI_HTTPS=true 才启用 HTTPS（证书代码保留在 tls.js）
 function useHttps() {
@@ -293,6 +300,46 @@ function trialClientId(req, res) {
 function sendHtml(res, code, html) {
   res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(html);
+}
+
+/** 静态文件 Content-Type（网页 QQ 的编译产物只有这几种） */
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+};
+
+/** 把网页 QQ 的静态文件发出去；路径必须落在 web/ssqq 内（防 ../ 穿越） */
+function serveSsqqFile(res, pathname) {
+  const rel = pathname.startsWith(SSQQ_PREFIX)
+    ? pathname.slice(SSQQ_PREFIX.length)
+    : pathname.replace(/^\/ssqq\/?/, '');
+  const file = path.resolve(SSQQ_DIR, ...decodeURIComponent(rel).split('/').filter(Boolean));
+  if (!file.startsWith(SSQQ_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Not Found');
+  }
+  const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  // 编译产物文件名带 hash，可以长缓存；index.html 不快照，保证升级后立刻拿到新入口
+  const cache = file.endsWith('index.html') ? 'no-store' : 'public, max-age=604800';
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache });
+  fs.createReadStream(file).pipe(res);
 }
 
 /** 该 IP 是否已连续输错到需要人机验证（达到阈值才要求） */
@@ -558,6 +605,26 @@ async function route(req, res, url) {
     const qq = path.join(path.dirname(WEB_DIR), 'qq.html');
     if (!fs.existsSync(qq)) return sendJSON(res, 500, { error: '缺少 web/qq.html' });
     return sendHtml(res, 200, fs.readFileSync(qq));
+  }
+
+  // 网页 QQ（Stapxs QQ Lite 原版）：/ssqq 是入口，它引用 /Stapxs-QQ-Lite-2.0/... 的绝对资源路径
+  if (url.pathname === '/ssqq' || url.pathname === '/ssqq/') {
+    if (!authed(req)) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    const idx = path.join(SSQQ_DIR, 'index.html');
+    if (!fs.existsSync(idx)) {
+      return sendJSON(res, 500, { error: '缺少 web/ssqq（Stapxs QQ Lite 静态资源）' });
+    }
+    return sendHtml(res, 200, fs.readFileSync(idx));
+  }
+  if (url.pathname.startsWith(SSQQ_PREFIX) || url.pathname.startsWith('/ssqq/')) {
+    if (!authed(req)) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return serveSsqqFile(res, url.pathname);
   }
 
   // 老旧浏览器兼容页（纯 ES5 + XHR，只保留状态 / 登录 / 试用）
@@ -1031,6 +1098,45 @@ export async function startWebUI() {
 
   // HTTPS 才生成 / 复用证书；HTTP 模式完全不碰证书与证书库
   const server = httpsOn ? https.createServer(ensureTls(), handler) : http.createServer(handler);
+
+  // ---- 网页 QQ（Stapxs）的 OneBot WebSocket 反向代理 ----
+  // 浏览器连 ws://<面板地址>/ssqq/ws（同源、免 token），服务端补 ONEBOT_TOKEN 后转到 127.0.0.1:3001。
+  // 这样既不用把 OneBot 端口/token 暴露给前端，也不用给 OneBot 开 CORS。
+  const ssqqWss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { /* 坏请求直接丢弃 */ }
+    if (pathname !== '/ssqq/ws') { socket.destroy(); return; }
+    if (!authed(req)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    ssqqWss.handleUpgrade(req, socket, head, (client) => {
+      const upstream = new WebSocket(ONEBOT_WS_URL, {
+        headers: ONEBOT_TOKEN ? { Authorization: `Bearer ${ONEBOT_TOKEN}` } : {},
+      });
+      const pending = [];   // 上游还没 open 时浏览器先发的帧先攒着
+      client.on('message', (data, isBinary) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+        else pending.push([data, isBinary]);
+      });
+      upstream.on('open', () => {
+        logger.info(`🌐 网页 QQ 已接入 OneBot（${ONEBOT_WS_URL}）`);
+        for (const [data, isBinary] of pending.splice(0)) upstream.send(data, { binary: isBinary });
+      });
+      upstream.on('message', (data, isBinary) => {
+        if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+      });
+      upstream.on('close', () => { try { client.close(); } catch { /* 已断开 */ } });
+      upstream.on('error', (e) => {
+        logger.warn(`🌐 网页 QQ 连接 OneBot 失败：${e.message}`);
+        try { client.close(); } catch { /* 已断开 */ }
+      });
+      client.on('close', () => { try { upstream.close(); } catch { /* 已断开 */ } });
+      client.on('error', () => { try { upstream.close(); } catch { /* 已断开 */ } });
+    });
+  });
 
   // 端口被占用时自动顺延，避免整个面板起不来：
   // 443 常被 IIS、nginx、Steam++(Watt Toolkit) 等占用，硬绑会 EADDRINUSE。
