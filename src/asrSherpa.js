@@ -58,13 +58,16 @@ const MODEL_DIR = path.resolve(ROOT, String(process.env.SHERPA_MODEL_DIR || 'mod
 const MODEL_TYPE = String(process.env.SHERPA_MODEL_TYPE || 'paraformer').trim().toLowerCase();
 const NUM_THREADS = Math.max(1, Number(process.env.SHERPA_THREADS || 2));
 
+// 只有被当作脚本直接运行时才监听端口/退出进程（单测里 import 本文件只取纯函数）
+const isMain = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
 // ---------- sherpa-onnx 绑定（缺失时给出人话） ----------
 let sherpa = null;
 try {
     sherpa = (await import('sherpa-onnx-node')).default;
 } catch (e) {
     log(`未安装 sherpa-onnx-node（npm i sherpa-onnx-node）：${e.message}`);
-    process.exit(2);
+    if (isMain) process.exit(2);
 }
 
 /** 在模型目录里挑模型文件：优先 int8，其次 fp32 */
@@ -338,16 +341,20 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-server.listen(PORT, HOST, () => {
-    log(`sherpa-onnx 语音识别服务已启动：http://${HOST}:${PORT}/v1/audio/transcriptions`);
-    // 预热：启动即加载模型，避免第一条语音等太久
-    loadRecognizer().catch((e) => log(`模型加载失败：${e.message}`));
-});
-
-for (const sig of ['SIGINT', 'SIGTERM']) {
-    process.on(sig, () => {
-        log('收到退出信号，关闭服务');
-        try { server.close(); } catch { /* 忽略 */ }
-        process.exit(0);
+// 只有被当作脚本直接运行时才监听端口（单测里 import 本文件只取纯函数）
+if (isMain) {
+    server.listen(PORT, HOST, () => {
+        log(`sherpa-onnx 语音识别服务已启动：http://${HOST}:${PORT}/v1/audio/transcriptions`);
+        // 预热：启动即加载模型，避免第一条语音等太久
+        loadRecognizer().catch((e) => log(`模型加载失败：${e.message}`));
     });
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.on(sig, () => {
+            log('收到退出信号，关闭服务');
+            try { server.close(); } catch { /* 忽略 */ }
+            process.exit(0);
+        });
+    }
 }
+
+export { server };

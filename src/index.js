@@ -119,7 +119,9 @@ function logFeatureStates() {
         ? `小米 MiMo（${process.env.TTS_XIAOMI_VOICE || '冰糖'}）`
         : `Edge 免密钥（${process.env.TTS_VOICE || 'zh-CN-XiaoxiaoNeural'} ${process.env.TTS_RATE || '+8%'}）`;
     logger.info(`   语音合成       ${on(ttsReady)}  ${ttsDesc}${ttsReady ? '' : '  缺 MIMO_API_KEY'}`);
-    logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 FunASR(SenseVoice) ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
+    const asrEngine = String(process.env.ASR_ENGINE || 'sherpa').trim().toLowerCase() === 'funasr'
+        ? 'FunASR(SenseVoice)' : 'sherpa-onnx';
+    logger.info(`   语音识别       ${on(asrEnabled())}${asrEnabled() ? `  本地 ${asrEngine} ${process.env.ASR_URL || 'http://127.0.0.1:8899'}` : ''}`);
     logger.info(`   网页控制面板   ${on(WEBUI_ENABLED)}${WEBUI_ENABLED ? '' : '  缺 WEBUI_PASSWORD'}`);
     const bt = getBridgeTarget();
     logger.info(`   MC 服务器桥    ${on(isMcConfigured())}${isMcConfigured() ? `  ${bt.base}（模式 ${bt.mode || 'env'}）` : `  模式 ${bt.mode || 'env'} 未配置`}`);
@@ -134,7 +136,7 @@ function logFeatureStates() {
 async function checkAsrService() {
     if (!asrEnabled()) return;
     const url = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions');
-    // 启动器刚拉起 FunASR 时模型要加载 1~3 分钟（首次还要下载），10 秒一轮、最多等 3 分钟
+    // 启动器刚拉起语音识别服务时模型要加载几秒（sherpa-onnx）到十几秒（FunASR），10 秒一轮、最多等 3 分钟
     for (let i = 0; i < 18; i++) {
         try {
             // 该接口只收 POST，GET 会回 405——能拿到任何 HTTP 响应就说明服务活着
@@ -144,7 +146,7 @@ async function checkAsrService() {
         } catch { /* 还没起来，10 秒后再试 */ }
         await new Promise((r) => setTimeout(r, 10000));
     }
-    logger.warn(`   语音识别服务   连不上（${url}），语音消息将只显示 [语音]；请检查 asr-venv 是否装好、startASR.bat 能否启动`);
+    logger.warn(`   语音识别服务   连不上（${url}），语音消息将只显示 [语音]；请检查 models/ 下的 sherpa 模型、node_modules/sherpa-onnx-node 是否就位`);
 }
 
 // ---------- 「唤起会话」：被叫到之后，接着几条没 @ 没关键词也继续判断 ----------
@@ -3702,7 +3704,7 @@ setOwnerNotifier(notifyOwner);
 setTrialChat(runTrialChat);
 // 浏览器关闭（断开连接）时丢弃试用会话，不落盘
 setTrialReset(resetTrialChat);
-// 语音识别：QQ 语音多为 amr/silk，FunASR 吃不下，交给 SnowLuma 的 get_record 转成 wav
+// 语音识别：QQ 语音多为 amr/silk，本地 ASR 吃不下，交给 SnowLuma 的 get_record 转成 wav
 // （SnowLuma 自带 silk 解码；record 段的 file 是它自己编码的引用，直接回传即可）
 setAudioConverter(async (data) => {
     const ref = String((data && (data.file || data.file_id)) || '').trim();
