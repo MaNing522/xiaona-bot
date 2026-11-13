@@ -128,6 +128,107 @@ function ensureOneBotConfig() {
   console.log(`[启动器] SnowLuma 配置已就绪：WS 127.0.0.1:${WS_PORT}（token ${onebotToken ? '已设置' : '未设置'}）`);
 }
 
+// ---------- SnowLuma 控制台密码：跟随面板密码 ----------
+// SL 的控制台密码存在 webui.json（scrypt 哈希，不是明文）。
+// 这里每次启动都按 .env 的 WEBUI_PASSWORD 重新算一遍，和现有哈希不一致才写，
+// 让「面板密码 = SL 控制台密码」，不用再去翻 SL 日志里那个随机密码。
+const SL_WEBUI_PASSWORD = String(process.env.WEBUI_PASSWORD || '').trim();
+const SL_SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
+const SL_DOCKER_NAME = String(process.env.SNOWLUMA_CONTAINER || 'snowluma').trim();
+const SL_DOCKER_WEBUI = '/app/data/config/webui.json';
+
+/** 用 SL 自己的算法（scrypt）生成一份 webui.json 状态；mustChangePassword=false 表示别再随机重置 */
+function buildWebuiState(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, SL_SCRYPT.keylen, {
+    N: SL_SCRYPT.N, r: SL_SCRYPT.r, p: SL_SCRYPT.p,
+  });
+  const now = new Date().toISOString();
+  return {
+    passwordHash: hash.toString('hex'),
+    passwordSalt: salt.toString('hex'),
+    mustChangePassword: false,
+    generatedAt: now,
+    updatedAt: now,
+  };
+}
+
+/** 现有 webui.json 是否已经是这个密码（用它的 salt 重算比对，不改文件） */
+function webuiPasswordMatches(state, password) {
+  try {
+    if (!state || state.mustChangePassword !== false) return false;
+    const salt = Buffer.from(String(state.passwordSalt || ''), 'hex');
+    if (!salt.length) return false;
+    const hash = crypto.scryptSync(password, salt, SL_SCRYPT.keylen, {
+      N: SL_SCRYPT.N, r: SL_SCRYPT.r, p: SL_SCRYPT.p,
+    });
+    return hash.toString('hex') === String(state.passwordHash || '');
+  } catch {
+    return false;
+  }
+}
+
+/** 跑一个命令并把 input 写进它的 stdin（execFile 没有 input 选项） */
+function runWithInput(file, args, input, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn(file, args, { windowsHide: true });
+    } catch (e) {
+      resolve({ ok: false, stderr: e.message });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { try { p.kill(); } catch {} resolve({ ok: false, stderr: 'timeout' }); }, timeoutMs);
+    p.stdout.on('data', (c) => { stdout += c; });
+    p.stderr.on('data', (c) => { stderr += c; });
+    p.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, stderr: e.message }); });
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, stdout, stderr });
+    });
+    try { if (input != null) p.stdin.end(input); else p.stdin.end(); } catch {}
+  });
+}
+
+/**
+ * 把 SL 控制台密码同步成面板密码。
+ * - Windows：写项目里的 snowluma/config/webui.json（SL 还没起，写完即生效）
+ * - Linux：SL 在 Docker 里（deploy/linux/install.sh --with-snowluma），写容器数据卷，
+ *   哈希变了才重启容器让它重新加载（QQ 登录态在卷里，会自动恢复）
+ */
+async function syncSnowlumaWebuiPassword() {
+  if (!SL_WEBUI_PASSWORD) return;
+  if (IS_WIN) {
+    const file = path.join(SNOWLUMA_CONFIG_DIR, 'webui.json');
+    if (webuiPasswordMatches(readJson(file), SL_WEBUI_PASSWORD)) return;
+    fs.mkdirSync(SNOWLUMA_CONFIG_DIR, { recursive: true });
+    writeJsonAtomic(file, buildWebuiState(SL_WEBUI_PASSWORD));
+    console.log('[启动器] SnowLuma 控制台密码已同步为面板密码');
+    return;
+  }
+  // Linux：容器不在就说明用的是外部 OneBot，不归启动器管
+  const read = await runWithInput('docker', ['exec', SL_DOCKER_NAME, 'cat', SL_DOCKER_WEBUI], null, 8000);
+  if (!read.ok) return;
+  let cur = null;
+  try { cur = JSON.parse(read.stdout); } catch { /* 坏了就当没配，重写 */ }
+  if (webuiPasswordMatches(cur, SL_WEBUI_PASSWORD)) return;
+  const body = JSON.stringify(buildWebuiState(SL_WEBUI_PASSWORD), null, 2);
+  let w = await runWithInput('docker', ['exec', '-i', SL_DOCKER_NAME, 'sh', '-c', `cat > ${SL_DOCKER_WEBUI}`], body);
+  if (!w.ok) {
+    w = await runWithInput('docker', ['exec', '-i', '-u', 'root', SL_DOCKER_NAME, 'sh', '-c', `cat > ${SL_DOCKER_WEBUI}`], body);
+  }
+  if (!w.ok) {
+    console.log(`[启动器] SnowLuma 控制台密码同步失败：${(w.stderr || '').trim() || '未知原因'}`);
+    return;
+  }
+  const restart = await runWithInput('docker', ['restart', SL_DOCKER_NAME], null, 90000);
+  console.log(restart.ok
+    ? '[启动器] SnowLuma 控制台密码已同步为面板密码，容器已重启'
+    : `[启动器] SnowLuma 控制台密码已写入，但容器重启失败：${(restart.stderr || '').trim()}`);
+}
+
 // ---------- 确认 QQ 进程 ----------
 function qqPath() {
   return String(process.env.QQ_PATH || '').trim() || QQ_PATH_DEFAULT;
@@ -379,6 +480,8 @@ async function main() {
   if (!IS_WIN) {
     console.log(`[启动器] Linux：跳过桌面 QQ / SnowLuma 拉起，等待 OneBot11 在 ${ONEBOT_WS} 就绪…`);
     console.log('[启动器] 若还没有 OneBot：sudo bash deploy/linux/install.sh --with-snowluma（或 --with-napcat）');
+    // SL 跑在 Docker 时，把控制台密码同步成面板密码（容器不在就静默跳过）
+    syncSnowlumaWebuiPassword().catch(() => {});
     const bot = spawnBot();
     bot.on('exit', (code) => {
       console.log(`[启动器] 机器人已退出（code=${code}）`);
@@ -399,6 +502,7 @@ async function main() {
   }
 
   ensureOneBotConfig();
+  await syncSnowlumaWebuiPassword();
   await ensureQQ();
 
   const snowluma = spawnSnowluma();
