@@ -12,6 +12,7 @@ import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger, setLogLevel } from './logger.js';
 import { chatCompletionRaw, isAiEnabled, balanceEndpoint, logProviderInfo, getProviderInfo, pickMaxTokens } from './aiService.js';
 import { toolsForRole, runAgentLoop, decideSkip } from './agent.js';
+import { buildToolPrompt } from './promptTools.js';
 import { initRateLimit, acquire } from './rateLimit.js';
 import { startIdleMaintenance } from './idle.js';
 import * as perm from './permission.js';
@@ -362,7 +363,12 @@ function mcServerInfoLine() {
     return name || host;
 }
 
-function getSystemPrompt() {
+/**
+ * 拼系统提示词：prompt.txt 只负责人设与说话风格；
+ * 工具、权限、记忆机制、MC 桥玩法这些跟程序行为绑定的内容由 promptTools.js 按身份动态生成。
+ * @param {{role?:string, caps?:object}} [o]
+ */
+function getSystemPrompt({ role = 'guest', caps = {} } = {}) {
     try {
         const st = fs.statSync(PROMPT_PATH);
         if (st.mtimeMs !== promptCache.mtimeMs) {
@@ -377,12 +383,14 @@ function getSystemPrompt() {
     } catch (e) {
         if (!promptCache.text) logger.error('❌ 读取提示词失败（prompt.txt 在不在？）:', e.message);
     }
-    // 运行时信息（服务器身份）从 .env 动态拼接，不写进 prompt.txt，避免地址被提交入库
-    const info = mcServerInfoLine();
-    const extra = info
-        ? `\n\n【你应该知道的事】\n- 你连着的 Minecraft 服务器：${info}。玩家用这个地址进服；有人问"你在哪个服"就照实说。\n`
-        : '';
-    return promptCache.text + extra;
+    // 运行时信息（服务器地址、桥接群）从 .env 取，交给程序侧提示词拼接，不写进 prompt.txt
+    const toolPrompt = buildToolPrompt({
+        role,
+        caps,
+        serverInfo: mcServerInfoLine(),
+        bridgeGroup: MC_BRIDGE_GROUP,
+    });
+    return [promptCache.text.trimEnd(), toolPrompt].filter(Boolean).join('\n\n');
 }
 
 // ---------- OneBot 状态 ----------
@@ -548,14 +556,15 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
 async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {} }) {
-    let tools = toolsForRole(role, { plan: isPlanAvailable() });
+    const caps = { plan: isPlanAvailable() };
+    let tools = toolsForRole(role, caps);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
     // 图片识别工具只在"本条消息真的带图片"时才给模型，免得它对着纯文字消息瞎调
     if (!allowImage) tools = tools.filter((t) => t.function.name !== 'analyze_image');
     // 唱歌工具只在会话允许语音时开放（关闭语音后模型看不到，免得唱了发不出去）
     if (!allowVoice) tools = tools.filter((t) => t.function.name !== 'sing');
 
-    const sys = getSystemPrompt();
+    const sys = getSystemPrompt({ role, caps });
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
         { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote, allowImage) },
