@@ -1,25 +1,23 @@
 // ============================================================
 // asr.js - 语音识别（把 QQ 语音消息转成文字，喂给 AI）
 //
-// 用**本地 FunASR（SenseVoice 模型）**：QQ 语音是 OneBot 的 record 段（一段音频文件），
-// AI 读不懂音频，先送本地 FunASR 转成文字，再拼进给模型看的消息里。
+// 用**本地语音识别服务**：QQ 语音是 OneBot 的 record 段（一段音频文件），
+// AI 读不懂音频，先送本地服务转成文字，再拼进给模型看的消息里。
 //
-// 本地服务（FunASR 官方 OpenAI 兼容接口，一行命令即可起）：
-//     pip install funasr fastapi uvicorn python-multipart
-//     funasr-server --host 127.0.0.1 --port 8899 --model sensevoice --device cpu
-//   本模块默认请求 http://127.0.0.1:8899/v1/audio/transcriptions（multipart 上传 file），
-//   返回 JSON 的 text 字段即为识别结果。
+// 默认后端是 sherpa-onnx（Node 实现，见 src/asrSherpa.js，由 start.js 自动拉起），
+// 也可以用 ASR_ENGINE=funasr 换回 FunASR；两者都是 OpenAI 兼容接口：
+//    POST http://127.0.0.1:8899/v1/audio/transcriptions（multipart 上传 file），
+//    返回 JSON 的 text 字段即为识别结果。
 //
 // 两个「补偿」都在这里做，因为语音识别本身不可靠：
-//   1) 转码：QQ 语音多半是 amr / silk，FunASR 吃不下。挂上 setAudioConverter 后，
+//   1) 转码：QQ 语音多半是 amr / silk，sherpa-onnx 吃不下。挂上 setAudioConverter 后，
 //      先让 SnowLuma 用自己的 get_record(out_format=wav) 转成 wav 再上传（SnowLuma 内部带 silk 解码）。
-//   2) 同音纠正：SenseVoice 不认字，常把「小钠」听成「小娜」。按 config.json 的 asr 段把错字改回来，
+//   2) 同音纠正：模型不认字，常把「小钠」听成「小娜」。按 config.json 的 asr 段把错字改回来，
 //      否则既读着别扭，也匹配不上触发关键词（见 fixText）。
 //
 // 相关 .env（都可留空用默认值）：
 //   ASR_URL    完整接口地址，默认 http://127.0.0.1:8899/v1/audio/transcriptions
-//   ASR_MODEL  模型名，默认 sensevoice（FunASR 1.4+ 服务端只认自己注册的名字，
-//              如 sensevoice / paraformer；传 ModelScope 的 iic/SenseVoiceSmall 会被 400 拒绝）
+//   ASR_MODEL  模型名（仅 FunASR 后端有意义）
 //   ASR_TOKEN  若服务端要求鉴权，填了会带 Authorization: Bearer <token>
 //   ASR_ENABLED=false 可整体关闭语音识别（默认开）
 // 相关 config.json：asr.canonicalName / asr.homophones（同音纠正表，见下）
@@ -39,7 +37,7 @@ const DEFAULT_URL = 'http://127.0.0.1:8899/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'sensevoice';
 const ASR_TIMEOUT_MS = 20000;
 
-/** FunASR 原生吃得下的格式；其余（amr/silk/wma/spx…）先转码成 wav */
+/** 服务原生吃得下的格式；其余（amr/silk/wma/spx…）先转码成 wav */
 const NATIVE_EXT = new Set(['wav', 'mp3', 'flac', 'm4a', 'mp4', 'aac', 'ogg', 'opus']);
 
 function endpoint() { return String(process.env.ASR_URL || DEFAULT_URL).trim(); }
@@ -212,14 +210,14 @@ async function doTranscribe(data) {
             // 带上服务端返回的原文（如 Unknown model 'iic/SenseVoiceSmall'），方便直接看出原因
             let detail = '';
             try { detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 160); } catch { /* 读不出就算了 */ }
-            logger.warn(`[ASR] 本地 FunASR 返回 ${res.status}${detail ? '：' + detail : ''}，本条语音跳过识别`);
+            logger.warn(`[ASR] 本地语音识别服务返回 ${res.status}${detail ? '：' + detail : ''}，本条语音跳过识别`);
             return null;
         }
         const j = await res.json().catch(() => null);
         const text = fixText(cleanText(j && (j.text || j.result || j.data)));
         return text || null;
     } catch (e) {
-        logger.warn(`[ASR] 本地 FunASR 调用失败（服务没起？）：${e.message}`);
+        logger.warn(`[ASR] 本地语音识别服务调用失败（服务没起？）：${e.message}`);
         return null;
     }
 }

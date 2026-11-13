@@ -38,8 +38,10 @@ let onebotToken = String(process.env.ONEBOT_TOKEN || process.env.NAPCAT_TOKEN ||
 // .env 未指定 QQ 路径时用 Windows 默认安装位置
 const QQ_PATH_DEFAULT = 'C:\\Program Files\\Tencent\\QQNT\\QQ.exe';
 
-// 本地语音识别服务（FunASR）：默认 http://127.0.0.1:8899/v1/audio/transcriptions
+// 本地语音识别服务：默认 sherpa-onnx（Node，见 src/asrSherpa.js），
+// 接口仍是 OpenAI 兼容的 http://127.0.0.1:8899/v1/audio/transcriptions
 const ASR_ENABLED = String(process.env.ASR_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const ASR_ENGINE = String(process.env.ASR_ENGINE || 'sherpa').trim().toLowerCase();
 const ASR_URL = String(process.env.ASR_URL || 'http://127.0.0.1:8899/v1/audio/transcriptions').trim();
 
 // ---------- 控制台时间戳 ----------
@@ -260,19 +262,47 @@ function asrLocalPort() {
   }
 }
 
+/** 把子进程输出转到 asr-service.log */
+function hookAsrLog(proc) {
+  const pipe = (chunk) => String(chunk).split(/\r?\n/).forEach((l) => l.trim() && asrLog(`[ASR] ${l.trim()}`));
+  proc.stdout.on('data', pipe);
+  proc.stderr.on('data', pipe);
+  proc.on('error', (e) => asrLog(`语音识别服务启动失败：${e.message}`));
+  proc.on('exit', (code) => {
+    asrLog(`语音识别服务已退出（code=${code}），重启机器人后会自动再拉起`);
+  });
+  return proc;
+}
+
 /**
- * 确保本地语音识别服务在跑：没在跑就隐藏启动 asr-venv 里的 funasr-server。
- * 以前只能靠手动双击 startASR.bat，开机/重启后经常忘，语音就全变成 [语音] 占位。
- * 起不来只记一行日志，不影响机器人本体。
+ * 拉起 sherpa-onnx 本地服务（Node 实现，src/asrSherpa.js）。
+ * 只依赖 npm 包 sherpa-onnx-node + models/ 下的模型，不再需要 Python venv。
  */
-async function ensureAsrService() {
-  if (!ASR_ENABLED) return null;
-  const port = asrLocalPort();
-  if (!port) { asrLog('语音识别指向外部地址，启动器不拉起本地服务'); return null; }
-  if (await portIsOpen(port)) {
-    asrLog(`语音识别服务已在运行（127.0.0.1:${port}）`);
+function spawnSherpa(port) {
+  const entry = path.join(__dirname, 'src', 'asrSherpa.js');
+  if (!fs.existsSync(entry)) {
+    asrLog('未找到 src/asrSherpa.js，语音消息将只显示 [语音]');
     return null;
   }
+  if (!fs.existsSync(path.join(__dirname, 'node_modules', 'sherpa-onnx-node'))) {
+    asrLog('未安装 sherpa-onnx-node（npm i sherpa-onnx-node），语音消息将只显示 [语音]');
+    return null;
+  }
+  const modelDir = path.resolve(__dirname, String(process.env.SHERPA_MODEL_DIR || 'models/sherpa-paraformer-zh-small').trim());
+  if (!fs.existsSync(modelDir)) {
+    asrLog(`未找到 sherpa 模型目录（${path.relative(__dirname, modelDir)}），语音消息将只显示 [语音]`);
+    return null;
+  }
+  asrLog(`启动本地语音识别服务（sherpa-onnx，端口 ${port}），模型加载需要几秒...`);
+  const proc = spawn(process.execPath, [entry, '--port', String(port)], {
+    cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  asrLog(`语音识别服务进程已拉起（pid=${proc.pid || '未知'}）`);
+  return hookAsrLog(proc);
+}
+
+/** 退回旧实现：asr-venv 里的 funasr-server（ASR_ENGINE=funasr 时用） */
+function spawnFunasr(port) {
   // Windows 的 venv 脚本在 Scripts\，Linux 在 bin/
   const exe = IS_WIN
     ? path.join(__dirname, 'asr-venv', 'Scripts', 'funasr-server.exe')
@@ -288,12 +318,23 @@ async function ensureAsrService() {
     { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
   );
   asrLog(`语音识别服务进程已拉起（pid=${proc.pid || '未知'}）`);
-  const pipe = (chunk) => String(chunk).split(/\r?\n/).forEach((l) => l.trim() && asrLog(`[ASR] ${l.trim()}`));
-  proc.stdout.on('data', pipe);
-  proc.stderr.on('data', pipe);
-  proc.on('error', (e) => asrLog(`语音识别服务启动失败：${e.message}`));
-  proc.on('exit', (code) => asrLog(`语音识别服务已退出（code=${code}），语音消息将只显示 [语音]`));
-  return proc;
+  return hookAsrLog(proc);
+}
+
+/**
+ * 确保本地语音识别服务在跑。
+ * 默认用 sherpa-onnx（Node，见 src/asrSherpa.js）；ASR_ENGINE=funasr 时退回旧的 funasr-server。
+ * 起不来只记一行日志，不影响机器人本体。
+ */
+async function ensureAsrService() {
+  if (!ASR_ENABLED) return null;
+  const port = asrLocalPort();
+  if (!port) { asrLog('语音识别指向外部地址，启动器不拉起本地服务'); return null; }
+  if (await portIsOpen(port)) {
+    asrLog(`语音识别服务已在运行（127.0.0.1:${port}）`);
+    return null;
+  }
+  return ASR_ENGINE === 'funasr' ? spawnFunasr(port) : spawnSherpa(port);
 }
 
 // ---------- 启动机器人（index.js：含网页控制面板、MC桥、QQ 逻辑） ----------
