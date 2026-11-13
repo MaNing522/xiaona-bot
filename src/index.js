@@ -1303,6 +1303,16 @@ async function handleCommand(event, text) {
             return sendReply(event, await doStatus(r));
         }
 
+        // 彩蛋：#sl 假装查 SnowLuma（版本号和平台是编的，别当真）
+        case '/sl': {
+            return sendReply(event, [
+                'SnowLuma 状态',
+                '版本: 11.45.14',
+                '平台: Winux-x66',
+                `运行时长: ${uptimeText(process.uptime())}`,
+            ].join('\n'));
+        }
+
         case '/余额':
         case '/balance':
             return doBalance(event, r);
