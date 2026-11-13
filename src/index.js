@@ -2896,10 +2896,10 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             return;
         }
 
-        // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
-        const withAt = event.message_type === 'group';
+        // 不再自动 @ 提问的人（群里每条都 @ 太吵）；模型自己在正文里写 @某人 时，
+        // sendReplyNow 里仍会转成真正的 at 段，需要点名时照样能用
         for (let i = 0; i < parts.length; i++) {
-            await sendReply(event, parts[i], i === 0 ? wantVoice : false, withAt && i === 0);
+            await sendReply(event, parts[i], i === 0 ? wantVoice : false, false);
             if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 700));
         }
         // 写入记忆（同上，按人记；只留最近 N 条）
