@@ -20,7 +20,7 @@ import { queryServer, formatServer } from './mc.js';
 import { startWebUI, setOwnerNotifier, setTrialChat, setTrialReset, getWebuiPort } from './webui.js';
 import { bot, setBotConnected, setBotError, takeover, pushTakeoverMsg, takeoverOn, setSendMsg, setTakeoverMode } from './state.js';
 import { handleScheduler, initScheduler } from './scheduler.js';
-import { initMemory, setMemoryOptions, addMemory, listMemory, removeMemory, clearMemory, memoryContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
+import { initMemory, setMemoryOptions, addMemory, listMemory, removeMemory, clearMemory, memoryContext, historyContext, recordMessage, searchMemory, pruneExpired } from './memory.js';
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
@@ -389,6 +389,7 @@ function getSystemPrompt({ role = 'guest', caps = {} } = {}) {
         caps,
         serverInfo: mcServerInfoLine(),
         bridgeGroup: MC_BRIDGE_GROUP,
+        expectedHistory: expectedHistoryCount(),
     });
     return [promptCache.text.trimEnd(), toolPrompt].filter(Boolean).join('\n\n');
 }
@@ -713,6 +714,15 @@ async function analyzeImages(segs, question) {
 }
 
 /**
+ * read_history 不填条数时默认拉多少条（config.json 的 memory.expectedHistory）。
+ * 夹在 1~100，配置写坏了也不至于一次拉爆上下文。
+ */
+function expectedHistoryCount() {
+    const n = Number(cfg.memory && cfg.memory.expectedHistory);
+    return Number.isFinite(n) && n > 0 ? Math.min(100, Math.round(n)) : 20;
+}
+
+/**
  * 组装当前会话的工具上下文。
  * @param {string} key  记忆/会话键
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
@@ -741,6 +751,12 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         // 本地文本笔记（data/notes/）：保存资料 / 以后读回来
         writeNote: (name, content, append) => writeNote(name, content, append),
         readNote: (name) => readNote(name),
+        // AI 自己决定拉多少条历史；不填就按 config.json 的 memory.expectedHistory
+        readHistory: (count) => {
+            const n = Number(count);
+            const take = Number.isFinite(n) && n > 0 ? Math.min(100, Math.round(n)) : expectedHistoryCount();
+            return historyContext(key, take) || '没有找到和这个人的历史聊天记录。';
+        },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
         // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
@@ -2810,10 +2826,10 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
         const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
         const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
-        // 记忆按「人」存（QQ 号 / 游戏名），不按会话；条数取 config.json 的 ai.contextMessages
+        // 记忆按「人」存（QQ 号 / 游戏名），不按会话；聊天记录不再自动注入，AI 需要时自己用 read_history 拉
         const memKey = memoryKeyOf(event, meta.name);
         const memScene = memorySceneOf(event);
-        const mem = memoryContext(memKey, cfg.ai ? cfg.ai.contextMessages : undefined);
+        const mem = memoryContext(memKey, undefined, { withHistory: false });
         // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别（工具里会先告诉用户"稍等"）
         const imgs = imageSegmentsOf(event.message);
         // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
@@ -2980,7 +2996,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     const mcMemKey = mcQq ? 'u:' + mcQq : 'n:' + player;
     const mcScene = 'mc:' + player;
     recordMessage(mcMemKey, 'user', text, { name: player, qq: mcQq || '', scene: mcScene });
-    const mem = memoryContext(mcMemKey, cfg.ai ? cfg.ai.contextMessages : undefined);
+    const mem = memoryContext(mcMemKey, undefined, { withHistory: false });
 
     // 游戏玩家没有 QQ 号，用玩家名当 user（同样是稳定的"同一个人"标识，照样能吃到缓存隔离）
     const mcRole = perm.role(mcQq || '');

@@ -70,6 +70,7 @@ export const DEFAULTS = {
     // 记忆按「人」存（QQ号 / 游戏玩家），不按会话；每人只留触发过 AI 的最近若干条
     memory: {
         maxUserMessages: 12,   // 5~20（超出范围会在 memory.js 里被夹到边界）
+        expectedHistory: 20,   // AI 用 read_history 又不指定条数时，默认拉多少条历史（1~100）
     },
     // 会话层的全局默认（网页「会话管理」里会话可单独覆盖，见 chatSettings.js）
     chat: {

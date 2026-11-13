@@ -325,7 +325,10 @@ export function searchMemory(key, kw) {
  * @param {string} key 人的记忆键（u:QQ号 / n:玩家名）
  * @param {number} [limit] 本次注入的历史消息条数（默认取 contextRecent，来自 config.json 的 ai.contextMessages）
  */
-export function memoryContext(key, limit) {
+/** 「最近对话」的抬头说明（几个入口共用一份，别各写各的） */
+const HISTORY_TAIL = '（按人记录，方括号里是当时所在的群 / 私聊；每条开头的名字就是说话的人，不是每句都在跟你说话）\n';
+
+export function memoryContext(key, limit, { withHistory = true } = {}) {
   const k = String(key);
   const n = Number(limit);
   const take = Number.isFinite(n) && n > 0 ? Math.round(n) : CFG.contextRecent;
@@ -334,25 +337,41 @@ export function memoryContext(key, limit) {
     .prepare('SELECT text FROM summary WHERE conv_key = ? ORDER BY id DESC LIMIT 3')
     .all(k)
     .reverse();
-  const last = db
-    .prepare(
-      'SELECT role, content, name, qq, is_bot, scene FROM messages WHERE conv_key = ? ORDER BY id DESC LIMIT ?',
-    )
-    .all(k, Math.max(1, take))
-    .reverse();
+  const last = withHistory
+    ? db
+      .prepare(
+        'SELECT role, content, name, qq, is_bot, scene FROM messages WHERE conv_key = ? ORDER BY id DESC LIMIT ?',
+      )
+      .all(k, Math.max(1, take))
+      .reverse()
+    : [];
 
   if (!lt.length && !sum.length && !last.length) return '';
 
   const parts = [];
   if (lt.length) parts.push('【长期记忆】\n' + lt.map((m) => `- ${m.text}`).join('\n'));
   if (sum.length) parts.push('【对话摘要】\n' + sum.map((m) => `- ${m.text}`).join('\n'));
-  if (last.length) {
-    parts.push(
-      '【最近对话】（按人记录，方括号里是当时所在的群 / 私聊；每条开头的名字就是说话的人，不是每句都在跟你说话）\n'
-        + last.map((m) => lineOf(m)).join('\n'),
-    );
-  }
+  if (last.length) parts.push('【最近对话】' + HISTORY_TAIL + last.map((m) => lineOf(m)).join('\n'));
   return parts.join('\n');
+}
+
+/**
+ * 只取「和这个人的最近聊天记录」，给 agent 的 read_history 工具用。
+ * @param {string} key 人的记忆键（u:QQ号 / n:玩家名）
+ * @param {number} [limit] 拉多少条
+ */
+export function historyContext(key, limit) {
+  const k = String(key);
+  const n = Number(limit);
+  const take = Number.isFinite(n) && n > 0 ? Math.round(n) : CFG.contextRecent;
+  const last = db
+    .prepare(
+      'SELECT role, content, name, qq, is_bot, scene FROM messages WHERE conv_key = ? ORDER BY id DESC LIMIT ?',
+    )
+    .all(k, Math.max(1, take))
+    .reverse();
+  if (!last.length) return '';
+  return '【最近对话】' + HISTORY_TAIL + last.map((m) => lineOf(m)).join('\n');
 }
 
 /** 关闭数据库（主要供测试与优雅退出使用） */

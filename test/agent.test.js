@@ -193,3 +193,19 @@ describe('runAgentReply（统一回合内核）', () => {
     expect(out.reply).toBe('在线 3 人');
   });
 });
+
+describe('sleep / read_history（新工具）', () => {
+  it('read_history 把条数交给 ctx.readHistory，不填就是 undefined（由上层按配置兜底）', async () => {
+    const tool = AGENT_TOOLS.find((t) => t.function.name === 'read_history');
+    expect(tool).toBeTruthy();
+    const out = await tool.run({}, { readHistory: (c) => `count=${c}` });
+    expect(out).toBe('count=undefined');
+  });
+
+  it('sleep 限幅在 1~30 秒，且普通用户可用', () => {
+    const tool = AGENT_TOOLS.find((t) => t.function.name === 'sleep');
+    expect(tool).toBeTruthy();
+    expect(tool.minRole).toBe('guest');
+    expect(tool.function.description).toContain('30');
+  });
+});

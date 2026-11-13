@@ -46,4 +46,13 @@ describe('buildToolPrompt', () => {
     expect(on).toContain('/xn');
     expect(buildToolPrompt({})).toContain('当前没有配置游戏桥接群');
   });
+
+  it('历史不再自动注入：告诉模型用 read_history 拉，默认条数来自配置', () => {
+    const p = buildToolPrompt({ role: 'guest', expectedHistory: 33 });
+    expect(p).toContain('read_history');
+    expect(p).toContain('33 条');
+    expect(p).toContain('不会自动给你');
+    // sleep 是普通用户也能用的工具
+    expect(p).toContain('sleep');
+  });
 });

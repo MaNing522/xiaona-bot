@@ -11,6 +11,7 @@ import {
   removeMemory,
   clearMemory,
   memoryContext,
+  historyContext,
   searchMemory,
   closeMemory,
 } from '../src/memory.js';
@@ -287,5 +288,35 @@ describe('超时清理', () => {
     expect(memoryContext('u:12345')).not.toContain('很久以前的消息');
     expect(memoryContext('p:12345')).not.toContain('很久以前的摘要');
     expect(listMemory('u:12345').map((m) => m.text)).toEqual(['古老的长期记忆']);
+  });
+});
+
+describe('memoryContext({ withHistory:false }) / historyContext（历史交给 agent 自己拉）', () => {
+  it('关掉历史后不再注入【最近对话】，长期记忆仍在', () => {
+    initMemory(dir);
+    addMemory('u:10001', '他喜欢猫');
+    recordMessage('u:10001', 'user', '上次说的那件事', { name: '小明', qq: '10001', scene: 'g:1' });
+    const ctx = memoryContext('u:10001', undefined, { withHistory: false });
+    expect(ctx).toContain('【长期记忆】');
+    expect(ctx).not.toContain('【最近对话】');
+    expect(ctx).not.toContain('上次说的那件事');
+  });
+
+  it('historyContext 只给最近对话，并按条数截断', () => {
+    initMemory(dir);
+    addMemory('u:10001', '长期记忆不该出现在历史里');
+    for (let i = 0; i < 5; i += 1) {
+      recordMessage('u:10001', 'user', `第${i}条`, { name: '小明', qq: '10001', scene: 'g:1' });
+    }
+    const all = historyContext('u:10001', 3);
+    expect(all).toContain('【最近对话】');
+    expect(all).toContain('第4条');
+    expect(all).not.toContain('第0条');
+    expect(all).not.toContain('长期记忆不该出现在历史里');
+  });
+
+  it('historyContext 没有记录时返回空串', () => {
+    initMemory(dir);
+    expect(historyContext('u:404', 10)).toBe('');
   });
 });

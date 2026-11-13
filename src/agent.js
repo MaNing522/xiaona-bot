@@ -186,6 +186,35 @@ export const AGENT_TOOLS = [
     },
     run: async (args, ctx) => ctx.readNote(String(args.name || '').trim()),
   },
+  {
+    minRole: 'guest',
+    function: {
+      name: 'sleep',
+      description: '等一会儿再继续说（最多 30 秒）。只在确实该等的时候用：对方说“等我一下/马上回来”、需要隔一会儿再回应、或者想让节奏别太抢话。不要拿它拖正常回复。',
+      parameters: {
+        type: 'object',
+        properties: { seconds: { type: 'number', description: '等多少秒（1~30）' } },
+        required: ['seconds'],
+      },
+    },
+    run: async (args) => {
+      const sec = Math.min(30, Math.max(1, Math.round(Number(args.seconds) || 1)));
+      await new Promise((r) => setTimeout(r, sec * 1000));
+      return `已等待 ${sec} 秒。`;
+    },
+  },
+  {
+    minRole: 'guest',
+    function: {
+      name: 'read_history',
+      description: '拉取你和**当前这个人**以前的聊天记录（按人存：群里、私聊、游戏里说过的话都在一处）。需要回忆之前聊过什么时用；不确定拉多少条就**不要填 count**，系统按默认值给你。不要每轮都拉。',
+      parameters: {
+        type: 'object',
+        properties: { count: { type: 'integer', description: '拉多少条（可选；不填用默认值）' } },
+      },
+    },
+    run: async (args, ctx) => ctx.readHistory(args.count),
+  },
 ];
 
 /**

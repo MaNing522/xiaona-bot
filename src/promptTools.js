@@ -25,6 +25,8 @@ const TOOL_HINTS = {
     recall_memory: '按关键词检索以前记住的内容',
     write_note: '把资料写进本地笔记（data/notes/），适合清单、长文本等需要长期留存的内容',
     read_note: '读本地笔记；不填文件名则列出全部',
+    sleep: '等一会儿再说（最多 30 秒）。只在对方说“等我一下”、确实该隔一会儿再回时用，别拿它拖正常回复',
+    read_history: '拉取当前这个人以前和你聊过的记录（按人存，跨群/私聊/游戏）。不确定拉多少条就别填 count，系统按默认值给；不要每轮都拉',
 };
 
 /** 身份的中文名（提示词里用，不要直接用英文 key 喂给模型） */
@@ -84,10 +86,12 @@ ${who.map((w) => `- ${w}`).join('\n')}${who.length ? '\n' : ''}- 只有 \`身份
 }
 
 /** 记忆与上下文的机制说明 */
-function memorySection() {
+function memorySection(expectedHistory = 20) {
     return `【记忆与上下文】
-- 每轮对话独立，不继承历史，只有系统给的【已知记忆】和【最近对话】。
-- 【最近对话】按**人**记：同一个人在群里、私聊、游戏里说过的话都在一处，方括号里是当时的场景，换群也认得他。
+- 每轮对话独立，**聊天记录不会自动给你**：需要回忆之前聊过什么，用 \`read_history\` 拉，不填 count 就按默认约 ${expectedHistory} 条。
+- 历史按**人**记：同一个人在群里、私聊、游戏里说过的话都在一处，方括号里是当时的场景，换群也认得他。
+- 长期记忆（\`remember\` 存的）会直接放在【长期记忆】里，不用拉。
+- 不需要回忆就别拉，纯闲聊、一句话能答的别翻记录。
 `;
 }
 
@@ -115,15 +119,16 @@ function mcSection({ bridgeGroup } = {}) {
  * @param {string} [o.serverInfo]  MC 服务器名与地址（没配桥时为空）
  * @param {string} [o.scene]       本条消息来源（群聊/私聊/游戏内）
  * @param {string} [o.bridgeGroup] 桥接群号
+ * @param {number} [o.expectedHistory] read_history 不填条数时的默认值
  * @returns {string}
  */
-export function buildToolPrompt({ role = 'guest', caps = {}, serverInfo = '', scene = '', bridgeGroup = '' } = {}) {
+export function buildToolPrompt({ role = 'guest', caps = {}, serverInfo = '', scene = '', bridgeGroup = '', expectedHistory = 20 } = {}) {
     const ctx = { role, caps };
     return [
         runtimeSection({ serverInfo, scene }),
         toolsSection(ctx),
         identitySection(ctx),
-        memorySection(),
+        memorySection(expectedHistory),
         mcSection({ bridgeGroup }),
     ].filter(Boolean).join('\n');
 }
