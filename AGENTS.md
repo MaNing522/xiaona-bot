@@ -90,6 +90,11 @@ cd c:\QQBot; .\restart.bat
 - `restart.bat` 除了结束 `start.js` 进程树，还会清理**残留的 SnowLuma**（手动启动或上次没退干净的，按 3001 端口的 node 进程识别）。残留进程占着 3001 时，新 SnowLuma 绑不上端口，机器人就会一直 `ECONNREFUSED 127.0.0.1:3001`。**不要杀 QQ 进程**（保留登录态）。
 - 开机自启：**已取消**（2026-10-26 起 `restart.bat` 不再注册计划任务 `XiaonaBot`，并会删除旧任务）。机器/重启后需要手动双击 `启动.bat`（或 `restart.bat`）拉起。若要恢复自启，可手动执行（需管理员）：
   `schtasks /create /tn "XiaonaBot" /tr "wscript.exe C:\QQBot\background.vbs" /sc onlogon /rl highest /delay 0000:30 /f`
+- **Linux 服务器（生产环境）开机自启：靠 PM2，不靠 systemd 单元**。机器人由 `pm2 start start.js --name xiaona-bot` 托管（**不是** `deploy/linux/install.sh` 里的 `xiaona-bot.service`，那套别和 PM2 同时开，会抢 3001/80）；重启后自动恢复靠两件事：
+  1. `pm2-root.service` 已 `enable`（`pm2 startup systemd -u root --hp /root` 生成），开机会跑 `pm2 resurrect`；
+  2. `pm2 save` 写过 `~/.pm2/dump.pm2`。**改过 `pm2` 的启动参数/名字后必须重新 `pm2 save`**，否则重启还是旧配置。
+  SnowLuma 是 Docker 容器，`RestartPolicy=unless-stopped`（`docker update --restart=unless-stopped snowluma` 可重设），所以 QQ 登录态随容器数据卷保留；ASR 由 `start.js` 每次启动自己拉起，不用单独守护。
+  验证命令：`systemctl is-enabled pm2-root; pm2 list; docker inspect snowluma --format '{{.HostConfig.RestartPolicy.Name}}'; curl -s 127.0.0.1:8899/health`。
 
 ## 6. 约定与文件地图
 
