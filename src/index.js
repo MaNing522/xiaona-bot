@@ -2865,8 +2865,9 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         if (!parts.length) {
             // 歌已经用语音发出去了，模型没再补文字就别再发"没听懂"
             if (voiceSent) { logger.info('✅ 语音已通过工具发送，无补充文字'); return; }
-            parts = ['嗯？我没听懂，能再说一遍吗？'];
-            wantVoice = false;
+            // 模型没给正文（自己写了【REPLY:否】、或工具调完没补话）：静默，不再刷"没听懂"的兜底
+            logger.info('🤐 AI 没有给出正文，本条不回复');
+            return;
         }
 
         // 多条回复：只有第一条带 @，后面几条不重复 @，免得刷屏
@@ -2994,8 +2995,9 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
     });
 
     // 标记已在 aiReply 里剥离；这里只兜底再清一次
-    let reply = stripToolTags(String(result.reply || '')).trim();
-    if (!reply) reply = '嗯？我没听懂，能再说一遍吗？';
+    const reply = stripToolTags(String(result.reply || '')).trim();
+    // 没正文就不吭声（空串=不回注游戏），不再刷"没听懂"的兜底
+    if (!reply) return '';
     recordMessage(mcMemKey, 'ai', reply, { scene: mcScene });
     return reply;
 }

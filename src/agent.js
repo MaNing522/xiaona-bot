@@ -248,8 +248,13 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
  * @param {boolean} usedTool  本轮是否调用过工具
  */
 export function decideSkip(reply, allowSkip, usedTool) {
+  const s = String(reply || '');
+  // 模型自己明确写了【REPLY:否】= 它不想接话：任何场合都尊重，别逼它硬回一句
+  // （被 @ 时 allowSkip=false，但它照样可能写"否"，以前会被剥成空串再兜底成"没听懂"）
+  const no = /[【[]\s*REPLY\s*[:：]\s*(否|NO|no|false|0)\s*[】\]]/.test(s);
+  if (no && !usedTool) return true;
   if (!allowSkip) return false;
-  const yes = /[【[]\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*[】\]]/i.test(String(reply || ''));
+  const yes = /[【[]\s*REPLY\s*[:：]\s*(是|YES|yes|true|1)\s*[】\]]/i.test(s);
   return !yes && !usedTool;
 }
 

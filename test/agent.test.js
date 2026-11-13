@@ -153,6 +153,11 @@ describe('decideSkip（是否跳过回复）', () => {
   it('关键：调过工具即使没写标记也不跳过（查服务器被吞的回归）', () => {
     expect(decideSkip('play.xxx 在线 3 人', true, true)).toBe(false);
   });
+
+  it('被 @ 时（allowSkip=false）模型自己写【REPLY:否】也跳过，不逼它硬回', () => {
+    expect(decideSkip('【REPLY:否】', false, false)).toBe(true);
+    expect(decideSkip('[REPLY:NO]', false, false)).toBe(true);
+  });
 });
 
 describe('runAgentReply（统一回合内核）', () => {
