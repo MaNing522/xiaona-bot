@@ -8,6 +8,32 @@
         <meta name="color-scheme" content="light dark">
         <meta name="theme-color" content="#606E7A">
         <title>Stapxs QQ Lite</title>
+        <!-- 面板补丁：首次打开自动连到同源反向代理 /ssqq/ws（等价于在连接页手填地址 + 勾自动连接） -->
+        <script>
+        (function () {
+          try {
+            // 跳过首次使用引导弹窗（Stapxs 用 guide=1 表示看过）
+            localStorage.setItem('guide', '1');
+            var want = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ssqq/ws';
+            var raw = localStorage.getItem('options') || '';
+            var kv = {};
+            raw.split('&').forEach(function (p) {
+              var i = p.indexOf(':');
+              if (i > 0) kv[p.slice(0, i)] = p.slice(i + 1);
+            });
+            var cur = '';
+            try { cur = kv.address ? decodeURIComponent(kv.address) : ''; } catch (e) { cur = ''; }
+            if (!cur) {
+              kv.address = encodeURIComponent(want);
+              kv.auto_connect = 'true';
+              localStorage.setItem('options', Object.keys(kv).map(function (k) { return k + ':' + kv[k]; }).join('&'));
+            } else if (cur !== want) {
+              kv.address = encodeURIComponent(want);
+              localStorage.setItem('options', Object.keys(kv).map(function (k) { return k + ':' + kv[k]; }).join('&'));
+            }
+          } catch (e) {}
+        })();
+        </script>
       <script type="module" crossorigin src="/Stapxs-QQ-Lite-2.0/assets/js/main-D4xvpnkd.js"></script>
       <link rel="modulepreload" crossorigin href="/Stapxs-QQ-Lite-2.0/assets/js/axios-Dko4zhXo.js">
       <link rel="modulepreload" crossorigin href="/Stapxs-QQ-Lite-2.0/assets/js/@stapxs-Dt0MSzbK.js">
