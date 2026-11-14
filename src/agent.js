@@ -206,8 +206,17 @@ export const AGENT_TOOLS = [
   {
     minRole: 'master',
     function: {
+      name: 'bot_update_check',
+      description: '查看小钠的 GitHub 仓库有没有新版本、更新了哪些提交（只 fetch 对比，不改代码、不重启）。对方问"有没有更新 / 更新了啥 / 看看新版本"时先用它把结果告诉对方；对方确认更要更新，再调 bot_update。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (_args, ctx) => (ctx.checkUpdate ? ctx.checkUpdate() : '当前场景不能查询更新。'),
+  },
+  {
+    minRole: 'master',
+    function: {
       name: 'bot_update',
-      description: '把小钠自己更新到 GitHub 仓库的最新代码（直连失败会自动换镜像，成功后自动重启）。**只在对方是主人/所有者、且明确要求"更新/升级/拉最新代码/把你自己更新一下"时才用**；不要自己主动更新，也别为了尝鲜调用。',
+      description: '把小钠自己更新到 GitHub 仓库的最新代码（直连失败会自动换镜像，成功后自动重启）。**只在对方是主人/所有者、且明确要求"更新/升级/拉最新代码/把你自己更新一下"时才用**；对方只是问有没有更新，用 bot_update_check 看就行，不要直接更新。不要自己主动更新，也别为了尝鲜调用。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (_args, ctx) => (ctx.selfUpdate ? ctx.selfUpdate() : '当前场景不能更新。'),
@@ -357,3 +366,4 @@ async function execTool(name, rawArgs, ctx, allowedTools, onTool) {
     return `工具 ${name} 执行失败：${e.message}`;
   }
 }
+

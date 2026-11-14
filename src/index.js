@@ -766,6 +766,8 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             if (res.ok && res.updated) pendingSelfRestart = true;
             return res.message;
         },
+        // 只看不拉：查有没有新提交、更新了什么（不动代码、不重启）
+        checkUpdate: () => checkForUpdates(),
         // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
         sing: async (lyrics, song = '') => {
             if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';
@@ -1257,22 +1259,42 @@ function scheduleSelfRestart() {
     return true;
 }
 
+/** 依次试直连和镜像，把远端 main 取到 FETCH_HEAD（不改工作区、不合并） */
+async function fetchLatest() {
+    let lastErr = '';
+    for (const src of updateSources()) {
+        const res = await runGit(['fetch', '--no-tags', src.url, 'main']);
+        if (res.ok) return { ok: true, used: src.name };
+        lastErr = res.err || res.out;
+        logger.info(`[更新] 源「${src.name}」失败：${lastErr.split('\n')[0] || '未知错误'}`);
+    }
+    return { ok: false, err: lastErr };
+}
+
+/** agent 工具：只看有没有更新、更新了什么（fetch 后对比 FETCH_HEAD，不动代码、不重启） */
+async function checkForUpdates() {
+    const f = await fetchLatest();
+    if (!f.ok) return '❌ 查询远端失败（GitHub 直连和镜像都不通）：\n' + f.err.slice(0, 300);
+    const head = await runGit(['rev-parse', '--short', 'HEAD']);
+    const remote = await runGit(['rev-parse', '--short', 'FETCH_HEAD']);
+    if (remote.out === head.out) return `✅ 已是最新（${head.out}），没有新提交。`;
+    const count = await runGit(['rev-list', '--count', 'HEAD..FETCH_HEAD']);
+    const log = await runGit(['log', '--oneline', 'HEAD..FETCH_HEAD']);
+    const list = log.out.split('\n').filter(Boolean).slice(0, 8).join('\n');
+    return `发现 ${count.out} 个新提交（本地 ${head.out} → 远端 ${remote.out}，源：${f.used}）：\n${list}\n`
+        + '要看具体改了什么可以用 git 看，或者直接把上面的标题告诉对方；对方确认要更新再调 bot_update。';
+}
+
 /** #更新 / agent 工具共用：拉代码 + 补依赖，返回结果（不重启，重启由调用方决定） */
 async function fetchAndApplyUpdate() {
     const before = await runGit(['rev-parse', '--short', 'HEAD']);
     if (!before.ok) return { ok: false, message: '❌ 当前目录不是 git 仓库或 git 不可用：' + before.err.slice(0, 200) };
     const oldHead = before.out;
 
-    let lastErr = '';
-    let used = '';
-    for (const src of updateSources()) {
-        const res = await runGit(['fetch', '--no-tags', src.url, 'main']);
-        if (res.ok) { used = src.name; break; }
-        lastErr = res.err || res.out;
-        logger.info(`[更新] 源「${src.name}」失败：${lastErr.split('\n')[0] || '未知错误'}`);
-    }
-    if (!used) {
-        return { ok: false, message: '❌ GitHub 直连和所有镜像都拉取失败，最后一次报错：\n' + lastErr.slice(0, 300) };
+    const f = await fetchLatest();
+    const used = f.used || '';
+    if (!f.ok) {
+        return { ok: false, message: '❌ GitHub 直连和所有镜像都拉取失败，最后一次报错：\n' + String(f.err).slice(0, 300) };
     }
     logger.info(`[更新] 拉取成功，源：${used}`);
 

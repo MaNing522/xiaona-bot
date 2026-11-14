@@ -28,6 +28,7 @@ const TOOL_HINTS = {
     sleep: '等一会儿再说（最多 30 秒）。只在对方说“等我一下”、确实该隔一会儿再回时用，别拿它拖正常回复',
     read_history: '拉取当前这个人以前和你聊过的记录（按人存，跨群/私聊/游戏）。不确定拉多少条就别填 count，系统按默认值给；不要每轮都拉',
     bot_update: '把小钠更新到 GitHub 最新代码（自动换镜像、成功后自动重启）。只在主人/所有者明确要求更新时用，别主动更新',
+    bot_update_check: '只看不拉：查 GitHub 上有没有新提交、更新了什么（不改代码、不重启）。看完对方确认要更，再调 bot_update',
 };
 
 /** 身份的中文名（提示词里用，不要直接用英文 key 喂给模型） */
@@ -133,3 +134,4 @@ export function buildToolPrompt({ role = 'guest', caps = {}, serverInfo = '', sc
         mcSection({ bridgeGroup }),
     ].filter(Boolean).join('\n');
 }
+
