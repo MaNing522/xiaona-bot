@@ -380,7 +380,10 @@ export async function banEachPlayer(ids, banned, reason = '') {
     if (cmdDone.length) {
         try {
             const gb = await getGameBans();
-            const names = new Set((gb.bans || []).map((b) => String(b.name || '').toLowerCase()));
+            const names = new Set((gb.bans || [])
+                .filter((b) => !b.type || String(b.type).toUpperCase() === 'BAN')
+                .filter((b) => !b.status || String(b.status).toUpperCase() === 'ACTIVE')
+                .map((b) => String(b.name || '').toLowerCase()));
             done = [];
             for (const id of cmdDone) {
                 const present = names.has(id.toLowerCase());
@@ -394,7 +397,84 @@ export async function banEachPlayer(ids, banned, reason = '') {
     return { done: uniq(done), failed: uniq(failed).filter((x) => !okSet.has(x)) };
 }
 
-/** 连上桥时把整张 QQ 黑名单对应的游戏ID 推给服务端封禁（断线期间落在服务端之外的补上） */export async function pushBlacklistAll() {
+/**
+ * 按惩罚ID撤销（Paradigm 的 P-xxx）。原版名单没有惩罚ID，mod 会明确返回不支持。
+ * 撤销后回读惩罚历史复核：状态不再是 ACTIVE 才算成功。
+ * @returns {Promise<{done:string[], failed:string[]}>}
+ */
+export async function revokePunishments(ids, reason = '') {
+    const list = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
+    if (!list.length) return { done: [], failed: [] };
+    const r = await api('/bridge/ban', { method: 'POST', body: JSON.stringify({ ids: list, banned: false, reason }) })
+        .catch(() => null);
+    if (!r || r.ok === false) return { done: [], failed: list };
+    const done = Array.isArray(r.done) ? r.done.map(String) : [];
+    const failed = Array.isArray(r.failed) ? r.failed.map(String) : [];
+    // 复核：命令成功但状态还 ACTIVE 的，算失败
+    if (done.length) {
+        try {
+            const gb = await getGameBans();
+            const status = new Map((gb.bans || []).map((b) => [String(b.id || ''), String(b.status || 'ACTIVE').toUpperCase()]));
+            const ok = [];
+            for (const id of done) {
+                if (status.get(id) && status.get(id) === 'ACTIVE') failed.push(id);
+                else ok.push(id);
+            }
+            return { done: ok, failed: [...new Set(failed)] };
+        } catch { /* 读不到历史就按命令结果算 */ }
+    }
+    return { done: [...new Set(done)], failed: [...new Set(failed)] };
+}
+
+/**
+ * 解除游戏内封禁：Paradigm 下先按玩家名找回生效中的 BAN 惩罚ID，再按ID撤销；
+ * 找不到ID或原版名单则退回按玩家名解封。
+ * @returns {Promise<{done:string[], failed:string[], revoked:string[]}>} done/failed 是玩家名，revoked 是惩罚ID
+ */
+export async function unbanEachPlayer(names, reason = '') {
+    const list = (Array.isArray(names) ? names : []).map(String).filter(Boolean);
+    if (!list.length) return { done: [], failed: [], revoked: [] };
+    let provider = '';
+    let active = [];
+    try {
+        const gb = await getGameBans();
+        provider = String(gb.provider || '');
+        active = (gb.bans || []).filter((b) => (!b.status || String(b.status).toUpperCase() === 'ACTIVE')
+            && (!b.type || String(b.type).toUpperCase() === 'BAN'));
+    } catch { /* 读不到名单就整体按名字解封 */ }
+
+    const idByName = new Map();
+    for (const b of active) {
+        if (b.id && b.name) idByName.set(String(b.name).toLowerCase(), String(b.id));
+    }
+    const revoke = [];
+    const byName = [];
+    for (const n of list) {
+        const pid = provider === 'paradigm' ? idByName.get(n.toLowerCase()) : '';
+        if (pid) revoke.push({ name: n, id: pid });
+        else byName.push(n);
+    }
+
+    const done = [];
+    const failed = [];
+    const revoked = [];
+    if (revoke.length) {
+        const r = await revokePunishments(revoke.map((x) => x.id), reason).catch(() => ({ done: [], failed: revoke.map((x) => x.id) }));
+        for (const x of revoke) {
+            if (r.done.includes(x.id)) { done.push(x.name); revoked.push(x.id); }
+            else failed.push(x.name);
+        }
+    }
+    if (byName.length) {
+        const r = await banEachPlayer(byName, false, reason).catch(() => ({ done: [], failed: byName }));
+        done.push(...r.done);
+        failed.push(...r.failed);
+    }
+    return { done, failed, revoked };
+}
+
+/** 连上桥时把整张 QQ 黑名单对应的游戏ID 推给服务端封禁（断线期间落在服务端之外的补上） */
+export async function pushBlacklistAll() {
     if (!cfg || !cfg.base) return;
     const ids = (deps && typeof deps.getBlacklistedIds === 'function') ? (deps.getBlacklistedIds() || []) : [];
     if (!ids.length) return;

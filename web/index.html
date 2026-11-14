@@ -284,14 +284,14 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
     <div class="card span2">
       <h2>🚫 封禁名单</h2>
-      <div class="hint" style="margin-top:0">包含 QQ 号封禁与游戏内封禁。QQ 号封禁可定时，封禁/解封时会逐个同步其名下游戏ID；游戏内封禁为永久（服务器 /ban 名单）。</div>
+      <div class="hint" style="margin-top:0">包含 QQ 号封禁与游戏内惩罚历史。QQ 号封禁可定时，封禁/解封时会逐个同步其名下游戏ID；游戏内惩罚按惩罚ID撤销（Paradigm），原版则按玩家名解封。</div>
       <div style="font-weight:700;margin:14px 0 6px">QQ 号封禁 <span class="cnt" id="bdQqBanN">0</span></div>
       <div id="bdQqBans"><span class="hint">暂无</span></div>
       <div class="row"><input id="bdBanQq" type="text" inputmode="numeric" placeholder="QQ 号"><input id="bdBanTime" type="text" placeholder="时长：7d / 12h / 留空=永久"></div>
       <input id="bdBanReason" type="text" placeholder="封禁原因（可空）">
       <button class="btn" id="bdBanQqBtn">封禁该 QQ</button>
 
-      <div style="font-weight:700;margin:20px 0 6px">游戏内封禁 <span class="cnt" id="bdGameBanN">0</span> <span class="hint" id="bdGameBanSrc"></span></div>
+      <div style="font-weight:700;margin:20px 0 6px">惩罚历史 <span class="cnt" id="bdGameBanN">0</span> <span class="hint" id="bdGameBanSrc"></span></div>
       <div id="bdGameBans"><span class="hint">加载中…</span></div>
       <div class="row"><input id="bdBanPlayer" type="text" placeholder="游戏ID"><input id="bdBanGameReason" type="text" placeholder="封禁原因（可空）"></div>
       <button class="btn" id="bdBanGameBtn">封禁该游戏ID</button>
@@ -1144,24 +1144,38 @@ async function bindLoad(){
       qb.map(b=>'<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.qq)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+(b.until?bdFmt(b.until):'永久')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.reason||'—')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(b.at)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)"><a href="#" data-unban-qq="'+esc(b.qq)+'" style="color:var(--danger);text-decoration:none">撤销 / 删除</a></td></tr>').join('')+
       '</table>'):'<span class="hint">暂无 QQ 号封禁</span>';
 
-    // 游戏内封禁
+    // 游戏内惩罚历史
     const gb=d.gameBans;
-    // 名单来源：装了 Paradigm 时读它自己的封禁库，否则是原版 UserBanList
-    $('bdGameBanSrc').textContent = d.gameBansProvider==='paradigm' ? '（来源：Paradigm）'
-      : (d.gameBansProvider==='vanilla' ? '（来源：原版名单）' : '');
-    if(d.mcConnected===false){ $('bdGameBans').innerHTML='<span class="hint">MC 服务器未连接，无法读取游戏内封禁名单</span>'; rollNum($('bdGameBanN'),0); }
+    // 名单来源：装了 Paradigm 时读它的惩罚账本（含已撤销/过期），否则是原版名单（只有生效中）
+    $('bdGameBanSrc').textContent = d.gameBansProvider==='paradigm' ? '（来源：Paradigm，含已撤销/过期）'
+      : (d.gameBansProvider==='vanilla' ? '（来源：原版名单，仅生效中）' : '');
+    if(d.mcConnected===false){ $('bdGameBans').innerHTML='<span class="hint">MC 服务器未连接，无法读取惩罚历史</span>'; rollNum($('bdGameBanN'),0); }
     else if(gb==null){
-      // 带上 mod 返回的真实原因（数据库找不到 / 存储后端不支持 / 旧版 mod），别让管理员以为"没有封禁"
-      const why=d.gameBansError?esc(d.gameBansError):'服务器未返回封禁名单（mod 需升级到 2.8.0+）';
-      $('bdGameBans').innerHTML='<span class="hint" style="color:var(--danger)">读取封禁名单失败：'+why+'</span>';
+      // 带上 mod 返回的真实原因（数据库找不到 / 存储后端不支持 / 旧版 mod），别让管理员以为"没有记录"
+      const why=d.gameBansError?esc(d.gameBansError):'服务器未返回惩罚名单（mod 需升级到 2.10.0+）';
+      $('bdGameBans').innerHTML='<span class="hint" style="color:var(--danger)">读取惩罚历史失败：'+why+'</span>';
       rollNum($('bdGameBanN'),0);
     }
     else {
       rollNum($('bdGameBanN'), gb.length);
+      const typeName=t=>({BAN:'封禁',IP_BAN:'IP封禁',MUTE:'禁言',WARN:'警告',JAIL:'监禁',KICK:'踢出'}[String(t||'').toUpperCase()]||t||'—');
+      const statusName=s=>({ACTIVE:'生效中',EXPIRED:'已过期',REVOKED:'已撤销',PENDING:'未开始'}[String(s||'').toUpperCase()]||s||'生效中');
+      const statusColor=s=>String(s||'').toUpperCase()==='ACTIVE'?'var(--danger)':'var(--sub)';
       $('bdGameBans').innerHTML=gb.length?('<table style="width:100%;border-collapse:collapse;font-size:13.5px">'+
-        '<tr style="color:var(--sub);text-align:left"><th style="padding:6px 8px;border-bottom:1px solid var(--line)">游戏ID</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">期限</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">原因</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">操作者</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">操作</th></tr>'+
-        gb.map(b=>'<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.name)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+(b.expires?bdFmt(b.expires):'永久')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.reason||'—')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.source||'—')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)"><a href="#" data-unban-game="'+esc(b.name)+'" style="color:var(--danger);text-decoration:none">解封</a></td></tr>').join('')+
-        '</table>'):'<span class="hint">暂无游戏内封禁</span>';
+        '<tr style="color:var(--sub);text-align:left"><th style="padding:6px 8px;border-bottom:1px solid var(--line)">玩家</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">类型</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">原因</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">惩罚ID</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">状态</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">时间</th><th style="padding:6px 8px;border-bottom:1px solid var(--line)">操作</th></tr>'+
+        gb.map(b=>{
+          const active=String(b.status||'ACTIVE').toUpperCase()==='ACTIVE';
+          const op=(active&&b.id)?('<a href="#" data-revoke-punishment="'+esc(b.id)+'" style="color:var(--danger);text-decoration:none">撤销</a>')
+            :(active&&!b.id?('<a href="#" data-unban-game="'+esc(b.name)+'" style="color:var(--danger);text-decoration:none">解封</a>'):'—');
+          return '<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.name||'（IP）')+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(typeName(b.type))+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(b.reason||'—')+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Consolas,monospace;font-size:12px">'+esc(b.id||'—')+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line);color:'+statusColor(b.status)+'">'+esc(statusName(b.status))+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(b.created)+'</td>'+
+            '<td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+op+'</td></tr>';
+        }).join('')+
+        '</table>'):'<span class="hint">暂无惩罚记录</span>';
     }
 
     const ub=d.unbinds||[];
@@ -1216,6 +1230,17 @@ async function bindLoad(){
         bindLoad();
       }
       catch(err){ alert('解封失败: '+err.message); }
+    });
+    document.querySelectorAll('#bdGameBans [data-revoke-punishment]').forEach(a=>a.onclick=async(e)=>{
+      e.preventDefault();
+      const id=a.dataset.revokePunishment;
+      if(!confirm('确认按惩罚ID撤销 '+id+' ？（只撤销这一条惩罚）'))return;
+      try{
+        const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'revokeGame',id})});
+        if(r.failed&&r.failed.length)alert('⚠️ 撤销失败：'+r.failed.join('、'));
+        bindLoad();
+      }
+      catch(err){ alert('撤销失败: '+err.message); }
     });
     document.querySelectorAll('#bdGameBans [data-unban-game]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();

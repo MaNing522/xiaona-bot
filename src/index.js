@@ -25,7 +25,7 @@ import { initMemory, setMemoryOptions, addMemory, listMemory, removeMemory, clea
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, banEachPlayer, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, banEachPlayer, unbanEachPlayer, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
@@ -1489,14 +1489,18 @@ async function handleCommand(event, text) {
             if (!ub.ok) return sendReply(event, `❌ ${ub.error}`);
             let lifted = [];
             let left = [];
+            let revoked = [];
             if (ub.ids && ub.ids.length && isMcConnected()) {
-                const g = await banEachPlayer(ub.ids, false);
+                // Paradigm 下按惩罚ID撤销；原版退回按玩家名解封
+                const g = await unbanEachPlayer(ub.ids);
                 lifted = g.done;
                 left = g.failed;
+                revoked = g.revoked || [];
             }
             return sendReply(event, `✅ 已解封 QQ ${target}。对方可重新 #绑定 游戏ID（被封时已解绑的账号不会自动恢复）。`
                 + (lifted.length ? `\n已解除游戏内封禁：${lifted.join('、')}` : '')
-                + (left.length ? `\n⚠️ 以下游戏ID 未能解除（需在服务器/网页手动解封）：${left.join('、')}` : '')
+                + (revoked.length ? `\n（按惩罚ID撤销：${revoked.join('、')}）` : '')
+                + (left.length ? `\n⚠️ 以下未能解除（需在服务器/网页手动解封）：${left.join('、')}` : '')
                 + (!ub.ids || !ub.ids.length ? '\n提示：这条封禁记录没有保存当时解绑的游戏ID，游戏内封禁如有残留需手动解除。' : ''));
         }
 

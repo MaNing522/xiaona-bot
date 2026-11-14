@@ -17,7 +17,7 @@ import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
-import { isMcConnected, getGameBans, banPlayers, banEachPlayer, getBridgeTarget, isMcConfigured } from './mcbridge.js';
+import { isMcConnected, getGameBans, banPlayers, banEachPlayer, unbanEachPlayer, revokePunishments, getBridgeTarget, isMcConfigured } from './mcbridge.js';
 import { listProviders, getActiveId, saveProvider, deleteProvider, setActive } from './aiProviders.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
@@ -833,7 +833,7 @@ async function route(req, res, url) {
     });
   }
   if (url.pathname === '/api/bindings' && req.method === 'POST') {
-    const { action, qq, gameId, at, time, reason, player } = await readBody(req);
+    const { action, qq, gameId, at, time, reason, player, id } = await readBody(req);
     if (action === 'unbind') {
       const r = forceUnbind(qq, gameId);
       return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, msg: r.msg, ids: r.ids } : { ok: false, error: r.error });
@@ -859,11 +859,20 @@ async function route(req, res, url) {
       let lifted = [];
       let failed = [];
       if (r.ids && r.ids.length && isMcConnected()) {
-        const g = await banEachPlayer(r.ids, false).catch(() => ({ done: [], failed: r.ids }));
+        const g = await unbanEachPlayer(r.ids).catch(() => ({ done: [], failed: r.ids }));
         lifted = g.done;
         failed = g.failed;
       }
       return sendJSON(res, 200, { ok: true, ids: r.ids || [], lifted, failed });
+    }
+    // 按惩罚ID撤销（Paradigm 的 P-xxx；原版不支持）
+    if (action === 'revokeGame') {
+      const rid = String(id || '').trim();
+      if (!/^[A-Za-z0-9_-]{3,64}$/.test(rid)) return sendJSON(res, 400, { ok: false, error: '惩罚ID格式不对' });
+      if (!isMcConnected()) return sendJSON(res, 400, { ok: false, error: 'MC 服务器未连接' });
+      const g = await revokePunishments([rid]).catch(() => ({ done: [], failed: [rid] }));
+      if (!g.done.includes(rid)) return sendJSON(res, 400, { ok: false, error: '撤销失败（原版名单请按玩家名解封）', failed: g.failed });
+      return sendJSON(res, 200, { ok: true, done: g.done });
     }
     // 直接封禁 / 解封游戏ID
     if (action === 'banGame' || action === 'unbanGame') {
