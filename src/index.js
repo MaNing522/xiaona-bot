@@ -532,7 +532,7 @@ ${step++}. **语音发送判断**：
 
 ${step}. **生成回复**：
    - 用自然、友好的中文回复用户
-   - 一条内容太长、或本来就想分几口气说时，可以拆成多条发：**单独占一行写三个连字符 ---** 当作分隔，最多 3 条；不需要拆就别写分隔线。
+   - 想分几口气说就**换行**：每行会单独发成一条消息（别把多条挤在一行，也别在一条消息里留空行），最多 3 条；也可以用单独一行的 --- 分隔。
 
 ${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
 ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
@@ -841,13 +841,18 @@ async function agentBalance() {
 }
 
 /**
- * 把 AI 的一条回复拆成多条（它用单独一行的 --- 分隔）。
+ * 把 AI 的一条回复拆成多条。
+ * 换行即分条发（一行一条，跟用户在 QQ 里按发送一样），也兼容单独一行的 --- 分隔。
  * 超过 max 条时把剩下的并进最后一条，避免丢内容。
  */
 function splitReplies(text, max = 3) {
     const raw = String(text || '');
-    const parts = raw.split(/\r?\n[ \t]*-{3,}[ \t]*\r?\n/).map((s) => s.trim()).filter(Boolean);
-    if (parts.length <= 1) return raw.trim() ? [raw.trim()] : [];
+    const parts = raw
+        .split(/\r?\n[ \t]*-{3,}[ \t]*\r?\n/)
+        .flatMap((seg) => seg.split(/\r?\n/))
+        .map((s) => s.trim())
+        .filter(Boolean);
+    if (!parts.length) return [];
     if (parts.length > max) parts.splice(max - 1, parts.length, parts.slice(max - 1).join(' '));
     return parts;
 }
