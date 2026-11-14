@@ -809,7 +809,6 @@ button:disabled{opacity:.55;cursor:default}
 <div id="list"><div class="hint">加载中…</div></div>
 
 <div class="row" style="justify-content:space-between">
-  <a class="hint" href="/heatmap">📍 位置热力图</a>
   <a class="hint" href="/me">← 我的账号</a>
   <button id="logout" class="ghost">退出登录</button>
 </div>
@@ -899,9 +898,8 @@ load();
 </script></body></html>`;
 }
 
-/** 位置热力图页（所有者/主人/管理员）：三个维度同时画，一人一色，主世界↔下界坐标互映 */
-function heatmapPage(sess) {
-  const home = sess.role === 'owner' ? '/' : '/admin';
+/** 位置热力图页（仅所有者）：玩家加载过的区块，小点显示；可拖动/缩放/按时间筛选 */
+function heatmapPage(_sess) {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -924,7 +922,7 @@ button{min-height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--a
   color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
 button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
 button.mini{min-height:26px;padding:0 10px;font-size:12px;margin-left:auto}
-button:disabled{opacity:.55;cursor:default}
+select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9;background:#fff;font-size:13px;font-family:inherit}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
 .maps{display:grid;grid-template-columns:1fr;gap:12px}
@@ -933,7 +931,8 @@ button:disabled{opacity:.55;cursor:default}
 .mapcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .maph{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-canvas{display:block;width:100%}
+canvas{display:block;width:100%;cursor:grab;user-select:none}
+canvas:active{cursor:grabbing}
 .tip{position:absolute;display:none;pointer-events:none;background:rgba(31,35,41,.9);color:#fff;
   font-size:12px;padding:3px 8px;border-radius:6px;white-space:nowrap;z-index:2}
 .legend{display:flex;gap:8px;flex-wrap:wrap}
@@ -946,13 +945,22 @@ canvas{display:block;width:100%}
 a{color:var(--accent);text-decoration:none}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🗺️</div><div><h1>位置热力图</h1>
-  <div class="sub">全服玩家最近的活动位置 · 每个玩家一种颜色 · 三个维度同时显示</div></div></div>
+  <div class="sub">玩家加载过的区块 · 每个玩家一种颜色 · 拖动移动 / 滚轮缩放</div></div></div>
 
 <div class="card">
   <div class="row">
+    <label class="hint row" style="gap:4px">时间范围
+      <select id="since">
+        <option value="3600000">最近 1 小时</option>
+        <option value="86400000">最近 24 小时</option>
+        <option value="604800000">最近 7 天</option>
+        <option value="2592000000">最近 30 天</option>
+        <option value="0">全部（永久）</option>
+      </select>
+    </label>
     <label class="hint row" style="gap:4px"><input type="checkbox" id="mapNether" checked> 主世界 ↔ 下界坐标互映（×8）</label>
     <span style="flex:1"></span>
-    <label class="hint row" style="gap:4px"><input type="checkbox" id="auto" checked> 自动刷新</label>
+    <label class="hint row" style="gap:4px"><input type="checkbox" id="auto"> 自动刷新</label>
     <button id="refresh" class="ghost">刷新</button>
   </div>
   <div class="meta" id="meta" style="margin-top:8px">加载中…</div>
@@ -984,7 +992,7 @@ a{color:var(--accent);text-decoration:none}
 </div>
 
 <div class="row" style="justify-content:space-between">
-  <a class="hint" href="${home}">← 返回</a>
+  <a class="hint" href="/">← 返回控制面板</a>
   <span class="hint">小钠 · 位置热力图</span>
 </div>
 </div>
@@ -995,7 +1003,9 @@ var DIMS=[
   {id:'minecraft:the_nether',cid:'the_nether',name:'下界'},
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
-var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, MAPON=true;
+var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, MAPON=true, DRAG=null;
+var SINCE=Number(localStorage.getItem('xnHeatSince'));
+if(!isFinite(SINCE)||SINCE<0)SINCE=86400000;
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function get(url,cb){
   var xhr=new XMLHttpRequest();xhr.open('GET',url,true);
@@ -1039,15 +1049,17 @@ function seriesOf(dim){
   }
   return out;
 }
-var sprites={};
-function sprite(color){
-  if(sprites[color])return sprites[color];
-  var c=document.createElement('canvas');c.width=c.height=64;
-  var g=c.getContext('2d');
-  var grd=g.createRadialGradient(32,32,0,32,32,32);
-  grd.addColorStop(0,color);grd.addColorStop(1,'rgba(0,0,0,0)');
-  g.fillStyle=grd;g.fillRect(0,0,64,64);
-  sprites[color]=c;return c;
+function dimById(id){return DIMS.filter(function(d){return d.id===id})[0]||null}
+function fitView(dim,list,w,h){
+  var minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  list.forEach(function(p){(p.pts||[]).forEach(function(pt){
+    var bx=pt[0]*16+8, bz=pt[1]*16+8;
+    if(bx<minX)minX=bx;if(bx>maxX)maxX=bx;if(bz<minZ)minZ=bz;if(bz>maxZ)maxZ=bz;
+  })});
+  if(!isFinite(minX)){minX=0;maxX=128;minZ=0;maxZ=128}
+  var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ);
+  var span=Math.max(spanX, spanZ*(w/h));
+  return {cx:(minX+maxX)/2, cz:(minZ+maxZ)/2, span:span*1.12};
 }
 function drawOne(d){
   var cv=$('cv-'+d.cid), wrap=cv.parentNode, tip=$('tip-'+d.cid);
@@ -1061,35 +1073,23 @@ function drawOne(d){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,w,h);
   var list=seriesOf(d.id);
-  $('mt-'+d.cid).textContent=list.length?('· '+list.length+' 名玩家'):'· 暂无数据';
+  $('mt-'+d.cid).textContent=list.length?('· '+list.length+' 条记录'):'· 暂无数据';
   if(!list.length){
     TRANS[d.id]=null;
     ctx.fillStyle='#8a919f';ctx.font='14px sans-serif';ctx.textAlign='center';
-    ctx.fillText(DATA?'这个维度暂时没有采样数据':'还没有数据',w/2,h/2);
+    ctx.fillText(DATA?'这个维度暂时没有区块记录':'还没有数据',w/2,h/2);
     return;
   }
-  var minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
-  list.forEach(function(p){(p.pts||[]).forEach(function(pt){
-    if(pt[0]<minX)minX=pt[0];if(pt[0]>maxX)maxX=pt[0];
-    if(pt[1]<minZ)minZ=pt[1];if(pt[1]>maxZ)maxZ=pt[1];
-  })});
-  if(!isFinite(minX)){minX=0;maxX=128;minZ=0;maxZ=128}
-  var view=VIEW[d.id];
-  if(view){
-    minX=view.x-view.span/2;maxX=view.x+view.span/2;
-    minZ=view.z-view.span/2;maxZ=view.z+view.span/2;
-  }else{
-    var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ), span=Math.max(spanX,spanZ);
-    var pad=Math.max(48,span*0.08);
-    var cx=(minX+maxX)/2, cz=(minZ+maxZ)/2, half=span/2+pad;
-    minX=cx-half;maxX=cx+half;minZ=cz-half;maxZ=cz+half;
-  }
+  if(!VIEW[d.id])VIEW[d.id]=fitView(d.id,list,w,h);
+  var v=VIEW[d.id];
+  var spanH=v.span*h/w;
+  var minX=v.cx-v.span/2, maxX=v.cx+v.span/2, minZ=v.cz-spanH/2, maxZ=v.cz+spanH/2;
   var sx=w/(maxX-minX), sz=h/(maxZ-minZ);
-  TRANS[d.id]={minX:minX,minZ:minZ,sx:sx,sz:sz,w:w,h:h};
+  TRANS[d.id]={minX:minX,minZ:minZ,sx:sx,sz:sz,w:w,h:h,span:v.span};
   function px(x){return (x-minX)*sx}
   function pz(z){return (z-minZ)*sz}
 
-  var steps=[16,32,64,128,256,512,1024,2048,4096,8192,16384];
+  var steps=[16,32,64,128,256,512,1024,2048,4096,8192,16384,32768];
   var step=steps[steps.length-1];
   for(var i=0;i<steps.length;i++){if((maxX-minX)/steps[i]<=14){step=steps[i];break}}
   ctx.strokeStyle='#e8ecf2';ctx.fillStyle='#a8b0bd';ctx.lineWidth=1;ctx.font='10px sans-serif';
@@ -1105,19 +1105,19 @@ function drawOne(d){
   }
   ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
 
-  var R=Math.max(12,Math.min(w,h)*0.05);
-  ctx.save();
-  ctx.globalCompositeOperation='lighter';
+  // 每个区块画一个小点：走多少画多少，不再做径向热力
+  var box=Math.max(1.6,Math.min(4,16*sx*0.55));
+  ctx.globalAlpha=0.85;
   list.forEach(function(p){
-    var sp=sprite(colorFor(p.name));
-    ctx.globalAlpha=p.mapped?0.07:0.10;
+    ctx.fillStyle=colorFor(p.name);
     (p.pts||[]).forEach(function(pt){
-      ctx.drawImage(sp,px(pt[0])-R,pz(pt[1])-R,R*2,R*2);
+      var X=px(pt[0]*16+8), Z=pz(pt[1]*16+8);
+      ctx.fillRect(X-box/2,Z-box/2,box,box);
     });
   });
-  ctx.restore();
+  ctx.globalAlpha=1;
 
-  // 当前位置标点：己维度用圆点，映射过来的用菱形
+  // 当前位置：己维度圆点，映射来的菱形
   ctx.font='12px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
   list.forEach(function(p){
     if(!p.last)return;
@@ -1135,7 +1135,7 @@ function drawOne(d){
     ctx.fillStyle='#1f2329';ctx.fillText(label,X+9,Z);
   });
 
-  // 鼠标位置显示世界坐标
+  // 悬停显示方块坐标
   cv.onmousemove=function(e){
     var t=TRANS[d.id];if(!t)return;
     var mx=e.offsetX, mz=e.offsetY;
@@ -1148,7 +1148,37 @@ function drawOne(d){
     tip.style.left=left+'px';tip.style.top=top+'px';
   };
   cv.onmouseleave=function(){tip.style.display='none'};
+  // 拖动移动
+  cv.onmousedown=function(e){
+    var vv=VIEW[d.id], t=TRANS[d.id];
+    if(!vv||!t)return;
+    DRAG={dim:d.id,x:e.clientX,y:e.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
+    e.preventDefault();
+  };
+  // 滚轮缩放（以光标为中心）
+  cv.onwheel=function(e){
+    e.preventDefault();
+    var vv=VIEW[d.id], t=TRANS[d.id];
+    if(!vv||!t)return;
+    var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
+    var k=e.deltaY>0?1.25:0.8;
+    var ns=Math.max(32,Math.min(2000000, vv.span*k));
+    var ratio=ns/vv.span;
+    vv.cx=wx+(vv.cx-wx)*ratio;
+    vv.cz=wz+(vv.cz-wz)*ratio;
+    vv.span=ns;
+    drawOne(d);
+  };
 }
+window.addEventListener('mousemove',function(e){
+  if(!DRAG)return;
+  var vv=VIEW[DRAG.dim];if(!vv)return;
+  var perPx=DRAG.span/DRAG.w;
+  vv.cx=DRAG.cx-(e.clientX-DRAG.x)*perPx;
+  vv.cz=DRAG.cz-(e.clientY-DRAG.y)*perPx;
+  drawOne(dimById(DRAG.dim));
+});
+window.addEventListener('mouseup',function(){DRAG=null});
 function drawAll(){DIMS.forEach(drawOne)}
 function renderLegend(){
   var seen={}, list=[];
@@ -1161,7 +1191,7 @@ function renderLegend(){
     var k=p.name+'|'+p.dim, off=!!HIDDEN[k];
     return '<span class="chip'+(off?' off':'')+'" data-k="'+esc(k)+'">'
       +'<span class="dot" style="background:'+colorFor(p.name)+'"></span>'+esc(p.name)
-      +' <span class="meta">'+esc(dimName(p.dim))+' · '+(p.pts||[]).length+' 点</span>'
+      +' <span class="meta">'+esc(dimName(p.dim))+' · '+(p.pts||[]).length+' 区块</span>'
       +'<a href="#" class="find" data-find="'+esc(k)+'">定位</a></span>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('#legend [data-k]'),function(el){
@@ -1179,8 +1209,8 @@ function renderLegend(){
       var dim=k.slice(i+1);
       var p=((DATA&&DATA.players)||[]).filter(function(x){return x.name+'|'+x.dim===k})[0];
       if(!p||!p.last)return;
-      VIEW[dim]={x:p.last.x,z:p.last.z,span:256};
-      drawOne(DIMS.filter(function(d){return d.id===dim})[0]||DIMS[0]);
+      VIEW[dim]={cx:p.last.x,cz:p.last.z,span:256};
+      drawOne(dimById(dim)||DIMS[0]);
     };
   });
 }
@@ -1189,31 +1219,47 @@ function dimName(d){
 }
 function load(){
   $('err').textContent='';
-  get('/api/heatmap',function(st,j){
+  var since=SINCE>0?Date.now()-SINCE:0;
+  get('/api/heatmap'+(since?'?since='+since:''),function(st,j){
     if(st===401){location.href='/login';return}
+    if(st===403){$('err').textContent='只有所有者能看位置热力图';return}
     if(!j.ok){$('err').textContent=j.error||'加载失败';return}
     DATA=j;
     var d=new Date();
-    $('meta').textContent='采样间隔 '+(j.sampleSec||'?')+' 秒 · 保留 '+(j.retainMin||'?')+' 分钟 · 更新 '
-      +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+    var total=(j.players||[]).reduce(function(n,p){return n+(p.pts||[]).length},0);
+    $('meta').textContent='共 '+(j.players||[]).length+' 条记录 / '+total+' 个区块 · 时间：'+$('since').options[$('since').selectedIndex].text
+      +' · 更新 '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
     drawAll();renderLegend();
   });
 }
+function syncSelect(){
+  var sel=$('since');
+  for(var i=0;i<sel.options.length;i++){
+    if(Number(sel.options[i].value)===SINCE){sel.selectedIndex=i;break}
+  }
+}
 $('refresh').onclick=load;
-$('mapNether').onchange=function(){MAPON=$('mapNether').checked;drawAll()};
+$('since').onchange=function(){
+  SINCE=Number($('since').value)||0;
+  localStorage.setItem('xnHeatSince',String(SINCE));
+  // 时间变了，视野按新数据重新适配
+  VIEW={};TRANS={};
+  load();
+};
+$('mapNether').onchange=function(){MAPON=$('mapNether').checked;VIEW={};drawAll()};
 $('auto').onchange=function(){
   if(timer){clearInterval(timer);timer=null}
-  if($('auto').checked)timer=setInterval(load,15000);
+  if($('auto').checked)timer=setInterval(load,30000);
 };
 Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'),function(b){
   b.onclick=function(){
     VIEW[b.dataset.reset]=null;
-    drawOne(DIMS.filter(function(d){return d.id===b.dataset.reset})[0]||DIMS[0]);
+    drawOne(dimById(b.dataset.reset)||DIMS[0]);
   };
 });
 window.addEventListener('resize',function(){if(DATA)drawAll()});
-load();
-if($('auto').checked)timer=setInterval(load,15000);
+syncSelect();load();
+if($('auto').checked)timer=setInterval(load,30000);
 </script></body></html>`;
 }
 
@@ -1385,15 +1431,15 @@ async function route(req, res, url) {
     return sendHtml(res, 200, adminPage(s));
   }
 
-  // 位置热力图：全服玩家最近的活动位置（所有者/主人/管理员）
+  // 位置热力图：全服玩家加载过的区块（仅所有者）
   if (url.pathname === '/heatmap' || url.pathname === '/heatmap.html') {
     const s = sessionOf(req);
     if (!s) {
       res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
       return res.end();
     }
-    if (!canAdmin(s.role)) {
-      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+    if (s.role !== 'owner') {
+      res.writeHead(302, { Location: canAdmin(s.role) ? '/admin' : '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, heatmapPage(s));
@@ -1673,7 +1719,7 @@ async function route(req, res, url) {
   const heatApi = url.pathname === '/api/heatmap';
   if (sess.role !== 'owner'
     && !url.pathname.startsWith('/api/me')
-    && !((adminApi || heatApi) && canAdmin(sess.role))) {
+    && !(adminApi && canAdmin(sess.role))) {
     return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
   }
 
@@ -1727,19 +1773,21 @@ async function route(req, res, url) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // ---------- 位置热力图数据（所有者/主人/管理员） ----------
+  // ---------- 位置热力图数据（仅所有者） ----------
   if (heatApi && req.method === 'GET') {
+    if (sess.role !== 'owner') return sendJSON(res, 403, { ok: false, error: '只有所有者能看位置热力图' });
     if (!isMcConnected()) return sendJSON(res, 200, { ok: false, error: 'MC 服务器还没连上桥' });
     try {
-      const d = await getPlayerPositions();
-      return sendJSON(res, 200, { ok: true, ...d });
+      const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0;
+      const d = await getPlayerPositions(since);
+      return sendJSON(res, 200, { ok: true, since, ...d });
     } catch (e) {
       const msg = String((e && e.message) || e);
       const old = /404|not\s*found/i.test(msg);
       return sendJSON(res, 502, {
         ok: false,
         error: old
-          ? '服务器 mod 版本过旧（需要 2.11.0），请先把新版 mod 放到 MC 服务器'
+          ? '服务器 mod 版本过旧（需要 2.12.0），请先把新版 mod 放到 MC 服务器'
           : `读取位置失败：${msg}`,
       });
     }

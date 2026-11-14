@@ -57,8 +57,7 @@ public class XiaonaMod implements ModInitializer {
             whitelistGate = new WhitelistGate(config.whitelist);
             whitelistGate.setEvents(events);   // 进服时顺着事件流向本机实时询问绑定状态
             if (config.heatmap != null && config.heatmap.enabled) {
-                positions = new PositionHistory(config.heatmap.sampleSec, config.heatmap.retainMin,
-                        config.heatmap.maxPointsPerPlayer);
+                positions = new PositionHistory(config.heatmap.saveSec);
             }
             bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate, positions);
             preparePortRelocation();
@@ -80,9 +79,14 @@ public class XiaonaMod implements ModInitializer {
             if (bridge != null) bridge.logCapabilities();
         });
 
-        // 位置采样：每个 tick 转给 PositionHistory，它自己按 heatmap.sampleSec 降频
+        // 位置采样：每个 tick 转给 PositionHistory，只在新进入区块时记点
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
             if (positions != null) positions.onTick(server);
+        });
+
+        // 停服时把区块记录落盘，避免丢最后一段
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            if (positions != null) positions.saveNow();
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {

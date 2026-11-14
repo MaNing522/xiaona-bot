@@ -25,14 +25,12 @@ public class Config {
     public Heatmap heatmap = new Heatmap();
 
     /**
-     * 位置采样（网页「位置热力图」）：每隔 sampleSec 秒记录一次在线玩家的 X/Z，
-     * 只保留最近 retainMin 分钟、每条线最多 maxPointsPerPlayer 个点；数据只在内存里。
+     * 位置热力图：记录每个玩家"加载过的区块"（永久保存在 config/xiaona-heatmap.json），
+     * 每 saveSec 秒落一次盘，停服时也会落盘。
      */
     public static class Heatmap {
         public boolean enabled = true;
-        public int sampleSec = 5;             // 采样间隔（秒），2~60
-        public int retainMin = 60;            // 保留时长（分钟），1~1440
-        public int maxPointsPerPlayer = 720;  // 每个玩家/维度最多点数，60~20000
+        public int saveSec = 60;   // 落盘间隔（秒），5~3600
     }
 
     /**
@@ -199,8 +197,6 @@ public class Config {
         }
 
         if (heatmap == null) heatmap = new Heatmap();
-        heatmap.sampleSec = Math.min(60, Math.max(2, heatmap.sampleSec));
-        heatmap.retainMin = Math.min(1440, Math.max(1, heatmap.retainMin));
-        heatmap.maxPointsPerPlayer = Math.min(20000, Math.max(60, heatmap.maxPointsPerPlayer));
+        heatmap.saveSec = Math.min(3600, Math.max(5, heatmap.saveSec));
     }
 }

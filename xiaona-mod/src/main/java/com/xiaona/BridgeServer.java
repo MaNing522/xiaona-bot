@@ -94,7 +94,6 @@ public class BridgeServer {
     private final WhitelistGate whitelistGate;
     /** 在线玩家位置采样（网页「位置热力图」用） */
     private final PositionHistory positions;
-    private final Config.Heatmap heatmapCfg;
 
     private volatile HttpServer server;
     private volatile int sharePort = 0;      // 复用端口（0 = 未启用复用）
@@ -115,7 +114,6 @@ public class BridgeServer {
         this.board = board;
         this.whitelistGate = whitelistGate;
         this.positions = positions;
-        this.heatmapCfg = cfg.heatmap == null ? new Config.Heatmap() : cfg.heatmap;
         this.auth = new BridgeAuth(cfg.bridge);
         this.planAvail = PlanAvailability.create(this.pcfg);
     }
@@ -281,15 +279,27 @@ public class BridgeServer {
     }
 
     /**
-     * 位置热力图数据：最近的玩家位置采样。
-     * 返回 {@code {ok, sampleSec, retainMin, players:[{name, dim, pts:[[x,z],...], last:{x,z,t}}]}}。
+     * 位置热力图数据：玩家加载过的区块（永久记录，支持 since 时间筛选）。
+     * 返回 {@code {ok, since, players:[{name, dim, pts:[[chunkX,chunkZ],...], last:{x,z,t}}]}}。
      */
     private void handlePositions(HttpExchange ex, String body) throws IOException {
+        long since = 0;
+        String q = ex.getRequestURI().getRawQuery();
+        if (q != null) {
+            for (String kv : q.split("&")) {
+                if (kv.startsWith("since=")) {
+                    try {
+                        since = Long.parseLong(kv.substring(6));
+                    } catch (NumberFormatException ignored) {
+                        // 非法值按"全部时间"处理
+                    }
+                }
+            }
+        }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);
-        m.put("sampleSec", heatmapCfg.sampleSec);
-        m.put("retainMin", heatmapCfg.retainMin);
-        m.put("players", positions == null ? List.of() : positions.snapshot());
+        m.put("since", since);
+        m.put("players", positions == null ? List.of() : positions.snapshot(since));
         sendJson(ex, 200, m);
     }
 

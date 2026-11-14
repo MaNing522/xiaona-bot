@@ -522,14 +522,15 @@ export async function getOnlineOps() {
 }
 
 /**
- * 玩家位置采样（网页「位置热力图」用）。服务器 mod 需 ≥ 2.11.0，
- * 旧版没有 /bridge/positions，会抛错，调用方据此提示升级。
+ * 玩家加载过的区块（网页「位置热力图」用）。服务器 mod 需 ≥ 2.12.0。
+ * @param {number} since 只返回"最近进入时间 >= since"的区块（毫秒时间戳，0 表示全部）
+ * 旧版 mod 没有 /bridge/positions，会抛错，调用方据此提示升级。
  */
-export async function getPlayerPositions() {
-    const r = await api('/bridge/positions');
+export async function getPlayerPositions(since = 0) {
+    const q = Number(since) > 0 ? `?since=${Math.floor(Number(since))}` : '';
+    const r = await api('/bridge/positions' + q);
     return {
-        sampleSec: Number(r && r.sampleSec) || 0,
-        retainMin: Number(r && r.retainMin) || 0,
+        since: Number(r && r.since) || 0,
         players: (r && Array.isArray(r.players)) ? r.players : [],
     };
 }
