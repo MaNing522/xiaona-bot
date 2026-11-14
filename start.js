@@ -16,6 +16,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { writeJsonAtomic } from './src/datafile.js';
+import { config as getConfig } from './src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -429,6 +430,12 @@ function spawnFunasr(port) {
  */
 async function ensureAsrService() {
   if (!ASR_ENABLED) return null;
+  // 语音识别走自定义接口时，本地服务没有意义（省内存/CPU），不拉起
+  const asrCfg = (getConfig().asr) || {};
+  if (String(asrCfg.provider || '').toLowerCase() === 'custom' && String(asrCfg.customUrl || '').trim()) {
+    asrLog('语音识别走自定义接口，启动器不拉起本地服务');
+    return null;
+  }
   const port = asrLocalPort();
   if (!port) { asrLog('语音识别指向外部地址，启动器不拉起本地服务'); return null; }
   if (await portIsOpen(port)) {
@@ -520,3 +527,4 @@ async function main() {
 }
 
 main().catch((e) => { console.error('[启动器] 出错:', e.message); process.exit(1); });
+

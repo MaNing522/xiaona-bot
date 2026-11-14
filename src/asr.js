@@ -16,11 +16,13 @@
 //      否则既读着别扭，也匹配不上触发关键词（见 fixText）。
 //
 // 相关 .env（都可留空用默认值）：
-//   ASR_URL    完整接口地址，默认 http://127.0.0.1:8899/v1/audio/transcriptions
-//   ASR_MODEL  模型名（仅 FunASR 后端有意义）
-//   ASR_TOKEN  若服务端要求鉴权，填了会带 Authorization: Bearer <token>
+//   ASR_URL    本地接口地址，默认 http://127.0.0.1:8899/v1/audio/transcriptions
+//   ASR_MODEL  本地模型名（仅 FunASR 后端有意义）
+//   ASR_TOKEN  本地服务要求鉴权时带 Authorization: Bearer <token>
 //   ASR_ENABLED=false 可整体关闭语音识别（默认开）
-// 相关 config.json：asr.canonicalName / asr.homophones（同音纠正表，见下）
+//   ASR_CUSTOM_URL / ASR_CUSTOM_KEY / ASR_CUSTOM_MODEL 自定义接口的兜底
+// 相关 config.json：asr.provider / customUrl / customModel / customKey / language，
+//   以及 asr.canonicalName / asr.homophones（同音纠正表，见下）
 // 服务没起 / 识别失败时一律返回 null，语音消息仍按 [语音] 占位，不影响其它功能。
 // ============================================================
 import fs from 'fs';
@@ -43,9 +45,29 @@ const NATIVE_EXT = new Set(['wav', 'mp3', 'flac', 'm4a', 'mp4', 'aac', 'ogg', 'o
 function endpoint() { return String(process.env.ASR_URL || DEFAULT_URL).trim(); }
 function modelName() { return String(process.env.ASR_MODEL || DEFAULT_MODEL).trim(); }
 
+/** config.json 的 asr 段（热加载，改完下一条语音就生效） */
+function asrCfg() { return (config().asr) || {}; }
+
+/** 识别后端：local（本地服务）| custom（自定义 OpenAI 兼容接口） */
+export function asrProvider() {
+    return String(asrCfg().provider || '').toLowerCase() === 'custom' ? 'custom' : 'local';
+}
+
+/** custom 后端的地址/模型/密钥（config.json 优先，缺了再看 .env） */
+function customSettings() {
+    const a = asrCfg();
+    return {
+        url: String(a.customUrl || process.env.ASR_CUSTOM_URL || '').trim(),
+        model: String(a.customModel || process.env.ASR_CUSTOM_MODEL || 'whisper-1').trim(),
+        key: String(a.customKey || process.env.ASR_CUSTOM_KEY || '').trim(),
+        language: String(a.language || '').trim(),
+    };
+}
+
 /** 是否启用语音识别（默认开；ASR_ENABLED=false 关闭） */
 export function asrEnabled() {
     if (String(process.env.ASR_ENABLED || 'true') === 'false') return false;
+    if (asrProvider() === 'custom') return !!customSettings().url;
     return !!endpoint();
 }
 
@@ -194,13 +216,17 @@ async function doTranscribe(data) {
         return null;
     }
     const useExt = audio.ext || ext || 'wav';
+    const provider = asrProvider();
+    const custom = provider === 'custom' ? customSettings() : null;
+    const url = custom ? custom.url : endpoint();
     try {
         const form = new FormData();
-        form.append('model', modelName());
+        form.append('model', custom ? custom.model : modelName());
         form.append('response_format', 'json');
+        if (custom && custom.language) form.append('language', custom.language);
         form.append('file', new Blob([audio.buf], { type: mimeOf(useExt) }), `audio.${useExt}`);
-        const token = String(process.env.ASR_TOKEN || '').trim();
-        const res = await fetch(endpoint(), {
+        const token = custom ? custom.key : String(process.env.ASR_TOKEN || '').trim();
+        const res = await fetch(url, {
             method: 'POST',
             headers: token ? { Authorization: 'Bearer ' + token } : {},
             body: form,
@@ -210,14 +236,15 @@ async function doTranscribe(data) {
             // 带上服务端返回的原文（如 Unknown model 'iic/SenseVoiceSmall'），方便直接看出原因
             let detail = '';
             try { detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 160); } catch { /* 读不出就算了 */ }
-            logger.warn(`[ASR] 本地语音识别服务返回 ${res.status}${detail ? '：' + detail : ''}，本条语音跳过识别`);
+            logger.warn(`[ASR] ${provider === 'custom' ? '自定义' : '本地'}语音识别服务返回 ${res.status}${detail ? '：' + detail : ''}，本条语音跳过识别`);
             return null;
         }
         const j = await res.json().catch(() => null);
         const text = fixText(cleanText(j && (j.text || j.result || j.data)));
         return text || null;
     } catch (e) {
-        logger.warn(`[ASR] 本地语音识别服务调用失败（服务没起？）：${e.message}`);
+        logger.warn(`[ASR] ${provider === 'custom' ? '自定义' : '本地'}语音识别服务调用失败（服务没起/地址不通？）：${e.message}`);
         return null;
     }
 }
+

@@ -1298,9 +1298,35 @@ async function fetchAndApplyUpdate() {
     }
     logger.info(`[更新] 拉取成功，源：${used}`);
 
+    // 服务器上 config.json 等常有本地改动（用户自己的配置），git 会拒绝合并；
+    // 先自动收起，合并后放回来；放不回来就保留 stash 并提示，不乱覆盖。
+    const dirty = await runGit(['status', '--porcelain', '--untracked-files=no']);
+    let stashed = false;
+    if (dirty.out) {
+        const st = await runGit(['stash', 'push', '-m', 'xiaona-auto-update']);
+        stashed = st.ok && !/No local changes/i.test(st.out + st.err);
+        if (stashed) logger.info('[更新] 已临时收起本地改动，合并后自动恢复');
+    }
+
     const merge = await runGit(['merge', '--ff-only', 'FETCH_HEAD']);
     if (!merge.ok) {
+        if (stashed) await runGit(['stash', 'pop']);
         return { ok: false, message: '❌ 拉到了更新但合并失败（服务器上有冲突的本地改动）：\n' + merge.out.slice(0, 300) };
+    }
+
+    // 恢复本地改动（config.json 之类）；有冲突就停下，别带着冲突标记重启
+    if (stashed) {
+        const pop = await runGit(['stash', 'pop']);
+        if (!pop.ok) {
+            return {
+                ok: false,
+                updated: true,
+                message: '⚠️ 代码已更新，但恢复本地改动时冲突了（改动已留在 git stash，没有丢）：\n'
+                    + (pop.out || pop.err).slice(0, 300)
+                    + '\n处理办法：在服务器上 git stash list / git stash pop 手动合并',
+            };
+        }
+        logger.info('[更新] 本地改动已恢复');
     }
     const after = await runGit(['rev-parse', '--short', 'HEAD']);
     const newHead = after.out;
