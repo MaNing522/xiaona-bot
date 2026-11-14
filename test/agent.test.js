@@ -129,6 +129,14 @@ describe('runAgentLoop（工具调用循环）', () => {
     const out = await runAgentLoop({ messages: [], tools: toolsForRole('guest'), chat, ctx, maxSteps: 3 });
     expect(out).toBe('');
   });
+
+  it('整轮取消后不再等卡住的模型（同会话后续消息能继续）', async () => {
+    const ac = new AbortController();
+    const chat = () => new Promise(() => {}); // 永不返回，模拟被思维链卡住
+    const p = runAgentReply({ messages: [], tools: [], chat, signal: ac.signal });
+    setTimeout(() => ac.abort(), 20);
+    await expect(p).rejects.toThrow(/取消/);
+  });
 });
 
 describe('decideSkip（是否跳过回复）', () => {

@@ -332,6 +332,16 @@ const sendQueues = new Map();
 // AI 处理队列（按会话）：同一会话的消息按到达顺序依次交给 AI，回复顺序才稳定
 const aiQueues = new Map();
 
+/**
+ * 单轮 AI 的总超时（config.json 的 ai.runTimeoutSec，默认 120 秒）。
+ * 模型/工具卡住时到点中止，让同会话后面排队的消息继续处理，
+ * 而不是一条思维链把整个会话堵死。
+ */
+function aiRunTimeoutMs() {
+    const n = Number(cfg.ai && cfg.ai.runTimeoutSec);
+    return (Number.isFinite(n) && n >= 30 ? Math.min(600, Math.round(n)) : 120) * 1000;
+}
+
 // 忽略的机器人 QQ（不响应）：内置常见官方机器人 + .env BOT_IGNORE_QQ 追加（逗号分隔）
 const IGNORED_BOTS = new Set([
     '2854196310', // Q群管家
@@ -558,7 +568,7 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {} }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {}, signal = null }) {
     const caps = { plan: isPlanAvailable() };
     let tools = toolsForRole(role, caps);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
@@ -580,6 +590,7 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         userId,
         tools: body.tools,
         toolChoice: 'auto',
+        signal,
     });
 
     // 工具调用循环、【REPLY】/【VOICE】标记解析、是否跳过，统一由 agent 内核处理
@@ -588,6 +599,7 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         tools,
         chat,
         ctx,
+        signal,
         onTool: (name, args) => { logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
     });
 
@@ -3059,9 +3071,26 @@ async function onMessage(event) {
             return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
         }
         if (ticket.waitMs > 3000) logger.info(`[限速] ${ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
+        // 整轮去重超时：卡住就中止这一轮，队列继续往下走（同会话后面的消息不会被堵死）
+        const ac = new AbortController();
+        const timeoutMs = aiRunTimeoutMs();
+        const timer = setTimeout(() => ac.abort(), timeoutMs);
+        const timedOut = new Promise((_, reject) => {
+            ac.signal.addEventListener('abort', () => reject(new Error('AI_RUN_TIMEOUT')), { once: true });
+        });
         try {
-            await runAI(event, userInput, allowSkip, cset);
+            await Promise.race([runAI(event, userInput, allowSkip, cset, ac.signal), timedOut]);
+        } catch (e) {
+            if (ac.signal.aborted) {
+                logger.warn(`[AI] ${ckey} 处理超过 ${Math.round(timeoutMs / 1000)} 秒，已中止本轮，继续处理后面的消息`);
+                // 告诉对方一声，别让人干等；发不出去也不影响后续
+                sendReply(event, '⏳ 刚刚那条我想太久卡住了，先跳过啦，你再发一次吧～').catch(() => {});
+            } else {
+                logger.error('❌ 处理异常:', briefApiErr(e));
+            }
+            restartAfterUpdateIfNeeded();
         } finally {
+            clearTimeout(timer);
             ticket.release();
         }
     });
@@ -3069,9 +3098,10 @@ async function onMessage(event) {
 
 // AI 回复主流程（含搜索/语音/多条回复）
 // allowSkip：只在"群里仅命中关键词"这种模糊触发下为 true，交给 AI 判断是否真的在叫它
-async function runAI(event, userInput, allowSkip = false, cset = null) {
+async function runAI(event, userInput, allowSkip = false, cset = null, signal = null) {
     // 没配 AI_API_KEY：AI 对话整体停用（启动时已提示，这里静默跳过，不在群里刷屏）
     if (!AI_ENABLED) return;
+    if (signal && signal.aborted) return;
     // 会话设置（语音开关 / 补充提示词）；未传入时回退到该会话的生效值
     const cs = cset || chatCfg.getEffective(convKey(event));
     try {
@@ -3104,17 +3134,20 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             allowVoice: cs.voice,
             userId: String(event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
+            signal,
             ctx: buildAgentCtx(memKey, String(event.user_id), {
                 images: imgs,
                 // 更新完成等需要直接告知用户的话，走这里发到当前会话
-                reply: (text) => sendReply(event, text),
+                reply: (text) => (signal && signal.aborted ? Promise.resolve() : sendReply(event, text)),
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
+                    if (signal && signal.aborted) return Promise.resolve();
                     const t = stripToolTags(String(text)).trim();
                     return t ? sendReply(event, t) : Promise.resolve();
                 },
                 // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
                 sendVoice: async (text) => {
+                    if (signal && signal.aborted) return [];
                     const ids = await sendReply(event, text, true, false);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
@@ -3122,6 +3155,11 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             }),
         });
         let { reply, wantVoice } = result;
+        // 本轮已被整轮超时取消：不要再发迟到的回复（避免和后面消息的回答串在一起）
+        if (signal && signal.aborted) {
+            logger.info('[AI] 本轮已取消，丢弃迟到的生成结果');
+            return;
+        }
 
         // 智能跳过：只在"群里仅命中关键词"这种模糊触发下由 AI 判定；判定不是在叫它就不吭声
         if (result.skip) {
@@ -3162,6 +3200,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         // agent 在回复过程中拉过更新：等这条回完再重启，别把没发出去的话吞了
         restartAfterUpdateIfNeeded();
     } catch (err) {
+        // 整轮超时被取消：外层限速队列会提示"想太久卡住了"，这里不刷"技术问题"
+        if (signal && signal.aborted) {
+            logger.warn('[AI] 本轮已被取消（超时/打断），跳过错误回复');
+            restartAfterUpdateIfNeeded();
+            return;
+        }
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
         logger.error('❌ 处理异常:', briefApiErr(err));
         // 群消息发送失败多半是被禁言，这时「稍后再试」也发不出去，就别白试了

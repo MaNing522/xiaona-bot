@@ -189,11 +189,13 @@ function normalizeAi(raw) {
   const effort = String(a.reasoningEffort || 'auto').trim().toLowerCase();
   const temp = Number(a.temperature);
   const ctx = Number(a.contextMessages);
+  const runSec = Number(a.runTimeoutSec);
   return {
     thinking: a.thinking !== false,
     reasoningEffort: ['auto', 'low', 'high', 'max'].includes(effort) ? effort : 'auto',
     contextMessages: Number.isFinite(ctx) ? Math.min(50, Math.max(5, Math.round(ctx))) : 20,
     temperature: Number.isFinite(temp) ? Math.min(2, Math.max(0, temp)) : 0.7,
+    runTimeoutSec: Number.isFinite(runSec) ? Math.min(600, Math.max(30, Math.round(runSec))) : 120,
   };
 }
 

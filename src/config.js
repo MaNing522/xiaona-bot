@@ -68,11 +68,13 @@ export const DEFAULTS = {
     //   reasoningEffort 思考强度：auto 跟随模型默认 / low / high / max（DeepSeek 2026 的取值）
     //   contextMessages 每次注入给 AI 的「最近对话」条数（5~50）
     //   temperature     采样温度（0~2）
+    //   runTimeoutSec   单轮 AI 总超时（30~600 秒）：卡住就中止，别堵住同会话后面的消息
     ai: {
         thinking: true,
         reasoningEffort: 'auto',
         contextMessages: 20,
         temperature: 0.7,
+        runTimeoutSec: 120,
     },
     // 记忆按「人」存（QQ号 / 游戏玩家），不按会话；每人只留触发过 AI 的最近若干条
     memory: {

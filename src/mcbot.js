@@ -18,12 +18,17 @@ import { logger } from './logger.js';
 const { pathfinder, Movements, goals } = pf;
 const DEFAULT_PORT = 25565;
 const BOT_NAME = 'xiaona';
+// 小钠专用的辅助登录口令（AuthMe 等登录插件用）：注册/登录都走这一套
+const AUTH_PASSWORD = 'xn123456';
 const CONNECT_TIMEOUT = 30000;
 const MAX_CHAT_LOG = 50;
 
 let bot = null;
 let joining = false;
 let chatLog = [];
+/** 服务器发来的系统消息（含登录/注册提示），用于自动登录和排查 */
+let sysLog = [];
+const authSent = { login: 0, reg: 0 };
 let meta = { address: '', port: 0, state: 'offline', version: '', error: '', joinedAt: 0 };
 
 function sleep(ms) {
@@ -67,6 +72,37 @@ function pushChat(username, message) {
   if (chatLog.length > MAX_CHAT_LOG) chatLog.shift();
 }
 
+function pushSys(text) {
+  sysLog.push({ t: Date.now(), text: String(text || '') });
+  if (sysLog.length > 40) sysLog.shift();
+}
+
+function safeChat(text) {
+  try {
+    if (bot && meta.state === 'online') bot.chat(text);
+  } catch { /* 连接刚断，忽略 */ }
+}
+
+/**
+ * 自动辅助登录：服务器提示"请登录/请注册"时，用固定口令帮小钠登录。
+ * 只在小钠进服后生效，同一个动作 15 秒内不重复，防止和服务器提示互相刷屏。
+ */
+function maybeAutoAuth(message) {
+  const low = String(message || '').toLowerCase();
+  const now = Date.now();
+  const askReg = /\/reg(ister)?\b|请注册|please register|not registered|未注册/.test(low);
+  const askLogin = /\/login\b|请登录|please (log|sign) ?in|not logged in/.test(low);
+  if (askReg && now - authSent.reg > 15000) {
+    authSent.reg = now;
+    setTimeout(() => safeChat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`), 900);
+    return;
+  }
+  if (askLogin && now - authSent.login > 15000) {
+    authSent.login = now;
+    setTimeout(() => safeChat(`/login ${AUTH_PASSWORD}`), 900);
+  }
+}
+
 export function status() {
   const b = bot;
   const lines = [];
@@ -81,6 +117,8 @@ export function status() {
     lines.push(`手持：${held ? `${held.name} ×${held.count}` : '空手'}`);
     const players = Object.keys(b.players || {});
     lines.push(`在线玩家（${players.length}）：${players.slice(0, 30).join('、') || '只有我自己'}`);
+    const sys = sysLog.slice(-5).map((s) => s.text);
+    if (sys.length) lines.push(`最近服务器消息：\n${sys.join('\n')}`);
   }
   return lines.join('\n');
 }
@@ -123,8 +161,16 @@ export async function join(address, port = DEFAULT_PORT, version = '') {
   }
   bot = b;
   b.loadPlugin(pathfinder);
+  sysLog = [];
+  authSent.login = 0;
+  authSent.reg = 0;
 
   b.on('chat', (username, message) => pushChat(username, message));
+  // 系统消息：既用于自动辅助登录（/login、/reg），也留给 AI 排查"为什么没反应"
+  b.on('messagestr', (message) => {
+    pushSys(message);
+    maybeAutoAuth(message);
+  });
   b.on('kicked', (reason) => {
     const text = typeof reason === 'string' ? reason : JSON.stringify(reason);
     meta.error = `被踢出：${String(text).slice(0, 300)}`;
@@ -214,6 +260,72 @@ export function inventory() {
   const held = b.heldItem;
   return `手持：${held ? `${held.name} ×${held.count}` : '空手'}\n背包（${list.length} 种）：\n`
     + list.slice(0, 40).map(([n, c]) => `- ${n} ×${c}`).join('\n');
+}
+
+/**
+ * 渲染范围内能看到的玩家（纯客户端信息：坐标、距离、手持、血量如果实体元数据里有）。
+ * 不依赖服务器插件/桥，只要客户端加载到了实体就能看。
+ */
+export function nearbyPlayers(radius = 64) {
+  const b = requireOnline();
+  const r = Math.min(256, Math.max(8, Number(radius) || 64));
+  const me = b.entity.position;
+  const list = [];
+  for (const e of Object.values(b.entities || {})) {
+    if (!e || e === b.entity) continue;
+    if (e.type !== 'player' && !e.username) continue;
+    let d;
+    try { d = e.position.distanceTo(me); } catch { continue; }
+    if (!Number.isFinite(d) || d > r) continue;
+    let health = null;
+    try { if (e.metadata && typeof e.metadata[9] === 'number') health = e.metadata[9]; } catch { /* 有些版本没有 */ }
+    list.push({ e, d, health });
+  }
+  list.sort((a, b2) => a.d - b2.d);
+  if (!list.length) return `渲染范围内（${r} 格）没有其他玩家。`;
+  const lines = list.map(({ e, d, health }) => {
+    const name = e.username || e.name || '(未知)';
+    const held = e.heldItem ? `，手持 ${e.heldItem.name}` : '';
+    const hp = health != null ? `，血量 ${Math.round(health * 2) / 2}` : '';
+    return `- ${name}：${fmtPos(e.position)}，距离 ${Math.round(d)} 格${hp}${held}`;
+  });
+  return `渲染范围内（${r} 格）共 ${lines.length} 名玩家：\n${lines.join('\n')}`;
+}
+
+/** 发送任意服务器命令（自动补 /，一条消息一条命令） */
+export function command(cmd) {
+  const b = requireOnline();
+  let s = String(cmd || '').replace(/[\r\n]+/g, ' ').trim();
+  if (!s) throw new Error('命令不能为空');
+  if (!s.startsWith('/')) s = '/' + s;
+  if (s.length > 250) throw new Error('命令太长（最多 250 字符）');
+  b.chat(s);
+  return `已发送命令：${s}`;
+}
+
+/**
+ * 辅助登录（AuthMe 等）：固定口令 xn123456。
+ * mode=auto 时先 /login，看到"未注册"提示再 /reg；也可以直接指定 register/login。
+ */
+export async function login(mode = 'auto') {
+  const b = requireOnline();
+  const m = String(mode || 'auto').toLowerCase();
+  if (m === 'register') {
+    b.chat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`);
+    return `已发送注册命令：/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`;
+  }
+  if (m === 'login') {
+    b.chat(`/login ${AUTH_PASSWORD}`);
+    return `已发送登录命令：/login ${AUTH_PASSWORD}`;
+  }
+  b.chat(`/login ${AUTH_PASSWORD}`);
+  await sleep(1800);
+  const recent = sysLog.slice(-8).map((x) => x.text).join('\n');
+  if (/未注册|not registered|please register|\/reg(ister)?\b|请注册/i.test(recent)) {
+    b.chat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`);
+    return `服务器提示还没注册，已发送注册命令：/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}\n最近消息：\n${recent}`;
+  }
+  return `已发送登录命令：/login ${AUTH_PASSWORD}\n最近消息：\n${recent || '（没有新消息）'}`;
 }
 
 /**
@@ -353,5 +465,6 @@ export async function useItem(item = '') {
 
 /** 供 index.js 注入 AI 上下文 */
 export const mcbot = {
-  join, leave, status, chat, inventory, move, walkTo, breakBlock, placeBlock, useItem,
+  join, leave, status, chat, inventory, nearbyPlayers, command, login,
+  move, walkTo, breakBlock, placeBlock, useItem,
 };

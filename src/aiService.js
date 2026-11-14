@@ -188,7 +188,10 @@ function isTransientNetErr(e) {
  * tools 传入 OpenAI 兼容的工具定义数组时，模型可自主返回 tool_calls。
  * @returns {Promise<{content:string, tool_calls:Array|null}>}
  */
-export async function chatCompletionRaw({ messages, temperature, maxTokens, timeoutMs = 60000, userId, tools, toolChoice }) {
+export async function chatCompletionRaw({ messages, temperature, maxTokens, timeoutMs = 60000, userId, tools, toolChoice, signal }) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // 外部取消（整轮超时/用户打断）与单次超时取并集：任一触发都立刻中断请求
+  const reqSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   const c = getProviderInfo();
   const envFallback = getFallbackInfo();
   const picked = activeProvider();
@@ -241,10 +244,14 @@ export async function chatCompletionRaw({ messages, temperature, maxTokens, time
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.key}` },
           body: payload,
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: reqSignal,
         });
         break;
       } catch (e) {
+        // 被整轮取消：不当作"服务商超时"，交给上层静默收尾
+        if (signal && signal.aborted) {
+          throw new Error('本轮已取消', { cause: e });
+        }
         // 超时/断网这类没拿到响应的情况，单独给个能看懂的原因
         if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
           throw new Error(`AI 超时（${Math.round(timeoutMs / 1000)} 秒内没响应）`, { cause: e });
@@ -340,4 +347,3 @@ export function logProviderInfo() {
   else line = c.hasKey ? `模型: ${c.model}（${c.name}）` : '模型: （未配置，AI 对话不可用）';
   logger.info(line + (f && active !== 'fallback' ? `，备用: ${f.model}` : ''));
 }
-

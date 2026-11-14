@@ -133,13 +133,50 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_chat',
-      description: '让小钠在游戏里发言（不需要转向）。text 留空时返回最近 20 条聊天记录，用来看看大家在聊什么。',
+      description: '让小钠在游戏里发言（不需要转向）。text 留空时返回最近 20 条聊天记录，用来看看大家在聊什么。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command，不要用这个**。',
       parameters: {
         type: 'object',
         properties: { text: { type: 'string', description: '要说的话（最多 200 字）；留空=只看最近聊天' } },
       },
     },
     run: async (args, ctx) => ctx.mcbot.chat(String(args.text || '').trim()),
+  },
+  {
+    minRole: 'admin',
+    function: {
+      name: 'mcbot_command',
+      description: '以小钠的 MC 客户端发送一条服务器命令（不用写 / 也行，会自动补）。适合 /login、/reg、/spawn、/home 等服务器指令。',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string', description: '命令内容，如 /login xn123456 或 spawn' } },
+        required: ['command'],
+      },
+    },
+    run: async (args, ctx) => ctx.mcbot.command(String(args.command || '').trim()),
+  },
+  {
+    minRole: 'admin',
+    function: {
+      name: 'mcbot_login',
+      description: '小钠的辅助登录（登录插件用，固定口令 xn123456）：mode=auto 先 /login，服务器提示未注册就自动 /reg；也可指定 login/register。平时进服会自动尝试，这个工具用于手动补一次。',
+      parameters: {
+        type: 'object',
+        properties: { mode: { type: 'string', description: 'auto（默认）/ login / register' } },
+      },
+    },
+    run: async (args, ctx) => ctx.mcbot.login(String(args.mode || 'auto').trim()),
+  },
+  {
+    minRole: 'admin',
+    function: {
+      name: 'mcbot_players',
+      description: '查看小钠客户端渲染范围内（默认 64 格，最多 256 格）能看到哪些玩家：名字、坐标、距离、血量（客户端实体数据里有才给）、手持物品。纯客户端获取，不需要服务器插件。',
+      parameters: {
+        type: 'object',
+        properties: { radius: { type: 'number', description: '观察半径（格），默认 64' } },
+      },
+    },
+    run: async (args, ctx) => ctx.mcbot.nearbyPlayers(Number(args.radius) || 64),
   },
   {
     minRole: 'admin',
@@ -409,6 +446,33 @@ export function toolsForRole(role, caps = {}) {
     .map((t) => ({ type: 'function', function: t.function }));
 }
 
+/** 已经取消就立刻抛错，让整轮 agent 尽快收尾（不再继续请求模型/工具） */
+function throwIfAborted(signal) {
+  if (signal && signal.aborted) {
+    const e = new Error('本轮已取消');
+    e.name = 'AbortError';
+    throw e;
+  }
+}
+
+/** 给一个 Promise 套上"取消即拒绝"，避免卡住的工具把整轮对话拖死 */
+function raceAbort(promise, signal) {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const e = new Error('本轮已取消');
+      e.name = 'AbortError';
+      reject(e);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
+}
+
 /**
  * 工具调用循环：反复"让模型决策 → 执行工具 → 回灌结果"，直到模型给出最终文字回复。
  *
@@ -421,9 +485,10 @@ export function toolsForRole(role, caps = {}) {
  * @param {Function} [opts.onTool] 每次调用工具时的回调（日志用）
  * @returns {Promise<string>} 模型最终的文字回复
  */
-export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, onTool }) {
+export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, onTool, signal }) {
   for (let step = 0; step < maxSteps; step += 1) {
-    const msg = await chat({ messages, tools });
+    throwIfAborted(signal);
+    const msg = await raceAbort(chat({ messages, tools }), signal);
     const calls = msg && msg.tool_calls;
     if (!calls || !calls.length) return (msg && msg.content) || '';
 
@@ -435,10 +500,11 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
       try { await ctx.notify(String(msg.content)); } catch { /* 中间消息发不出去不影响主流程 */ }
     }
     for (const call of calls) {
+      throwIfAborted(signal);
       const name = call.function && call.function.name;
       let out;
       try {
-        out = await execTool(name, call.function && call.function.arguments, ctx, tools, onTool);
+        out = await raceAbort(execTool(name, call.function && call.function.arguments, ctx, tools, onTool), signal);
       } catch (e) {
         // 兜底：execTool 自己已经会兜住异常，这里再保险一层，绝不让工具问题中断循环
         out = `工具 ${name} 执行失败：${e && e.message ? e.message : e}`;
@@ -451,7 +517,8 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
   }
   // 步数用完但工具结果还没被模型消化：禁用工具再来一轮，让它基于结果作答，而不是直接吞掉
   try {
-    const final = await chat({ messages, tools: [] });
+    throwIfAborted(signal);
+    const final = await raceAbort(chat({ messages, tools: [] }), signal);
     return (final && final.content) || '';
   } catch {
     return '';
@@ -493,7 +560,7 @@ export function decideSkip(reply, allowSkip, usedTool) {
  * @param {Function} [opts.onTool] 工具调用回调（日志用）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 5, allowSkip = false, onTool }) {
+export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 5, allowSkip = false, onTool, signal }) {
   let usedTool = false;
   const raw = await runAgentLoop({
     messages,
@@ -501,6 +568,7 @@ export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxS
     chat,
     ctx,
     maxSteps,
+    signal,
     // 调过工具 = 明确在办事，即使没写【REPLY:是】也不能被跳过（见 decideSkip）
     onTool: (name, args) => { usedTool = true; if (onTool) onTool(name, args); },
   });
