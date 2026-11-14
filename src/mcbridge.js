@@ -359,8 +359,42 @@ export async function banPlayers(names, banned, reason = '') {
     }
 }
 
-/** 连上桥时把整张 QQ 黑名单对应的游戏ID 推给服务端封禁（断线期间落在服务端之外的补上） */
-export async function pushBlacklistAll() {
+/**
+ * 逐个 ID 封禁 / 解封，并复核名单是否真的生效。
+ *
+ * <p>为什么不能一次性批量调用：Paradigm 的 /ban、/unban 对解析不到的玩家会「命令成功但名单没变」，
+ * 必须逐个做、逐个回读名单确认，才能知道哪个 ID 真的生效了。
+ * @returns {Promise<{done:string[], failed:string[]}>}
+ */
+export async function banEachPlayer(ids, banned, reason = '') {
+    const list = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
+    const cmdDone = [];
+    const failed = [];
+    for (const id of list) {
+        const r = await banPlayers([id], banned, reason).catch(() => null);
+        if (r && Array.isArray(r.done) && r.done.includes(id)) cmdDone.push(id);
+        else failed.push(id);
+    }
+    // 回读名单：命令说成功但名单没变的，算失败（避免"提示成功、进游戏还是没封"）
+    let done = cmdDone;
+    if (cmdDone.length) {
+        try {
+            const gb = await getGameBans();
+            const names = new Set((gb.bans || []).map((b) => String(b.name || '').toLowerCase()));
+            done = [];
+            for (const id of cmdDone) {
+                const present = names.has(id.toLowerCase());
+                if (banned ? present : !present) done.push(id);
+                else failed.push(id);
+            }
+        } catch { /* 名单读不到就按命令结果算，不误判 */ }
+    }
+    const uniq = (a) => [...new Set(a)];
+    const okSet = new Set(done);
+    return { done: uniq(done), failed: uniq(failed).filter((x) => !okSet.has(x)) };
+}
+
+/** 连上桥时把整张 QQ 黑名单对应的游戏ID 推给服务端封禁（断线期间落在服务端之外的补上） */export async function pushBlacklistAll() {
     if (!cfg || !cfg.base) return;
     const ids = (deps && typeof deps.getBlacklistedIds === 'function') ? (deps.getBlacklistedIds() || []) : [];
     if (!ids.length) return;

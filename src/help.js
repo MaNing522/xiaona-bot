@@ -20,8 +20,8 @@ export const HELP_CMDS = [
   { c: '#解绑 <游戏ID|all>', d: '解除绑定（all=全部）', cat: '绑定', role: 'all' },
   { c: '#强制解绑 <QQ号> [游戏ID]', d: '主人/管理员强制解除他人绑定（不带游戏ID则清空该QQ）', cat: '绑定', role: 'admin' },
   { c: '#绑定上限 <@或QQ> [数量]', d: '给权限低于自己的人单独设置绑定上限（不填/填0则回退全局默认）。全局默认在网页「全局设置」改', cat: '绑定', role: 'admin' },
-  { c: '#封禁 @或QQ号 [时间] [原因]', d: '封禁用户：禁止其再绑定并解绑名下所有账号。时间如 5y3d3h3m3s，n=永久，不填也永久', cat: '绑定', role: 'admin' },
-  { c: '#解封 @或QQ号', d: '解除封禁，对方可重新绑定游戏ID', cat: '绑定', role: 'admin' },
+  { c: '#封禁 @或QQ号 [时间] [原因]', d: '封禁用户：禁止其再绑定、解绑名下所有账号，并把解绑的游戏ID 逐个封进服务器封禁名单。时间如 5y3d3h3m3s，n=永久，不填也永久', cat: '绑定', role: 'admin' },
+  { c: '#解封 @或QQ号', d: '解除封禁，同时解除封禁时那些游戏ID 的游戏内封禁', cat: '绑定', role: 'admin' },
   { c: '#记住 <内容>', d: '存入关于你的长期记忆（多条，跨群通用）', cat: '记忆', role: 'all' },
   { c: '#记忆 [关键词]', d: '查看/搜索关于你的记忆', cat: '记忆', role: 'all' },
   { c: '#忘记 <序号>', d: '删除某条长期记忆', cat: '记忆', role: 'all' },
@@ -132,3 +132,4 @@ export function buildHelp(role, arg) {
   const tail = pages > 1 ? `\n更多： #帮助 ${kw} ${page < pages ? page + 1 : 1}` : '';
   return head + '\n' + body + tail;
 }
+

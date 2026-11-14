@@ -284,7 +284,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
     <div class="card span2">
       <h2>🚫 封禁名单</h2>
-      <div class="hint" style="margin-top:0">包含 QQ 号封禁与游戏内封禁。QQ 号封禁可定时，游戏内封禁为永久（服务器 /ban 名单）。</div>
+      <div class="hint" style="margin-top:0">包含 QQ 号封禁与游戏内封禁。QQ 号封禁可定时，封禁/解封时会逐个同步其名下游戏ID；游戏内封禁为永久（服务器 /ban 名单）。</div>
       <div style="font-weight:700;margin:14px 0 6px">QQ 号封禁 <span class="cnt" id="bdQqBanN">0</span></div>
       <div id="bdQqBans"><span class="hint">暂无</span></div>
       <div class="row"><input id="bdBanQq" type="text" inputmode="numeric" placeholder="QQ 号"><input id="bdBanTime" type="text" placeholder="时长：7d / 12h / 留空=永久"></div>
@@ -516,6 +516,12 @@ function showTab(name){
 }
 document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 showTab((location.hash||'').replace('#','')||'login');
+
+// 绑定管理页每 12 秒自动刷新一次：在游戏里刚封/解的人，不用手动刷新页面也能同步看到
+setInterval(()=>{
+  const p=document.querySelector('.panel[data-panel="bind"]');
+  if(p&&p.classList.contains('active')&&!document.hidden)bindLoad().catch(()=>{});
+},12000);
 
 
 
@@ -1052,6 +1058,7 @@ async function bindLoad(){
     const bound=d.bound||[];
     $('bdBound').innerHTML=bound.length?bound.map(b=>{
       const ids=(b.ids||[]).map(id=>'<span class="chip" style="display:inline-flex;align-items:center;gap:6px">'+esc(id)+
+        '<a href="#" data-ban-game-id="'+esc(id)+'" title="在游戏内封禁此ID" style="color:var(--danger);text-decoration:none;font-weight:600">封</a>'+
         '<a href="#" data-unbind="'+esc(b.qq)+'" data-gid="'+esc(id)+'" title="解绑此ID" style="color:var(--danger);text-decoration:none;font-weight:600">✕</a></span>').join('');
       const ban=b.banned?('<span class="pill red" style="margin-left:6px">已封禁'+(b.banUntil?('（至 '+bdFmt(b.banUntil)+'）'):'（永久）')+'</span>'):'';
       const lim=b.limitOverride!=null?('单独上限 '+b.limit):('上限 '+b.limit);
@@ -1097,7 +1104,14 @@ async function bindLoad(){
       ub.map(u=>'<tr><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(u.qq)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+esc(u.gameId)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+(u.by==='self'?'本人':'管理员')+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(u.at)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)">'+bdFmt(u.expireAt)+'</td><td style="padding:6px 8px;border-bottom:1px solid var(--line)"><a href="#" data-ru-qq="'+esc(u.qq)+'" data-ru-gid="'+esc(u.gameId)+'" data-ru-at="'+esc(u.at)+'" style="color:var(--accent);text-decoration:none;margin-right:10px">撤销</a><a href="#" data-del-qq="'+esc(u.qq)+'" data-del-gid="'+esc(u.gameId)+'" data-del-at="'+esc(u.at)+'" style="color:var(--danger);text-decoration:none">删除</a></td></tr>').join('')+
       '</table>'):'<span class="hint">暂无解绑记录</span>';
 
-    document.querySelectorAll('#bdBound [data-unbind]').forEach(a=>a.onclick=async(e)=>{
+    document.querySelectorAll('#bdBound [data-ban-game-id]').forEach(a=>a.onclick=async(e)=>{
+    e.preventDefault();
+    const player=a.dataset.banGameId;
+    if(!confirm('确认在游戏内永久封禁 '+player+' ？（只封这个游戏ID，不影响绑定）'))return;
+    try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'banGame',player,reason:'网页单独封禁'})}); bindLoad(); }
+    catch(err){ alert('封禁失败: '+err.message); }
+  });
+  document.querySelectorAll('#bdBound [data-unbind]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.unbind, gid=a.dataset.gid;
       if(!confirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
@@ -1118,15 +1132,23 @@ async function bindLoad(){
       if(reason===null)return;
       try{
         const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'ban',qq,time:time==='永久'?'':time,reason})});
-        if(r.synced&&r.synced.length)alert('已封禁 QQ '+qq+'，并同步封禁游戏ID：'+r.synced.join('、'));
+        const msg=[];
+        if(r.synced&&r.synced.length)msg.push('已同步游戏内封禁：'+r.synced.join('、'));
+        if(r.failed&&r.failed.length)msg.push('⚠️ 未生效（服务器没写进名单）：'+r.failed.join('、'));
+        if(msg.length)alert('已封禁 QQ '+qq+'\n'+msg.join('\n'));
         bindLoad();
       }catch(err){ alert('封禁失败: '+err.message); }
     });
     document.querySelectorAll('#bdQqBans [data-unban-qq]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.unbanQq;
-      if(!confirm('确认解封并删除 QQ '+qq+' 的封禁记录？（被封时解绑的游戏ID 需在解绑记录里手动撤销）'))return;
-      try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unban',qq})}); bindLoad(); }
+      if(!confirm('确认解封 QQ '+qq+' 并解除其游戏内封禁？（被封时解绑的账号不会自动恢复绑定）'))return;
+      try{
+        const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unban',qq})});
+        if(r.lifted&&r.lifted.length)alert('已解封 QQ '+qq+'\n已解除游戏内封禁：'+r.lifted.join('、'));
+        if(r.failed&&r.failed.length)alert('⚠️ 以下游戏ID 未能解除，需手动处理：\n'+r.failed.join('、'));
+        bindLoad();
+      }
       catch(err){ alert('解封失败: '+err.message); }
     });
     document.querySelectorAll('#bdGameBans [data-unban-game]').forEach(a=>a.onclick=async(e)=>{

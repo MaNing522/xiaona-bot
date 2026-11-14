@@ -57,7 +57,15 @@ export function initBindings(saveDir, opts = {}) {
   const bj = readJsonSafe(banFile, null, 'bans.json');
   if (bj && typeof bj === 'object') {
     for (const [k, v] of Object.entries(bj)) {
-      if (v && typeof v === 'object') bans[k] = { until: Number(v.until) || 0, reason: String(v.reason || ''), at: Number(v.at) || 0 };
+      if (v && typeof v === 'object') {
+        bans[k] = {
+          until: Number(v.until) || 0,
+          reason: String(v.reason || ''),
+          at: Number(v.at) || 0,
+          // 封禁时被解绑的游戏ID，解封时按这份名单去游戏里解封
+          ids: Array.isArray(v.ids) ? v.ids.map(String).filter(Boolean) : [],
+        };
+      }
     }
   }
   logger.info(`[绑定] 已加载 ${Object.keys(data.qq).length} 个 QQ 的绑定记录（每人上限 ${maxPerQq} 个游戏ID）`);
@@ -244,11 +252,13 @@ export function banUser(qq, timeStr, reason) {
   // 时间位置填的不是时间 → 那是原因，整体按永久处理
   if (time && !dur) { why = [time, why].filter(Boolean).join(' '); dur = { permanent: true, ms: 0 }; }
   const until = dur.permanent ? 0 : Date.now() + dur.ms;
-  bans[key] = { until, reason: why, at: Date.now() };
-  saveBans();
+  bans[key] = { until, reason: why, at: Date.now(), ids: [] };
   // 解绑其名下所有账号：玩家可能正在游戏里，onChange 会顺带撤销白名单放行
   const ub = forceUnbind(key);
   const ids = ub.ok ? ub.ids : [];
+  // 记下封禁时解绑的ID，解封时按它逐个解除游戏内封禁
+  bans[key].ids = ids;
+  saveBans();
   logger.info(`[封禁] QQ ${key} ${dur.permanent ? '永久' : humanDuration(dur.ms)}${why ? ` 原因：${why}` : ''}，已解绑 ${ids.length} 个账号`);
   return { ok: true, permanent: dur.permanent, until, reason: why, ids };
 }
@@ -265,7 +275,8 @@ export function unbanUser(qq) {
   delete bans[key];
   saveBans();
   logger.info(`[解封] QQ ${key} 已解封${e.reason ? `（原封禁原因：${e.reason}）` : ''}`);
-  return { ok: true };
+  // 把封禁时解绑的游戏ID一并返回，调用方据此解除游戏内封禁
+  return { ok: true, ids: Array.isArray(e.ids) ? e.ids : [] };
 }
 
 /**

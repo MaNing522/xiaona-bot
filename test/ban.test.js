@@ -75,7 +75,7 @@ describe('banUser / isBanned（封禁与解绑）', () => {
     expect(r.ok).toBe(true);
     expect(r.permanent).toBe(true);
     expect(r.until).toBe(0);
-    expect(isBanned('10002')).toEqual({ until: 0, reason: '', at: expect.any(Number) });
+    expect(isBanned('10002')).toEqual({ until: 0, reason: '', at: expect.any(Number), ids: [] });
   });
 
   it('时间位置填了非时间内容 → 当作原因，按永久处理', () => {
@@ -152,3 +152,4 @@ describe('unbanUser（解封）', () => {
     expect(isBanned('20003')).toBeNull();
   });
 });
+

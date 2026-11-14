@@ -25,7 +25,7 @@ import { initMemory, setMemoryOptions, addMemory, listMemory, removeMemory, clea
 import { captureScreen, captureUrl, cropSquare } from './screenshot.js';
 import { buildHelp } from './help.js';
 import crypto from 'crypto';
-import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
+import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, banEachPlayer, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
@@ -1443,8 +1443,19 @@ async function handleCommand(event, text) {
             const ab = banUser(target, timeArg, reason);
             if (!ab.ok) return sendReply(event, `❌ ${ab.error}`);
             const when = ab.permanent ? '永久' : humanDuration(ab.until - Date.now());
+            // 封禁时解绑的游戏ID 逐个同步到服务器封禁名单（每个 ID 单独一次，失败能定位到具体ID）
+            let synced = [];
+            let notApplied = [];
+            if (ab.ids.length && isMcConnected()) {
+                const g = await banEachPlayer(ab.ids, true, ab.reason || 'QQ封禁');
+                synced = g.done;
+                notApplied = g.failed;
+            }
             return sendReply(event, `⛔ 已封禁 QQ ${target}（${when}）${ab.reason ? `｜原因：${ab.reason}` : ''}\n`
                 + (ab.ids.length ? `已解绑其名下账号：${ab.ids.join('、')}` : '该 QQ 名下没有绑定账号')
+                + (synced.length ? `\n已同步游戏内封禁：${synced.join('、')}` : '')
+                + (notApplied.length ? `\n⚠️ 未生效（服务器没写进封禁名单）：${notApplied.join('、')}` : '')
+                + (ab.ids.length && !isMcConnected() ? '\n⚠️ MC 服务器未连接，游戏内封禁未同步' : '')
                 + '\n封禁期间其无法再绑定游戏ID。');
         }
 
@@ -1454,7 +1465,17 @@ async function handleCommand(event, text) {
             if (!target) return sendReply(event, '❌ 用法：#解封 @或QQ号\n解封后对方可重新 #绑定 游戏ID');
             const ub = unbanUser(target);
             if (!ub.ok) return sendReply(event, `❌ ${ub.error}`);
-            return sendReply(event, `✅ 已解封 QQ ${target}。对方可重新 #绑定 游戏ID（被封时已解绑的账号不会自动恢复）。`);
+            let lifted = [];
+            let left = [];
+            if (ub.ids && ub.ids.length && isMcConnected()) {
+                const g = await banEachPlayer(ub.ids, false);
+                lifted = g.done;
+                left = g.failed;
+            }
+            return sendReply(event, `✅ 已解封 QQ ${target}。对方可重新 #绑定 游戏ID（被封时已解绑的账号不会自动恢复）。`
+                + (lifted.length ? `\n已解除游戏内封禁：${lifted.join('、')}` : '')
+                + (left.length ? `\n⚠️ 以下游戏ID 未能解除（需在服务器/网页手动解封）：${left.join('、')}` : '')
+                + (!ub.ids || !ub.ids.length ? '\n提示：这条封禁记录没有保存当时解绑的游戏ID，游戏内封禁如有残留需手动解除。' : ''));
         }
 
         case '/绑定': {

@@ -17,7 +17,7 @@ import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
-import { isMcConnected, getGameBans, banPlayers, getBridgeTarget, isMcConfigured } from './mcbridge.js';
+import { isMcConnected, getGameBans, banPlayers, banEachPlayer, getBridgeTarget, isMcConfigured } from './mcbridge.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
 import { qzoneStatus, postQzoneNow, normalizeQzone } from './qzone.js';
@@ -837,21 +837,32 @@ async function route(req, res, url) {
       const r = forceUnbind(qq, gameId);
       return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, msg: r.msg, ids: r.ids } : { ok: false, error: r.error });
     }
-    // QQ 号封禁：同时把其名下已绑定的游戏ID 同步进服务器封禁名单
+    // QQ 号封禁：其名下已绑定的游戏ID 逐个同步进服务器封禁名单（每个 ID 单独确认是否真的生效）
     if (action === 'ban') {
       const r = banUser(qq, time, reason);
       if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
       let synced = [];
+      let failed = [];
       if (r.ids && r.ids.length && isMcConnected()) {
-        const g = await banPlayers(r.ids, true, r.reason || 'QQ封禁').catch(() => null);
-        if (g && Array.isArray(g.done)) synced = g.done;
+        const g = await banEachPlayer(r.ids, true, r.reason || 'QQ封禁')
+          .catch(() => ({ done: [], failed: r.ids }));
+        synced = g.done;
+        failed = g.failed;
       }
-      return sendJSON(res, 200, { ok: true, permanent: r.permanent, until: r.until, ids: r.ids, synced });
+      return sendJSON(res, 200, { ok: true, permanent: r.permanent, until: r.until, ids: r.ids, synced, failed });
     }
-    // 删除 QQ 封禁记录（解封，不恢复被封时已解绑的游戏ID）
+    // 删除 QQ 封禁记录（解封，同时解除封禁时解绑的游戏ID 的游戏内封禁）
     if (action === 'unban') {
       const r = unbanUser(qq);
-      return sendJSON(res, r.ok ? 200 : 400, r.ok ? { ok: true } : { ok: false, error: r.error });
+      if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+      let lifted = [];
+      let failed = [];
+      if (r.ids && r.ids.length && isMcConnected()) {
+        const g = await banEachPlayer(r.ids, false).catch(() => ({ done: [], failed: r.ids }));
+        lifted = g.done;
+        failed = g.failed;
+      }
+      return sendJSON(res, 200, { ok: true, ids: r.ids || [], lifted, failed });
     }
     // 直接封禁 / 解封游戏ID
     if (action === 'banGame' || action === 'unbanGame') {
