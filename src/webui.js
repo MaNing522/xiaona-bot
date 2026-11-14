@@ -607,10 +607,10 @@ button:disabled{opacity:.55;cursor:default}
 
 <div class="card">
   <h2>登录密码</h2>
-  <div class="hint" id="pwdHint">设置后可用 QQ 号 + 密码登录；忘记密码就用验证码登录后重设。</div>
+  <div class="hint" id="pwdHint">设置后可用 QQ 号 + 密码登录；支持中文密码，忘记密码就用验证码登录后重设。</div>
   <div id="oldWrap" style="display:none"><label>原密码</label><input id="oldPass" type="password"></div>
-  <label>新密码（至少 6 位）</label><input id="newPass" type="password">
-  <label>确认新密码</label><input id="newPass2" type="password">
+  <label>新密码（至少 6 位，支持中文）</label><input id="newPass" type="password" autocomplete="new-password">
+  <label>确认新密码</label><input id="newPass2" type="password" autocomplete="new-password">
   <div class="row" style="margin-top:12px"><button id="savePwd">保存密码</button></div>
   <div class="err" id="pwdErr"></div>
 </div>
@@ -654,7 +654,7 @@ function load(){
       };
     });
     $('oldWrap').style.display=(j.hasPassword && !j.viaCode)?'block':'none';
-    $('pwdHint').textContent=j.hasPassword?(j.viaCode?'本次是验证码登录，可直接设置新密码。':'忘记密码就用验证码登录后重设。'):'还没设置密码，设置后就能用 QQ 号+密码登录。';
+    $('pwdHint').textContent=j.hasPassword?(j.viaCode?'本次是验证码登录，可直接设置新密码。':'支持中文密码；忘记密码就用验证码登录后重设。'):'还没设置密码，设置后就能用 QQ 号+密码登录（支持中文）。';
   });
 }
 $('start').onclick=function(){
@@ -1149,7 +1149,9 @@ async function route(req, res, url) {
     const b = await readBody(req);
     const oldPass = String(b.oldPass || '');
     const newPass = String(b.newPass || '');
-    if (newPass.length < 6 || newPass.length > 64) return sendJSON(res, 400, { ok: false, error: '新密码长度 6-64 位' });
+    // 按 Unicode 字符计数：中文/emoji 都算一位（长度按码点，不按 UTF-16 单元）
+    const passLen = [...newPass].length;
+    if (passLen < 6 || passLen > 64) return sendJSON(res, 400, { ok: false, error: '新密码长度 6-64 位（支持中文）' });
     // 验证码登录的会话本身就证明了 QQ 归属，允许不输原密码直接重设（忘记密码的恢复路径）
     if (hasPassword(sess.qq) && !sess.code && !verifyPassword(sess.qq, oldPass)) {
       return sendJSON(res, 400, { ok: false, error: '原密码不对' });

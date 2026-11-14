@@ -22,6 +22,11 @@ function hash(pass, salt) {
     return crypto.scryptSync(String(pass), salt, KEYLEN).toString('hex');
 }
 
+/** 统一 Unicode 规范化：中文输入法可能给出组合字符/全角形式，先归一化再哈希，避免“看起来一样却登不上” */
+function norm(pass) {
+    return String(pass == null ? '' : pass).normalize('NFC');
+}
+
 export function hasPassword(qq) {
     const a = loadAll().accounts[String(qq)];
     return !!(a && a.hash && a.salt);
@@ -32,14 +37,14 @@ export function setPassword(qq, pass) {
     const key = String(qq);
     const all = loadAll();
     const salt = crypto.randomBytes(16).toString('hex');
-    all.accounts[key] = { salt, hash: hash(pass, salt), at: Date.now() };
+    all.accounts[key] = { salt, hash: hash(norm(pass), salt), at: Date.now() };
     return writeJsonAtomic(FILE, all);
 }
 
 export function verifyPassword(qq, pass) {
     const a = loadAll().accounts[String(qq)];
     if (!a || !a.hash || !a.salt) return false;
-    const got = Buffer.from(hash(pass, a.salt), 'hex');
+    const got = Buffer.from(hash(norm(pass), a.salt), 'hex');
     const want = Buffer.from(a.hash, 'hex');
     return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
