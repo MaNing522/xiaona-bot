@@ -18,8 +18,11 @@
   },
   "dependencies": {
     "dotenv": "^17.4.2",
+    "mineflayer": "^4.39.0",
+    "mineflayer-pathfinder": "^2.4.5",
     "pino": "^10.3.1",
     "sherpa-onnx-node": "^2.0.1",
+    "vec3": "^0.2.0",
     "ws": "^8.18.0"
   },
   "license": "MIT",
@@ -31,5 +34,18 @@
     "nodemon": "^3.1.14",
     "prettier": "^3.9.9",
     "vitest": "^5.0.3"
-  }
+  },
+  "directories": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MaNing522/xiaona-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/MaNing522/xiaona-bot/issues"
+  },
+  "homepage": "https://github.com/MaNing522/xiaona-bot#readme"
 }

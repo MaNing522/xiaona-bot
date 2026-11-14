@@ -99,6 +99,7 @@ cd c:\QQBot; .\restart.bat
 
 ## 6. 约定与文件地图
 
+- **小钠自己的 MC 客户端（`src/mcbot.js`，2026-11）**：基于 **mineflayer**（+ `mineflayer-pathfinder`、`vec3`），离线登录、名字固定 **xiaona**，让 AI 能主动进别的服务器看看。工具（都要求 admin+，定义在 `src/agent.js`，实现在 `mcbot.js`，`index.js` 把整个模块挂到 `ctx.mcbot`）：`mcbot_join`（address/port/version，version 不填按服务器 ping 自动识别）、`mcbot_leave`、`mcbot_status`、`mcbot_chat`（留空回最近 20 条聊天）、`mcbot_inventory`、`mcbot_move`（相对/绝对方位，秒数）、`mcbot_walk_to`（pathfinder，`canDig=false` 不挖路）、`mcbot_break`、`mcbot_place`、`mcbot_use`。**所有动手类操作都先转向对象**：移动先 look 到移动方向（走坐标则朝目标），挖掘先看方块中心，放置先找相邻实心参照方块并 look 到它朝目标的那一面再 `placeBlock`；聊天和使用物品不转向。进服超时 30 秒；正版验证服务器进不去（离线名）。换机/部署后要 `npm install`（新增这三个依赖）。
 - **目录布局（2026-10 整理）**：`start.js` 是唯一入口、留在根目录；机器人模块全部在 `src/`（主程序 `src/index.js`）。`src/paths.js` 导出 `ROOT`，所有运行时资源（`.env`、`config.json`、`prompt.txt`、`data/`、`logs/`、`voice_cache/`、`web/`、`snowluma/`）都从 `ROOT` 定位，**不写死盘符 —— 复制整个 QQBot 目录即可迁移**。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
 - 版本号在 [xiaona-mod/build.gradle](file:///c:/QQBot/xiaona-mod/build.gradle)，**每次加功能递增**。
 - **多版本构建（Fabric）**：根项目仍是 1.21.11（源码在 `src/main/java`，产物 `build/libs/xiaona-mod-<ver>.jar`）；`fabric-1.21.1` / `fabric-1.21.8` 是子项目，构建时用 `Sync` 把「根项目共享源码 + `legacy/src/main/java` 覆盖层」合成到各自的 `build/merged-src` 再编译，产物 `fabric-<ver>/build/libs/xiaona-mod-<mc>-<ver>.jar`。

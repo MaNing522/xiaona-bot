@@ -35,6 +35,7 @@ import * as chatCfg from './chatSettings.js';
 import { initNotes, writeNote, readNote } from './notes.js';
 import { initQzone } from './qzone.js';
 import { recordIncoming, recordOutgoing } from './qqInbox.js';
+import * as mcBot from './mcbot.js';
 import { ROOT } from './paths.js';
 
 // 显式指定 .env 路径，避免受启动目录影响
@@ -760,6 +761,8 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
+        // 小钠自己的 MC 客户端（mineflayer，离线名 xiaona）：进服看看、聊天、走动、挖/放、用物品
+        mcbot: mcBot,
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {
             const res = await fetchAndApplyUpdate();
