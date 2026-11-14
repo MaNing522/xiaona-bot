@@ -115,8 +115,8 @@ label{font-size:13.5px;color:var(--sub)}
 .hint{font-size:13px;color:var(--sub);margin-top:10px;line-height:1.7}
 .cmd{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:13px;margin-bottom:10px}
 .cmd b{color:var(--accent);font-size:14.5px}
-.log{background:#1f2329;border:1px solid #1f2329;border-radius:8px;padding:12px;
-  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#a7e0a7;
+.log{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;
+  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#1f2329;
   height:455px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
 footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 
@@ -203,6 +203,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item active" data-tab="login"><span class="ico">📊</span>连接状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
+      <button class="nav-item" data-tab="accounts"><span class="ico">👥</span>账户管理</button>
       <a class="nav-item" href="/heatmap" target="_blank" rel="noopener" style="text-decoration:none"><span class="ico">🗺️</span>位置热力图</a>
       <button class="nav-item" data-tab="features"><span class="ico">🧩</span>功能</button>
       <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话设置</button>
@@ -302,6 +303,20 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="hint" style="margin-top:0">解绑（含退群 / 封禁导致的自动解绑）会记在这里，到期自动删除。</div>
       <div id="bdUnbind"><span class="hint">暂无</span></div>
       <button class="btn ghost" id="bdClearUnbinds" style="width:auto;margin-top:12px">清除全部解绑记录</button>
+    </div>
+  </div>
+
+  <!-- 账户管理（所有人的网页账户与游戏绑定） -->
+  <div class="panel" data-panel="accounts">
+    <div class="card span2">
+      <h2>👥 账户管理 <span class="cnt" id="acCount">0</span></h2>
+      <div class="hint" style="margin-top:0">列出所有绑定过游戏ID、设过网页密码或在权限名单里的 QQ。补绑会跳过图形验证码；清除密码后对方需用验证码登录重设。</div>
+      <div class="row" style="margin-top:10px">
+        <input id="acSearch" type="text" placeholder="搜索 QQ 或游戏ID">
+        <button class="btn ghost" id="acReload" style="width:auto;white-space:nowrap">刷新</button>
+      </div>
+      <div class="hint" id="acMsg" style="min-height:16px"></div>
+      <div id="acList" style="margin-top:10px"><span class="hint">加载中…</span></div>
     </div>
   </div>
 
@@ -534,6 +549,7 @@ function showTab(name){
   const tb=document.getElementById('tbTitle');
   if(tb)tb.textContent=(item.textContent||'').replace(/^[^\u4e00-\u9fa5A-Za-z]+/,'').trim();
   if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+  if(name==='accounts')acLoad();
 }
 document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 showTab((location.hash||'').replace('#','')||'login');
@@ -1293,6 +1309,64 @@ $('bdClearUnbinds').onclick=async()=>{
   try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'clearUnbinds'})}); bindLoad(); }
   catch(e){ alert('清除失败: '+e.message); }
 };
+
+// 账户管理（内嵌页）：所有人的网页账户与游戏绑定
+let acUsers=[];
+function acEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function acLoad(){
+  if(xnLoggedIn===false)return;
+  const box=$('acList');if(!box)return;
+  try{
+    const d=await api('/api/admin/users');
+    acUsers=d.users||[];
+    $('acMsg').textContent='';
+    acRender();
+  }catch(e){ $('acMsg').textContent='加载失败：'+e.message; }
+}
+function acRender(){
+  const kw=($('acSearch').value||'').trim().toLowerCase();
+  const list=(acUsers||[]).filter(u=>!kw||String(u.qq).indexOf(kw)>=0||(u.ids||[]).some(id=>id.toLowerCase().indexOf(kw)>=0));
+  rollNum($('acCount'), list.length);
+  if(!list.length){$('acList').innerHTML='<span class="hint">没有匹配的用户</span>';return;}
+  $('acList').innerHTML=list.map(u=>{
+    const ids=(u.ids||[]).map(id=>'<span class="chip" style="display:inline-flex;align-items:center;gap:6px">'+acEsc(id)+
+      '<a href="#" data-ac-unbind="'+acEsc(u.qq)+'" data-ac-id="'+acEsc(id)+'" title="解绑此ID" style="color:var(--danger);text-decoration:none;font-weight:600">✕</a></span>').join('')||'<span class="hint">还没有绑定</span>';
+    const rolePill='<span class="pill mut" style="margin-left:6px">'+acEsc(u.roleName||u.role||'')+'</span>';
+    const banPill=u.banned?'<span class="pill red" style="margin-left:6px">封禁中'+(u.banReason?'：'+acEsc(u.banReason):'')+'</span>':'';
+    const pwdPill='<span class="pill '+(u.hasPassword?'ok':'mut')+'" style="margin-left:6px">'+(u.hasPassword?'已设密码':'未设密码')+'</span>';
+    return '<div class="cmd"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><b>QQ '+acEsc(u.qq)+'</b>'+rolePill+banPill+pwdPill+'</div>'+
+      '<div class="chips" style="margin-top:8px">'+ids+'</div>'+
+      '<div class="row" style="margin-top:8px"><input type="text" placeholder="补绑游戏ID" data-ac-gid="'+acEsc(u.qq)+'">'+
+      '<button class="btn ghost" data-ac-bind="'+acEsc(u.qq)+'" style="width:auto;white-space:nowrap">绑定</button>'+
+      (u.hasPassword?'<button class="btn ghost" data-ac-pwd="'+acEsc(u.qq)+'" style="width:auto;white-space:nowrap">清除密码</button>':'')+
+      '</div></div>';
+  }).join('');
+  document.querySelectorAll('#acList [data-ac-unbind]').forEach(a=>a.onclick=async(e)=>{
+    e.preventDefault();
+    const qq=a.dataset.acUnbind, gid=a.dataset.acId;
+    if(!confirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
+    try{ await api('/api/admin/unbind',{method:'POST',body:JSON.stringify({qq,gameId:gid})}); acLoad(); }
+    catch(err){ alert('解绑失败: '+err.message); }
+  });
+  document.querySelectorAll('#acList [data-ac-bind]').forEach(b=>b.onclick=async()=>{
+    const qq=b.dataset.acBind;
+    const inp=document.querySelector('#acList [data-ac-gid="'+qq+'"]');
+    const gid=(inp&&inp.value||'').trim();
+    if(!/^[A-Za-z0-9_]{3,16}$/.test(gid))return alert('游戏ID 只能是 3-16 位字母、数字或下划线');
+    b.disabled=true;
+    try{ await api('/api/admin/bind',{method:'POST',body:JSON.stringify({qq,gameId:gid})}); $('acMsg').textContent='已给 QQ '+qq+' 绑定 '+gid; acLoad(); }
+    catch(err){ alert('绑定失败: '+err.message); }
+    finally{ b.disabled=false; }
+  });
+  document.querySelectorAll('#acList [data-ac-pwd]').forEach(b=>b.onclick=async()=>{
+    const qq=b.dataset.acPwd;
+    if(!confirm('清除 QQ '+qq+' 的网页密码？对方之后要用验证码登录重设。'))return;
+    try{ await api('/api/admin/password/clear',{method:'POST',body:JSON.stringify({qq})}); $('acMsg').textContent='已清除 QQ '+qq+' 的密码'; acLoad(); }
+    catch(err){ alert('清除失败: '+err.message); }
+  });
+}
+$('acSearch').oninput=acRender;
+$('acReload').onclick=()=>{ $('acMsg').textContent=''; acLoad(); };
 
 load();perms();bindLoad();refresh();logs();convLoad(true);ftLoad();aiProvLoad();load();perms();
 setInterval(load,5000);setInterval(perms,8000);setInterval(bindLoad,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);

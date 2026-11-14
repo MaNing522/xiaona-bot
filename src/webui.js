@@ -480,7 +480,9 @@ button:disabled{opacity:.6;cursor:default}
     </div>
   </div>
   <label>QQ 号</label><input id="u" inputmode="numeric" autocomplete="username" placeholder="输入你的 QQ 号">
-  <label>密码</label><input id="p" type="password" autocomplete="current-password" placeholder="没设过密码就用验证码登录">
+  <div id="pwBox">
+    <label>密码</label><input id="p" type="password" autocomplete="current-password" placeholder="没设过密码就用验证码登录">
+  </div>
   <div id="capBox" style="display:${needCaptcha ? 'block' : 'none'}">
     <label>人机验证</label>
     <div class="row">
@@ -518,6 +520,15 @@ $('toggle').onclick = function (ev) {
   var box = $('codeBox');
   var show = box.style.display === 'none';
   box.style.display = show ? 'block' : 'none';
+  // 验证码登录模式下不需要密码框和「登录」按钮，避免两套表单混在一起
+  $('pwBox').style.display = show ? 'none' : 'block';
+  $('b').style.display = show ? 'none' : 'block';
+  if (show) {
+    $('capBox').setAttribute('data-prev', $('capBox').style.display || 'none');
+    $('capBox').style.display = 'none';
+  } else {
+    $('capBox').style.display = $('capBox').getAttribute('data-prev') || 'none';
+  }
   $('toggle').textContent = show ? '返回密码登录' : '没有密码？用 QQ 验证码登录';
 };
 
@@ -1279,6 +1290,11 @@ async function route(req, res, url) {
     }
     if (!canAdmin(s.role)) {
       res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    // 所有者直接用主面板里的「账户管理」内嵌页，不再单独开一个页面
+    if (s.role === 'owner') {
+      res.writeHead(302, { Location: '/#accounts', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, adminPage(s));
