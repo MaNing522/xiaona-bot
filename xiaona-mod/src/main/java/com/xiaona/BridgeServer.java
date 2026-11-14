@@ -298,6 +298,7 @@ public class BridgeServer {
         }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);
+        m.put("unit", "chunk");   // 2.12.0 起 pts 是区块坐标；旧版没有这个字段（是方块坐标轨迹点）
         m.put("since", since);
         m.put("players", positions == null ? List.of() : positions.snapshot(since));
         sendJson(ex, 200, m);

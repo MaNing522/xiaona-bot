@@ -1780,7 +1780,10 @@ async function route(req, res, url) {
     try {
       const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0;
       const d = await getPlayerPositions(since);
-      return sendJSON(res, 200, { ok: true, since, ...d });
+      if (d.unit !== 'chunk') {
+        return sendJSON(res, 502, { ok: false, error: '服务器 mod 版本过旧（需要 2.12.0），请先把新版 mod 放到 MC 服务器' });
+      }
+      return sendJSON(res, 200, { ok: true, since, players: d.players });
     } catch (e) {
       const msg = String((e && e.message) || e);
       const old = /404|not\s*found/i.test(msg);

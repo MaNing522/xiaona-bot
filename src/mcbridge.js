@@ -530,6 +530,7 @@ export async function getPlayerPositions(since = 0) {
     const q = Number(since) > 0 ? `?since=${Math.floor(Number(since))}` : '';
     const r = await api('/bridge/positions' + q);
     return {
+        unit: String((r && r.unit) || ''),
         since: Number(r && r.since) || 0,
         players: (r && Array.isArray(r.players)) ? r.players : [],
     };
