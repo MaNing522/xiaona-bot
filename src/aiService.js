@@ -11,10 +11,12 @@
 //   AI_MODEL      显式指定则优先于 provider 默认值
 //   AI_BALANCE_URL       自定义「使用情况/余额」查询地址（填了就不按服务商推导）
 //   AI_FALLBACK_URL/KEY/MODEL  备用接口：主接口掉线/429 时自动顶上（key 不填就不启用）
+// 网页「全局设置 → AI 接口」可增删多个接口并切换当前用哪个（存 data/ai-providers.json，不进仓库）。
 // 注：glm 系列在这类中转上经常 429，不建议当主力模型。
 // ============================================================
 import { logger } from './logger.js';
 import { config } from './config.js';
+import { activeProvider, getActiveId } from './aiProviders.js';
 
 /** 各服务商的默认接入点与默认模型（仅在 .env 未显式配置时兜底） */
 const PROVIDERS = {
@@ -188,11 +190,25 @@ function isTransientNetErr(e) {
  */
 export async function chatCompletionRaw({ messages, temperature, maxTokens, timeoutMs = 60000, userId, tools, toolChoice }) {
   const c = getProviderInfo();
-  if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
-  if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
+  const envFallback = getFallbackInfo();
+  const picked = activeProvider();
+  const activeId = getActiveId();
 
-  const primary = { name: c.name, url: c.url, key: String(process.env.AI_API_KEY || '').trim(), model: c.model };
-  const fallback = getFallbackInfo();
+  // 主接口：网页选了自定义接口就用它；选「官方备用」则直接用 .env 的备用；否则按 .env 主接口
+  let primary;
+  let fallback = envFallback;
+  if (activeId === 'fallback' && envFallback) {
+    primary = envFallback;
+    fallback = null;
+  } else if (picked) {
+    primary = { name: picked.name, url: picked.url, key: picked.key, model: picked.model };
+  } else {
+    if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
+    if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
+    primary = { name: c.name, url: c.url, key: String(process.env.AI_API_KEY || '').trim(), model: c.model };
+  }
+  if (!primary || !primary.url) throw new Error('当前 AI 接口没有配置地址');
+  if (!primary.key) throw new Error(`AI 接口「${primary.name || primary.model}」没有配置密钥`);
 
   const ai = aiSettings();
   const temp = Number.isFinite(Number(temperature)) ? Number(temperature) : ai.temperature;
@@ -316,7 +332,12 @@ export async function chatCompletion(opts) {
 export function logProviderInfo() {
   const c = getProviderInfo();
   const f = getFallbackInfo();
-  const tail = f ? `，备用: ${f.model}` : '';
-  logger.info(c.hasKey ? `模型: ${c.model}（${c.name}）${tail}` : '模型: （未配置，AI 对话不可用）');
+  const picked = activeProvider();
+  const active = getActiveId();
+  let line;
+  if (active === 'fallback' && f) line = `模型: ${f.model}（官方备用）`;
+  else if (picked) line = `模型: ${picked.model}（网页：${picked.name}）`;
+  else line = c.hasKey ? `模型: ${c.model}（${c.name}）` : '模型: （未配置，AI 对话不可用）';
+  logger.info(line + (f && active !== 'fallback' ? `，备用: ${f.model}` : ''));
 }
 

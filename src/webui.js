@@ -18,6 +18,7 @@ import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } fro
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
 import { isMcConnected, getGameBans, banPlayers, banEachPlayer, getBridgeTarget, isMcConfigured } from './mcbridge.js';
+import { listProviders, getActiveId, saveProvider, deleteProvider, setActive } from './aiProviders.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
 import { qzoneStatus, postQzoneNow, normalizeQzone } from './qzone.js';
@@ -1044,6 +1045,32 @@ async function route(req, res, url) {
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
     reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
     return sendJSON(res, 200, { ok: true, config: config() });
+  }
+
+  // ---------- AI 接口管理：增删自定义接口 / 切换当前用哪个 ----------
+  if (url.pathname === '/api/ai-providers' && req.method === 'GET') {
+    const list = listProviders().map((p) => ({
+      id: p.id,
+      name: p.name,
+      url: p.url,
+      model: p.model,
+      hasKey: !!p.key,
+      // 只回显前后几位，够辨认就行，别把完整密钥发到浏览器
+      keyHint: p.key ? p.key.slice(0, 3) + '…' + p.key.slice(-3) : '',
+    }));
+    return sendJSON(res, 200, { ok: true, active: getActiveId(), list });
+  }
+  if (url.pathname === '/api/ai-providers' && req.method === 'POST') {
+    const b = await readBody(req);
+    const action = String((b && b.action) || '');
+    let r;
+    if (action === 'save') r = saveProvider(b);
+    else if (action === 'delete') r = deleteProvider(b.id);
+    else if (action === 'active') r = setActive(b.id);
+    else return sendJSON(res, 400, { ok: false, error: '未知操作' });
+    if (!r.ok) return sendJSON(res, 400, r);
+    logger.info(`[AI接口] ${action === 'save' ? '已保存' : action === 'delete' ? '已删除' : '已切换'}（active=${getActiveId() || '自动'}）`);
+    return sendJSON(res, 200, { ok: true, active: getActiveId(), list: listProviders().map((p) => ({ id: p.id, name: p.name, url: p.url, model: p.model, hasKey: !!p.key, keyHint: p.key ? p.key.slice(0, 3) + '…' + p.key.slice(-3) : '' })) });
   }
 
   // ---------- 人工接管（三态：auto 自动 / manual 人工 / hybrid 混合） ----------

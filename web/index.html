@@ -357,6 +357,26 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <div class="hint" id="gcMsg"></div>
     </div>
     <div class="card span2">
+      <h2>🧠 AI 接口 <span class="hint" style="margin:0;font-weight:400">选择当前用哪个接口；不选＝按 .env 主接口，失败自动切备用</span></h2>
+      <div class="row">
+        <div><label>当前接口</label><select id="aiProvSel"></select></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn green" id="aiProvApply" style="width:auto">切换</button></div>
+      </div>
+      <div id="aiProvList" style="margin-top:10px"></div>
+      <div class="row" style="grid-template-columns:1fr 1fr">
+        <div><label>名称</label><input id="aiProvName" type="text" placeholder="如 hy4free"></div>
+        <div><label>模型</label><input id="aiProvModel" type="text" placeholder="如 cn:hy4free"></div>
+      </div>
+      <label>接口地址（chat/completions）</label><input id="aiProvUrl" type="text" placeholder="https://example.com/v1/chat/completions">
+      <label>密钥（编辑已有接口时留空＝不修改）</label><input id="aiProvKey" type="password" placeholder="sk-...">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <button class="btn green" id="aiProvSave" style="width:auto">保存接口</button>
+        <button class="btn ghost" id="aiProvReset" style="width:auto">清空表单</button>
+        <span class="hint" id="aiProvMsg" style="margin:0"></span>
+      </div>
+      <div class="hint">接口列表存在 data/ai-providers.json（不进 git）。选「自动」时仍按 .env 主接口＋备用兜底；选定自定义接口后，它挂了会自动切 .env 的备用。</div>
+    </div>
+    <div class="card span2">
       <h2>🌙 QQ 空间自动说说 <span class="hint" style="margin:0;font-weight:400">随机间隔 · 自评 · 回复评论</span></h2>
       <div class="row">
         <div><label>自动发说说</label><select id="qzOn"><option value="true">开启</option><option value="false">关闭</option></select></div>
@@ -516,12 +536,6 @@ function showTab(name){
 }
 document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 showTab((location.hash||'').replace('#','')||'login');
-
-// 绑定管理页每 12 秒自动刷新一次：在游戏里刚封/解的人，不用手动刷新页面也能同步看到
-setInterval(()=>{
-  const p=document.querySelector('.panel[data-panel="bind"]');
-  if(p&&p.classList.contains('active')&&!document.hidden)bindLoad().catch(()=>{});
-},12000);
 
 
 
@@ -828,8 +842,60 @@ async function convLoad(full){
   }catch(e){}
 }
 
-$('gcSave').onclick=async()=>{
-  const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},
+// ---------- AI 接口管理（当前用哪个 API） ----------
+let aiProvEdit=null;
+let aiProvData=[];
+function aiProvRender(){
+  const sel=$('aiProvSel');
+  sel.innerHTML='<option value="">自动（.env 主接口 → 备用兜底）</option>'+
+    '<option value="fallback">官方备用（.env 的 AI_FALLBACK_*）</option>'+
+    aiProvData.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name)+'（'+esc(p.model)+'）</option>').join('');
+  sel.value=aiProvActive||'';
+  $('aiProvList').innerHTML=aiProvData.length?aiProvData.map(p=>'<div class="cmd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><b>'+esc(p.name)+'</b><span class="hint" style="margin-left:8px">'+esc(p.model)+' · '+esc(p.url)+' · 密钥 '+(p.hasKey?esc(p.keyHint):'未设置')+'</span></div>'+
+    '<button class="btn ghost" data-aiprov-edit="'+esc(p.id)+'" style="width:auto;min-height:30px;padding:0 12px;font-size:12px;margin:0">编辑</button>'+
+    '<button class="btn ghost" data-aiprov-del="'+esc(p.id)+'" style="width:auto;min-height:30px;padding:0 12px;font-size:12px;margin:0">删除</button></div>').join(''):'<span class="hint">还没有自定义接口</span>';
+  document.querySelectorAll('#aiProvList [data-aiprov-edit]').forEach(b=>b.onclick=()=>{
+    const p=aiProvData.find(x=>x.id===b.dataset.aiprovEdit); if(!p)return;
+    aiProvEdit=p.id; $('aiProvName').value=p.name; $('aiProvModel').value=p.model; $('aiProvUrl').value=p.url; $('aiProvKey').value='';
+    $('aiProvMsg').textContent='编辑中：'+p.name+'（密钥留空则不修改）';
+  });
+  document.querySelectorAll('#aiProvList [data-aiprov-del]').forEach(b=>b.onclick=async()=>{
+    const p=aiProvData.find(x=>x.id===b.dataset.aiprovDel); if(!p)return;
+    if(!confirm('确认删除接口「'+p.name+'」？'))return;
+    try{ await api('/api/ai-providers',{method:'POST',body:JSON.stringify({action:'delete',id:p.id})}); aiProvLoad(); }
+    catch(err){ alert('删除失败: '+err.message); }
+  });
+}
+let aiProvActive='';
+async function aiProvLoad(){
+  if(xnLoggedIn===false)return;
+  try{
+    const d=await api('/api/ai-providers');
+    aiProvData=d.list||[]; aiProvActive=d.active||''; aiProvRender();
+  }catch(e){}
+}
+$('aiProvApply').onclick=async()=>{
+  try{
+    const d=await api('/api/ai-providers',{method:'POST',body:JSON.stringify({action:'active',id:$('aiProvSel').value})});
+    aiProvActive=d.active||''; aiProvData=d.list||[]; aiProvRender();
+    $('aiProvMsg').textContent='✅ 已切换，下一条消息生效';
+  }catch(e){ $('aiProvMsg').textContent='❌ '+e.message; }
+};
+$('aiProvSave').onclick=async()=>{
+  const body={action:'save',id:aiProvEdit||'',name:$('aiProvName').value.trim(),model:$('aiProvModel').value.trim(),url:$('aiProvUrl').value.trim(),key:$('aiProvKey').value.trim()};
+  try{
+    const d=await api('/api/ai-providers',{method:'POST',body:JSON.stringify(body)});
+    aiProvData=d.list||[]; aiProvActive=d.active||''; aiProvEdit=null;
+    $('aiProvName').value='';$('aiProvModel').value='';$('aiProvUrl').value='';$('aiProvKey').value='';
+    aiProvRender();
+    $('aiProvMsg').textContent='✅ 已保存（要启用请在上方选中后点「切换」）';
+  }catch(err){ $('aiProvMsg').textContent='❌ '+(err.message||'保存失败'); }
+};
+$('aiProvReset').onclick=()=>{
+  aiProvEdit=null; $('aiProvName').value='';$('aiProvModel').value='';$('aiProvUrl').value='';$('aiProvKey').value='';$('aiProvMsg').textContent='';
+};
+
+$('gcSave').onclick=async()=>{  const body={chat:{botReply:$('gcReply').value==='true',voice:$('gcVoice').value==='true',keyword:$('gcKw').value.trim(),extraPrompt:$('gcPrompt').value},
     notice:{enabled:$('gcNoticeOn').value==='true',joinText:$('gcJoin').value.trim(),leaveText:$('gcLeave').value.trim()},
     rateLimit:{},cooldown:{},engage:{},bind:{},
     search:{provider:$('gcSearch').value,limit:Number($('gcSearchLimit').value)||5,customUrl:$('gcSearchUrl').value.trim()},
@@ -1202,7 +1268,7 @@ $('bdClearUnbinds').onclick=async()=>{
   catch(e){ alert('清除失败: '+e.message); }
 };
 
-load();perms();bindLoad();refresh();logs();convLoad(true);ftLoad();load();perms();
+load();perms();bindLoad();refresh();logs();convLoad(true);ftLoad();aiProvLoad();load();perms();
 setInterval(load,5000);setInterval(perms,8000);setInterval(bindLoad,8000);setInterval(refresh,2000);setInterval(logs,2000);setInterval(()=>convLoad(false),3000);
 </script>
 </body>
