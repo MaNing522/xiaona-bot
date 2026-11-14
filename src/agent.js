@@ -492,13 +492,10 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
     const calls = msg && msg.tool_calls;
     if (!calls || !calls.length) return (msg && msg.content) || '';
 
-    // 助手这一轮只发起了工具调用（可能同时多条），先原样记入，再逐条执行
+    // 助手这一轮只发起工具调用（可能同时多条），先原样记入，再逐条执行。
+    // 注意：这里的 content 是模型的**内部旁白**，不发给用户——真正的 agent 应该
+    // 在思维链里把工具跑完，再拿最终结果统一回话，而不是先发一句"我查一下"。
     messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
-    // 模型在发起工具调用时自己写的那句话（如"让我看看这张图""正在搜一下"），先发给用户，
-    // 让他知道小钠正在干什么——而不是由代码塞一句固定话术
-    if (msg.content && ctx && typeof ctx.notify === 'function') {
-      try { await ctx.notify(String(msg.content)); } catch { /* 中间消息发不出去不影响主流程 */ }
-    }
     for (const call of calls) {
       throwIfAborted(signal);
       const name = call.function && call.function.name;

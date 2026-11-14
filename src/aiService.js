@@ -184,6 +184,82 @@ function isTransientNetErr(e) {
 }
 
 /**
+ * 把模型写在正文里的工具调用还原成标准 tool_calls。
+ *
+ * 有些中转/模型不支持结构化 function calling，会把
+ * `<tool_calls><tool_call>{"name":"mc_status","arguments":{}}</tool_call></tool_calls>`、
+ * 单个 `<tool_call>…</tool_call>` 或 `<function=mc_status>{…}</function>` 当普通文本吐出来。
+ * 不还原的话，这段 XML 会被当成聊天内容发出去，agent 看起来就"压根没调工具"。
+ * 只认当前这次请求里真实存在的工具名，避免把正文里的同名文本误当调用。
+ */
+export function extractTextToolCalls(content, tools = []) {
+  const allowed = new Set((tools || []).map((t) => t && t.function && t.function.name).filter(Boolean));
+  const calls = [];
+  let seq = 0;
+  const toCall = (name, args) => {
+    const n = String(name || '').trim();
+    if (!n || (allowed.size && !allowed.has(n))) return null;
+    let payload = '{}';
+    if (typeof args === 'string') payload = args.trim() || '{}';
+    else if (args && typeof args === 'object') payload = JSON.stringify(args);
+    seq += 1;
+    return { id: `txt_${Date.now()}_${seq}`, type: 'function', function: { name: n, arguments: payload } };
+  };
+  const parseRaw = (raw) => {
+    const out = [];
+    let s = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const fm = s.match(/<function[=\s]\s*"?([A-Za-z0-9_]+)"?\s*>([\s\S]*?)<\/function>/i);
+    if (fm) {
+      const c = toCall(fm[1], fm[2]);
+      if (c) out.push(c);
+      return out;
+    }
+    try {
+      const j = JSON.parse(s);
+      for (const item of (Array.isArray(j) ? j : [j])) {
+        const fn = item && item.function && typeof item.function === 'object' ? item.function : null;
+        const c = toCall(
+          item && (item.name || item.tool || (fn && fn.name)),
+          item && (item.arguments ?? item.args ?? item.parameters ?? (fn && fn.arguments)),
+        );
+        if (c) out.push(c);
+      }
+    } catch { /* 不是 JSON 就忽略 */ }
+    return out;
+  };
+
+  let text = String(content || '');
+  // 1) 复数包裹：<tool_calls>…</tool_calls>（里面可能有多条 <tool_call>，也可能直接是 JSON）
+  text = text.replace(/<tool_calls[^>]*>([\s\S]*?)<\/tool_calls>/gi, (whole, inner) => {
+    const before = calls.length;
+    const itemRe = /<tool_call[^>]*>([\s\S]*?)<\/tool_call>/gi;
+    let m;
+    let found = false;
+    while ((m = itemRe.exec(inner))) {
+      found = true;
+      calls.push(...parseRaw(m[1]));
+    }
+    if (!found) calls.push(...parseRaw(inner));
+    return calls.length > before ? '' : whole;
+  });
+  // 2) 单个 <tool_call>…</tool_call>
+  text = text.replace(/<tool_call[^>]*>([\s\S]*?)<\/tool_call>/gi, (whole, inner) => {
+    const got = parseRaw(inner);
+    if (!got.length) return whole;
+    calls.push(...got);
+    return '';
+  });
+  // 3) 不带 tool_call 包裹的 <function=名字>参数</function>
+  text = text.replace(/<function[=\s]\s*"?([A-Za-z0-9_]+)"?\s*>([\s\S]*?)<\/function>/gi, (whole, name, args) => {
+    const c = toCall(name, args);
+    if (!c) return whole;
+    calls.push(c);
+    return '';
+  });
+  return { content: text.trim(), tool_calls: calls.length ? calls : null };
+}
+
+/**
  * 发一次对话补全请求，返回**完整的助手消息**（含 tool_calls），供 agent 工具循环使用。
  * tools 传入 OpenAI 兼容的工具定义数组时，模型可自主返回 tool_calls。
  * @returns {Promise<{content:string, tool_calls:Array|null}>}
@@ -278,9 +354,12 @@ export async function chatCompletionRaw({ messages, temperature, maxTokens, time
     if (!data.choices || data.choices.length === 0) throw new Error('AI 返回格式异常');
     const choice = data.choices[0];
     const m = choice.message || {};
+    // 结构化 tool_calls 优先；没有就把正文里的 XML 工具调用解析出来（并清掉这段文本）
+    const parsed = extractTextToolCalls(m.content || '', tools);
+    const structured = Array.isArray(m.tool_calls) && m.tool_calls.length ? m.tool_calls : null;
     return {
-      content: m.content || '',
-      tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : null,
+      content: parsed.content,
+      tool_calls: structured || parsed.tool_calls,
       finishReason: choice.finish_reason || '',
     };
   }
