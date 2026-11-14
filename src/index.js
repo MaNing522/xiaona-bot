@@ -839,7 +839,8 @@ async function agentPlayerQuery(name) {
 /** 工具：AI 账户余额（只读，不改动累计统计） */
 async function agentBalance() {
     try {
-        const { infos } = await fetchBalanceInfos();
+        const { infos, raw } = await fetchBalanceInfos();
+        if (raw) return '使用情况：' + raw;
         return infos.map((b) => {
             const tag = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : `${b.currency || ''} `;
             return `${tag}${b.total_balance}（充值余 ${tag}${b.topped_up_balance} + 赠金余 ${tag}${b.granted_balance}）`;
@@ -1944,8 +1945,10 @@ async function fetchBalanceInfos() {
     if (!res.ok) throw new Error(`余额查询失败（HTTP ${res.status}）：该服务商可能没有余额接口`);
     const data = await res.json();
     const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
-    if (!infos.length) throw new Error('响应里没有余额信息（当前服务商可能不支持）');
-    return { infos, available: data.is_available !== false };
+    if (infos.length) return { infos, available: data.is_available !== false };
+    // 非 DeepSeek 形状（自定义的使用情况接口）：原样给一段紧凑 JSON，主人自己看
+    if (data && typeof data === 'object') return { raw: JSON.stringify(data).slice(0, 400) };
+    throw new Error('响应里没有余额信息（当前服务商可能不支持）');
 }
 
 /**
@@ -1962,7 +1965,8 @@ async function doBalance(event, role) {
     } catch (e) {
         return sendReply(event, '❌ ' + String(e.message).slice(0, 120));
     }
-    const { infos, available } = fetched;
+    const { infos, available, raw } = fetched;
+    if (raw) return sendReply(event, '📊 AI 使用情况：\n' + raw);
     const multi = infos.length > 1;
     const blocks = infos.map((b) => {
         const st = trackBalance(b);

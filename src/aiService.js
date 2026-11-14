@@ -9,6 +9,9 @@
 //   AI_API_URL    显式指定则优先于 provider 默认值
 //   AI_API_KEY    缺此项 = AI 对话整体停用
 //   AI_MODEL      显式指定则优先于 provider 默认值
+//   AI_BALANCE_URL       自定义「使用情况/余额」查询地址（填了就不按服务商推导）
+//   AI_FALLBACK_URL/KEY/MODEL  备用接口：主接口掉线/429 时自动顶上（key 不填就不启用）
+// 注：glm 系列在这类中转上经常 429，不建议当主力模型。
 // ============================================================
 import { logger } from './logger.js';
 import { config } from './config.js';
@@ -64,10 +67,27 @@ export function isAiEnabled() {
 }
 
 /**
+ * 备用接口（主接口掉线/429 时自动顶上）。
+ * 没配 AI_FALLBACK_KEY 就返回 null，不启用兜底。
+ */
+export function getFallbackInfo() {
+  const key = String(process.env.AI_FALLBACK_KEY || '').trim();
+  if (!key) return null;
+  return {
+    name: '备用',
+    url: String(process.env.AI_FALLBACK_URL || 'https://api.deepseek.com/chat/completions').trim(),
+    key,
+    model: String(process.env.AI_FALLBACK_MODEL || 'deepseek-flash').trim(),
+  };
+}
+
+/**
  * 服务商账户余额接口地址。
  * 只对已知支持的服务商返回地址；否则返回 ''（调用方给友好提示，而不是报错）。
  */
 export function balanceEndpoint() {
+  const custom = String(process.env.AI_BALANCE_URL || '').trim();
+  if (custom) return custom;
   const c = getProviderInfo();
   if (!c.url) return '';
   const p = PROVIDERS[c.provider];
@@ -133,6 +153,9 @@ export function reasoningParams(ai) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 主接口熔断时间点：失败（掉线/429/5xx）后 5 分钟内直接走备用接口，到期再试主接口
+let primaryDownUntil = 0;
+
 // 网络层可重试的错误码：DNS 临时失败（EAI_AGAIN，家宽路由器最常见）、
 // 连接被重置/拒绝、网络不可达、undici 自己的连接错误
 const RETRYABLE_CODES = new Set([
@@ -168,10 +191,12 @@ export async function chatCompletionRaw({ messages, temperature, maxTokens, time
   if (!c.hasKey) throw new Error('未配置 AI_API_KEY');
   if (!c.url) throw new Error('未配置 AI_API_URL（provider=custom 时必须显式指定）');
 
+  const primary = { name: c.name, url: c.url, key: String(process.env.AI_API_KEY || '').trim(), model: c.model };
+  const fallback = getFallbackInfo();
+
   const ai = aiSettings();
   const temp = Number.isFinite(Number(temperature)) ? Number(temperature) : ai.temperature;
   const body = {
-    model: c.model,
     messages,
     temperature: Math.min(2, Math.max(0, temp)),
     max_tokens: maxTokens || intEnv('AI_MAX_TOKENS', 512),
@@ -186,19 +211,20 @@ export async function chatCompletionRaw({ messages, temperature, maxTokens, time
   }
 
   /**
-   * 发一次请求。
+   * 向指定接口发一次请求。
    * 返回 content / tool_calls / finishReason；finishReason 用于识别"被思维链吃光"的情况。
    * 网络抖动（DNS 临时失败、连接被重置）自动重试，最多 3 次，避免一句"技术问题"打发用户。
    */
-  async function send() {
+  async function sendTo(cfg) {
     const ATTEMPTS = 3;
+    const payload = JSON.stringify({ ...body, model: cfg.model });
     let res;
     for (let attempt = 1; ; attempt++) {
       try {
-        res = await fetch(c.url, {
+        res = await fetch(cfg.url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.AI_API_KEY}` },
-          body: JSON.stringify(body),
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.key}` },
+          body: payload,
           signal: AbortSignal.timeout(timeoutMs),
         });
         break;
@@ -236,6 +262,29 @@ export async function chatCompletionRaw({ messages, temperature, maxTokens, time
     };
   }
 
+  /**
+   * 主接口优先；失败（掉线/429/5xx）且配了备用接口时，切换过去并熔断 5 分钟，
+   * 期间直接走备用，避免每条消息都先在坏接口上超时一次。
+   */
+  async function send() {
+    if (!fallback || Date.now() >= primaryDownUntil) {
+      try {
+        const r = await sendTo(primary);
+        primaryDownUntil = 0;
+        return r;
+      } catch (e) {
+        if (!fallback) throw e;
+        logger.warn(`[AI] 主接口（${primary.model}）失败：${String(e.message).slice(0, 120)}；临时切到备用 ${fallback.model}`);
+        primaryDownUntil = Date.now() + 5 * 60 * 1000;
+      }
+    }
+    try {
+      return await sendTo(fallback);
+    } catch (e) {
+      throw new Error(`主接口不可用，备用接口（${fallback.model}）也失败：${e.message}`, { cause: e });
+    }
+  }
+
   const first = await send();
   // 推理模型（如 deepseek-flash）会先花 token 想，max_tokens 不够时思维链把额度吃光，
   // 正文 content 是空的、finish_reason=length —— 这时把额度翻倍重试一次，别把空回复当结果。
@@ -266,5 +315,8 @@ export async function chatCompletion(opts) {
 /** 启动时打印一行，便于确认当前接的是哪家 */
 export function logProviderInfo() {
   const c = getProviderInfo();
-  logger.info(c.hasKey ? `模型: ${c.model}（${c.name}）` : '模型: （未配置，AI 对话不可用）');
+  const f = getFallbackInfo();
+  const tail = f ? `，备用: ${f.model}` : '';
+  logger.info(c.hasKey ? `模型: ${c.model}（${c.name}）${tail}` : '模型: （未配置，AI 对话不可用）');
 }
+
