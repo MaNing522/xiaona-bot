@@ -595,7 +595,7 @@ button:disabled{opacity:.55;cursor:default}
     <button id="start" class="ghost">发送验证</button>
   </div>
   <div id="verifyBox" style="display:none;margin-top:10px">
-    <div class="hint">在游戏里按提示输入下面 4 位验证码，或直接把验证码填在下面：</div>
+    <div class="hint">把图片里的 4 位验证码填在下面，确认后即完成绑定：</div>
     <img id="capimg" alt="验证码">
     <div class="row" style="margin-top:8px">
       <input id="vcode" inputmode="numeric" maxlength="4" placeholder="4 位验证码" style="flex:1;min-width:120px">
