@@ -445,6 +445,11 @@ public class BridgeServer {
         if (command.startsWith("/")) command = command.substring(1);
         if (command.length() > MAX_TEXT) command = command.substring(0, MAX_TEXT);
         String root = command.split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        // data 只放行查询（data get），不允许 data modify / merge / remove 改实体或方块数据
+        if ("data".equals(root) && !command.toLowerCase(java.util.Locale.ROOT).matches("^data\\s+get\\b.*")) {
+            sendJson(ex, 403, Map.of("ok", false, "error", "只允许 data get（查询），不允许改数据"));
+            return;
+        }
         if (!commandAllowed(root)) {
             sendJson(ex, 403, Map.of("ok", false, "error", "命令不在允许列表：" + root));
             return;

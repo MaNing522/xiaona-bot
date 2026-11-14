@@ -74,6 +74,23 @@ export const AGENT_TOOLS = [
     run: async (args, ctx) => ctx.playerQuery(String(args.name || '').trim()),
   },
   {
+    minRole: 'guest',
+    function: {
+      name: 'player_pos',
+      description: '查询某个在线玩家当前的坐标（X/Y/Z）。只需要游戏ID，不会改动任何东西；玩家不在线时会返回服务器提示。',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '玩家游戏ID，3-16 位字母/数字/下划线' } },
+        required: ['name'],
+      },
+    },
+    run: async (args, ctx) => {
+      const name = String(args.name || '').trim();
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return '玩家名格式不对（3-16 位字母、数字或下划线）。';
+      return ctx.runCommand(`data get entity ${name} Pos`);
+    },
+  },
+  {
     minRole: 'admin',
     function: {
       name: 'ai_balance',
@@ -381,4 +398,3 @@ async function execTool(name, rawArgs, ctx, allowedTools, onTool) {
     return `工具 ${name} 执行失败：${e.message}`;
   }
 }
-

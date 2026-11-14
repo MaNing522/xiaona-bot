@@ -82,7 +82,7 @@ public class Config {
                 "spawnpoint", "setworldspawn", "setblock", "fill", "clone", "day", "night",
                 "ban", "pardon", "kick", "whitelist", "banlist", "enchant", "damage", "heal",
                 "title", "bossbar", "particle", "playsound", "stopsound", "spectate", "tag",
-                "team", "scoreboard", "recipe", "advancement", "place", "random", "seed", "list"));
+                "team", "scoreboard", "recipe", "advancement", "place", "random", "seed", "list", "data"));
         public int commandRateLimitPerMinute = 30; // 命令每分钟上限，0 = 不限
     }
 
@@ -166,6 +166,10 @@ public class Config {
             bridge.allowCommands.set(i, c == null ? "" : c.trim().toLowerCase());
         }
         bridge.allowCommands.removeIf(s -> s.isBlank());
+        // 2.12 起默认放行 data（小钠查坐标用）；已有配置文件也补上，且只允许 data get（见 BridgeServer）
+        if (!bridge.allowCommands.contains("*") && !bridge.allowCommands.contains("data")) {
+            bridge.allowCommands.add("data");
+        }
         if (bridge.commandRateLimitPerMinute < 0) bridge.commandRateLimitPerMinute = 30;
 
         if (http == null) http = new Http();

@@ -17,6 +17,7 @@ const TOOL_HINTS = {
     analyze_image: '读懂本条消息里的图片（画面内容、截图里的报错/文字 OCR）。只有本条消息带 [图片] 时才用',
     mc_status: '查 Minecraft 服务器状态/在线玩家。查自己的服不填参数，查别人的服填地址；**查 MC 服务器一律用它，不要用 web_search**',
     player_query: '查某个玩家的游玩时长、最后在线等统计数据（来自服务器 Plan 插件）',
+    player_pos: '查某个在线玩家当前的坐标（X/Y/Z）',
     ai_balance: '查 AI 服务商账户余额（账务信息）',
     mc_command: '在 Minecraft 服务器上执行命令（tp / give / gamemode / time 等，受白名单限制），只对明确要求改游戏状态的人用',
     adjust_favor: '按对方的表现小幅调整好感度（±1~5，同一轮最多一次，别报数值给对方）',
@@ -134,4 +135,3 @@ export function buildToolPrompt({ role = 'guest', caps = {}, serverInfo = '', sc
         mcSection({ bridgeGroup }),
     ].filter(Boolean).join('\n');
 }
-
