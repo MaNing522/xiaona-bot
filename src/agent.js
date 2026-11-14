@@ -278,11 +278,26 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
     }
     for (const call of calls) {
       const name = call.function && call.function.name;
-      const out = await execTool(name, call.function && call.function.arguments, ctx, tools, onTool);
-      messages.push({ role: 'tool', tool_call_id: call.id, content: out });
+      let out;
+      try {
+        out = await execTool(name, call.function && call.function.arguments, ctx, tools, onTool);
+      } catch (e) {
+        // 兜底：execTool 自己已经会兜住异常，这里再保险一层，绝不让工具问题中断循环
+        out = `工具 ${name} 执行失败：${e && e.message ? e.message : e}`;
+      }
+      // 工具结果必须始终回灌给模型（成功/失败都要），哪怕空字符串也补一句，
+      // 否则有的服务商会对空的 tool 消息报错，整轮回复就断了
+      const content = String(out ?? '').trim() || '（工具执行完成，但没有返回内容）';
+      messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
-  return ''; // 超过 maxSteps：不再让模型继续，交由上层兜底
+  // 步数用完但工具结果还没被模型消化：禁用工具再来一轮，让它基于结果作答，而不是直接吞掉
+  try {
+    const final = await chat({ messages, tools: [] });
+    return (final && final.content) || '';
+  } catch {
+    return '';
+  }
 }
 
 /**

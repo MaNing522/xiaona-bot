@@ -729,7 +729,7 @@ function expectedHistoryCount() {
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, reply = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
@@ -763,8 +763,16 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {
             const res = await fetchAndApplyUpdate();
-            if (res.ok && res.updated) pendingSelfRestart = true;
-            return res.message;
+            if (res.ok && res.updated) {
+                pendingSelfRestart = true;
+                // 不依赖模型转述：更新完立刻在「发起更新」的这个会话里说一声
+                // （进程马上要重启，先把这句话发出去，免得模型还没回就被切掉）
+                const say = reply || notify;
+                if (say) {
+                    try { await say(res.message + '\n♻️ 更新完成，正在重启我，稍等…'); } catch { /* 发不出去也不影响更新/重启 */ }
+                }
+            }
+            return res.message + (res.ok && res.updated ? '\n（已直接在这个会话里告知用户，回复时不用再重复更新细节）' : '');
         },
         // 只看不拉：查有没有新提交、更新了什么（不动代码、不重启）
         checkUpdate: () => checkForUpdates(),
@@ -1205,6 +1213,7 @@ function canBindHere(event) {
 
 // ---------- 主人指令：从 GitHub 拉更新（直连 + 多镜像兜底） ----------
 const GIT_TIMEOUT = 30000;
+const GIT_FETCH_TIMEOUT = 20000;
 
 /** 跑一条 git 命令（失败不抛异常，返回 { ok, out, err }） */
 function runGit(args, timeout = GIT_TIMEOUT) {
@@ -1261,16 +1270,29 @@ function scheduleSelfRestart() {
     return true;
 }
 
-/** 依次试直连和镜像，把远端 main 取到 FETCH_HEAD（不改工作区、不合并） */
+/** agent 拉完更新后真正执行重启（回复发完/没发成都要走到，别把重启吞了） */
+function restartAfterUpdateIfNeeded() {
+    if (!pendingSelfRestart) return;
+    pendingSelfRestart = false;
+    if (scheduleSelfRestart()) logger.info('[更新] 回复已发出，准备重启');
+    else logger.info('[更新] 非 PM2 环境，需手动重启生效');
+}
+
+/** 依次试直连和镜像，把远端 main 取到 FETCH_HEAD（不改工作区、不合并）
+ *  网络经常抖：每个源试两次，都失败才轮到下一个源。 */
 async function fetchLatest() {
-    let lastErr = '';
+    const errors = [];
     for (const src of updateSources()) {
-        const res = await runGit(['fetch', '--no-tags', src.url, 'main']);
-        if (res.ok) return { ok: true, used: src.name };
-        lastErr = res.err || res.out;
-        logger.info(`[更新] 源「${src.name}」失败：${lastErr.split('\n')[0] || '未知错误'}`);
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            const res = await runGit(['fetch', '--no-tags', src.url, 'main'], GIT_FETCH_TIMEOUT);
+            if (res.ok) return { ok: true, used: src.name };
+            const line = (res.err || res.out || '').split('\n').filter(Boolean).pop() || '未知错误';
+            errors.push(`${src.name}：${line.slice(0, 120)}`);
+            if (attempt === 1) await new Promise((r) => setTimeout(r, 1200));
+            else logger.info(`[更新] 源「${src.name}」两次都失败：${line.slice(0, 160)}`);
+        }
     }
-    return { ok: false, err: lastErr };
+    return { ok: false, err: errors.slice(-4).join('\n') };
 }
 
 /** agent 工具：只看有没有更新、更新了什么（fetch 后对比 FETCH_HEAD，不动代码、不重启） */
@@ -3077,6 +3099,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             ctx: buildAgentCtx(memKey, String(event.user_id), {
                 images: imgs,
+                // 更新完成等需要直接告知用户的话，走这里发到当前会话
+                reply: (text) => sendReply(event, text),
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
                     const t = stripToolTags(String(text)).trim();
@@ -3111,9 +3135,10 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
             .filter(Boolean);
         if (!parts.length) {
             // 歌已经用语音发出去了，模型没再补文字就别再发"没听懂"
-            if (voiceSent) { logger.info('✅ 语音已通过工具发送，无补充文字'); return; }
+            if (voiceSent) { logger.info('✅ 语音已通过工具发送，无补充文字'); restartAfterUpdateIfNeeded(); return; }
             // 模型没给正文（自己写了【REPLY:否】、或工具调完没补话）：静默，不再刷"没听懂"的兜底
             logger.info('🤐 AI 没有给出正文，本条不回复');
+            restartAfterUpdateIfNeeded();
             return;
         }
 
@@ -3128,17 +3153,15 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         recordMessage(memKey, 'ai', finalReply, { scene: memScene });
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
         // agent 在回复过程中拉过更新：等这条回完再重启，别把没发出去的话吞了
-        if (pendingSelfRestart) {
-            pendingSelfRestart = false;
-            if (scheduleSelfRestart()) logger.info('[更新] 回复已发出，准备重启');
-            else logger.info('[更新] 非 PM2 环境，需手动重启生效');
-        }
+        restartAfterUpdateIfNeeded();
     } catch (err) {
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
         logger.error('❌ 处理异常:', briefApiErr(err));
         // 群消息发送失败多半是被禁言，这时「稍后再试」也发不出去，就别白试了
         const muted = event.message_type === 'group' ? await botMutedUntil(event.group_id, 0) : 0;
         if (!muted) await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
+        // 更新已经完成但回复失败：照样要重启，不然新代码一直不生效
+        restartAfterUpdateIfNeeded();
     }
 }
 
