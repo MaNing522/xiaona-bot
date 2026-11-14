@@ -5,6 +5,7 @@
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
+import { execFile, spawn } from 'child_process';
 import dotenv from 'dotenv';
 import { textToSpeech, cleanVoiceCache, ttsProvider } from './tts.js';
 import { getSearchContext, isSearchEnabled, searchSettings } from './search.js';
@@ -1192,6 +1193,118 @@ function canBindHere(event) {
         && String(event.group_id ?? '') === MC_BRIDGE_GROUP;
 }
 
+// ---------- 主人指令：从 GitHub 拉更新（直连 + 多镜像兜底） ----------
+const GIT_TIMEOUT = 30000;
+
+/** 跑一条 git 命令（失败不抛异常，返回 { ok, out, err }） */
+function runGit(args, timeout = GIT_TIMEOUT) {
+    return new Promise((resolve) => {
+        execFile('git', args, { cwd: ROOT, timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            resolve({
+                ok: !err,
+                out: String(stdout || '').trim(),
+                err: (String(stderr || '').trim() || (err ? err.message : '')).trim(),
+            });
+        });
+    });
+}
+
+/**
+ * 更新源列表：直连优先，其次按顺序试常用 GitHub 加速镜像。
+ * 镜像只是把 https://github.com/OWNER/REPO.git 前面拼一段代理地址。
+ * 返回 [{ name, url }]，name 用于日志/回复，url 里可能带 token，不要直接回给用户。
+ */
+function updateSources() {
+    const repo = String(process.env.GITHUB_REPO || 'MaNing522/xiaona-bot').trim();
+    const plain = `https://github.com/${repo}.git`;
+    const token = String(process.env.GITHUB_TOKEN || '').trim();
+    const list = [];
+    if (token) list.push({ name: 'github（带 token）', url: `https://${token}@github.com/${repo}.git` });
+    list.push({ name: 'github 直连', url: plain });
+    const mirrors = [
+        'https://ghproxy.net/',
+        'https://ghfast.top/',
+        'https://gh-proxy.com/',
+        'https://ghproxy.cc/',
+        'https://github.moeyy.xyz/',
+        'https://hub.gitmirror.com/',
+        'https://gh.llkk.cc/',
+    ];
+    for (const m of mirrors) list.push({ name: m.replace(/^https?:\/\//, '').replace(/\/$/, ''), url: m + plain });
+    return list;
+}
+
+/** 更新成功后重启自己：PM2 环境用 pm2 restart（detached，免得被一起杀掉） */
+function scheduleSelfRestart() {
+    if (process.env.pm_id === undefined) return false;
+    const name = process.env.name || 'xiaona-bot';
+    setTimeout(() => {
+        try {
+            const child = spawn('pm2', ['restart', name, '--update-env'], { detached: true, stdio: 'ignore' });
+            child.unref();
+        } catch (e) {
+            logger.error('[更新] 自动重启失败:', e.message);
+        }
+    }, 1500);
+    return true;
+}
+
+/** #更新：拉最新代码 → 依赖有变化就补装 → 重启（所有者/主人可用） */
+async function doSelfUpdate(event, r) {
+    if (r !== 'owner' && r !== 'master') return sendReply(event, '❌ 只有所有者/主人可以拉取更新');
+
+    await sendReply(event, '🔄 正在从 GitHub 拉取更新…');
+    const before = await runGit(['rev-parse', '--short', 'HEAD']);
+    if (!before.ok) return sendReply(event, '❌ 当前目录不是 git 仓库或 git 不可用：' + before.err.slice(0, 200));
+    const oldHead = before.out;
+
+    let lastErr = '';
+    let used = '';
+    for (const src of updateSources()) {
+        const res = await runGit(['fetch', '--no-tags', src.url, 'main']);
+        if (res.ok) { used = src.name; break; }
+        lastErr = res.err || res.out;
+        logger.info(`[更新] 源「${src.name}」失败：${lastErr.split('\n')[0] || '未知错误'}`);
+    }
+    if (!used) {
+        return sendReply(event, '❌ GitHub 直连和所有镜像都拉取失败，最后一次报错：\n' + lastErr.slice(0, 300));
+    }
+    logger.info(`[更新] 拉取成功，源：${used}`);
+
+    const merge = await runGit(['merge', '--ff-only', 'FETCH_HEAD']);
+    if (!merge.ok) {
+        return sendReply(event, '❌ 拉到了更新但合并失败（服务器上有冲突的本地改动）：\n' + merge.out.slice(0, 300));
+    }
+    const after = await runGit(['rev-parse', '--short', 'HEAD']);
+    const newHead = after.out;
+    if (newHead === oldHead) return sendReply(event, `✅ 已是最新（${newHead}）`);
+
+    // package.json 变了就补装依赖，否则新代码可能起不来
+    const changed = await runGit(['diff', '--name-only', oldHead, newHead]);
+    let npmMsg = '';
+    if (/(^|\n)package(-lock)?\.json(\n|$)/.test(changed.out)) {
+        npmMsg = '\n📦 依赖有变化，正在安装…';
+        await sendReply(event, `✅ 代码已更新到 ${newHead}${npmMsg}`);
+        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        const npm = await new Promise((resolve) => {
+            execFile(npmCmd, ['install', '--omit=dev', '--no-audit', '--no-fund', '--registry=https://registry.npmmirror.com'],
+                { cwd: ROOT, timeout: 240000, shell: process.platform === 'win32', maxBuffer: 4 * 1024 * 1024 },
+                (err, stdout, stderr) => resolve({ ok: !err, err: String(stderr || '').trim() }));
+        });
+        if (!npm.ok) {
+            return sendReply(event, '⚠️ 代码已更新，但依赖安装失败（先别重启）：\n' + npm.err.slice(0, 300));
+        }
+        npmMsg = '\n📦 依赖已装好';
+    }
+
+    const log = await runGit(['log', '--oneline', `${oldHead}..${newHead}`]);
+    const changes = log.out.split('\n').filter(Boolean).slice(0, 6).join('\n');
+    const willRestart = scheduleSelfRestart();
+    await sendReply(event,
+        `✅ 已更新 ${oldHead} → ${newHead}（源：${used}）${npmMsg}\n${changes}`
+        + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
+}
+
 async function handleCommand(event, text) {
     const [rawCmd, ...rest] = text.split(/\s+/);
     // 命令前缀：支持 "#"（推荐）与 "/"（兼容），内部统一按 "/" 处理
@@ -1206,6 +1319,11 @@ async function handleCommand(event, text) {
         case '/help':
         case '/帮助':
             return sendReply(event, buildHelp(r, arg));
+
+        // 主人：从 GitHub 拉最新代码（直连不通会自动换镜像），成功后自动重启
+        case '/更新':
+        case '/拉更新':
+            return doSelfUpdate(event, r);
 
         case '/mc':
             if (!arg) return sendReply(event, '❌ 用法：#mc 服务器地址[:端口]，如 #mc play.example.com 或 #mc 1.2.3.4:25565');
