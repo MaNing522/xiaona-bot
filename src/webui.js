@@ -26,8 +26,9 @@ import { HELP_CMDS, TIERS } from './help.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
 import {
   bindingOverview, forceUnbind, clearUnbinds, banUser, unbanUser,
-  deleteUnbind, restoreUnbind,
+  deleteUnbind, restoreUnbind, getGameIdsOf, startBind, answerCaptcha, unbind as unbindSelf,
 } from './binding.js';
+import { hasPassword, setPassword, verifyPassword } from './webAccounts.js';
 import { ROOT } from './paths.js';
 import { ensureTls, CERT_FILE } from './tls.js';
 import { transcribe } from './asr.js';
@@ -204,9 +205,10 @@ function normalizeMemory(raw) {
   };
 }
 
-// ---------- 面板认证：账号密码 + 图形人机验证 + 会话 Cookie ----------
+// ---------- 面板认证：QQ 号 + 密码 / QQ 验证码 + 图形人机验证 + 会话 Cookie ----------
 // 面板能以机器人身份发消息、管理授权，公开到局域网后必须挡一层。
-const PANEL_USER = process.env.WEBUI_USER || 'admin';
+// 所有者（.env BOT_OWNER）登录后是完整管理面板；其他人（已绑定玩家/管理员）只能进 /me 管自己的绑定。
+const PANEL_USER = process.env.WEBUI_USER || 'admin'; // 兼容旧版会话文件，不参与登录
 // 密码只从 .env 读，代码里不留任何默认值：没配就直接拒绝启动（fail-closed），
 // 避免出现"忘了配密码 → 面板用一个人所共知的默认密码裸奔"的情况
 const PANEL_PASS = process.env.WEBUI_PASSWORD || '';
@@ -216,31 +218,56 @@ const CAPTCHA_TTL = 3 * 60 * 1000;         // 验证码 3 分钟
 const CAPTCHA_AFTER_FAILS = 5;             // 连续输错密码达到这个次数后，才要求人机验证
 const LOGIN_MAX_FAIL = 10;                 // 连续失败上限（含验证码错误），超过则封 5 分钟
 const LOGIN_BLOCK_MS = 5 * 60 * 1000;      // 超过上限封 5 分钟
+const QQ_CODE_TTL = 5 * 60 * 1000;         // QQ 登录验证码 5 分钟
+const QQ_CODE_MAX_TRIES = 5;
+const QQ_CODE_SEND_GAP = 60 * 1000;        // 同一 QQ 两次发送间隔
+const QQ_CODE_MAX_PER_HOUR = 5;
 
-// token → 过期时间。落盘保存：机器人重启、浏览器异常关闭（没点退出登录）都不会丢会话，
+// token → { qq, exp }。落盘保存：机器人重启、浏览器异常关闭（没点退出登录）都不会丢会话，
 // 只有主动调用 /api/logout 或超过 24 小时才失效。
 const sessions = new Map();
 const preAuth = new Map();     // 预登录 id → { answer, exp }
 const failLog = new Map();     // ip → { n, until }
+const loginCodes = new Map();  // qq → { code, exp, tries }
+const codeSendLog = new Map(); // qq → { at, hourAt, hourN }
 
-// 启动时恢复上次的登录会话（只认格式正确且未过期的）
-for (const [token, exp] of Object.entries(readJsonSafe(SESSION_FILE, {}, 'webui-sessions.json') || {})) {
-  if (/^[0-9a-f]{64}$/.test(token) && Number(exp) > Date.now()) sessions.set(token, Number(exp));
+// 启动时恢复上次的登录会话（只认格式正确且未过期的；旧版只有过期时间的会话归给所有者）
+for (const [token, val] of Object.entries(readJsonSafe(SESSION_FILE, {}, 'webui-sessions.json') || {})) {
+  if (!/^[0-9a-f]{64}$/.test(token)) continue;
+  const exp = typeof val === 'object' && val ? Number(val.exp) : Number(val);
+  if (!(exp > Date.now())) continue;
+  const qq = typeof val === 'object' && val && val.qq ? String(val.qq) : String(process.env.BOT_OWNER || PANEL_USER);
+  sessions.set(token, { qq, exp, code: !!(typeof val === 'object' && val && val.code) });
 }
 
 function saveSessions() {
   const obj = {};
-  for (const [token, exp] of sessions) obj[token] = exp;
+  for (const [token, s] of sessions) obj[token] = { qq: s.qq, exp: s.exp, code: !!s.code };
   writeJsonAtomic(SESSION_FILE, obj);
 }
 
 function sweepAuth() {
   const now = Date.now();
   let changed = false;
-  for (const [k, exp] of sessions) if (now > exp) { sessions.delete(k); changed = true; }
+  for (const [k, v] of sessions) if (now > v.exp) { sessions.delete(k); changed = true; }
   for (const [k, v] of preAuth) if (now > v.exp) preAuth.delete(k);
   for (const [k, v] of failLog) if (v.until && now > v.until) failLog.delete(k);
+  for (const [k, v] of loginCodes) if (now > v.exp) loginCodes.delete(k);
   if (changed) saveSessions();
+}
+
+/** QQ 是否已绑定至少一个游戏ID */
+function isBoundQq(qq) {
+  try { return getGameIdsOf(qq).length > 0; } catch { return false; }
+}
+
+/** 能否用验证码登录：所有者、主人/管理员，或已绑定玩家 */
+function canLoginByCode(qq) {
+  if (!/^\d{5,14}$/.test(qq)) return false;
+  if (qq === String(process.env.BOT_OWNER || '').trim()) return true;
+  const role = perm.role(qq);
+  if (role === 'owner' || role === 'master' || role === 'admin') return true;
+  return isBoundQq(qq);
 }
 
 function parseCookies(req) {
@@ -272,16 +299,27 @@ function safeEq(a, b) {
   return A.length === B.length && crypto.timingSafeEqual(A, B);
 }
 
-function authed(req) {
+/** 建立登录会话；返回给调用方统一发给前端。viaCode=用 QQ 验证码登录（可不输原密码改密码） */
+function startSession(res, qq, ip, viaCode = false) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, { qq, exp: Date.now() + SESSION_TTL, code: !!viaCode });
+  saveSessions();
+  res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax${cookieSecure()}; Max-Age=${SESSION_TTL / 1000}`);
+  logger.info(`🔓 面板登录成功 QQ ${qq}（${ip}）`);
+  return { status: 200, body: { ok: true, qq, role: perm.role(qq), hasPassword: hasPassword(qq) } };
+}
+
+/** 取当前登录会话（含 QQ 与实时角色）；未登录/过期返回 null */
+function sessionOf(req) {
   sweepAuth();
   const token = parseCookies(req).xn_sess;
-  if (!/^[0-9a-f]{64}$/.test(token || '')) return false;
-  const exp = sessions.get(token);
-  if (!exp || Date.now() > exp) {
+  if (!/^[0-9a-f]{64}$/.test(token || '')) return null;
+  const s = sessions.get(token);
+  if (!s || Date.now() > s.exp) {
     if (sessions.delete(token)) saveSessions();
-    return false;
+    return null;
   }
-  return true;
+  return { qq: s.qq, exp: s.exp, code: !!s.code, role: perm.role(s.qq) };
 }
 
 /** 试用页客户端标识：按浏览器分配（会话级 Cookie，关掉浏览器即失效） */
@@ -400,8 +438,8 @@ button:disabled{opacity:.6;cursor:default}
       <div class="sub">需要登录后使用</div>
     </div>
   </div>
-  <label>账号</label><input id="u" value="${PANEL_USER}" autocomplete="username">
-  <label>密码</label><input id="p" type="password" autocomplete="current-password">
+  <label>QQ 号</label><input id="u" inputmode="numeric" autocomplete="username" placeholder="输入你的 QQ 号">
+  <label>密码</label><input id="p" type="password" autocomplete="current-password" placeholder="没设过密码就用验证码登录">
   <div id="capBox" style="display:${needCaptcha ? 'block' : 'none'}">
     <label>人机验证</label>
     <div class="row">
@@ -410,7 +448,16 @@ button:disabled{opacity:.6;cursor:default}
     </div>
   </div>
   <button id="b">登录</button>
+  <div id="codeBox" style="display:none">
+    <label>QQ 验证码</label>
+    <div class="row">
+      <input id="vc" inputmode="numeric" maxlength="6" placeholder="机器人私聊发给你的 6 位数字" autocomplete="one-time-code">
+      <button type="button" id="send" style="width:auto;min-height:44px;margin:0;padding:0 14px;font-size:13px">发送验证码</button>
+    </div>
+    <button type="button" id="cbtn" style="background:var(--card2);color:var(--txt);border-color:#d9d9d9">验证码登录</button>
+  </div>
   <div class="err" id="e">${msg}</div>
+  <a class="alt" href="#" id="toggle">没有密码？用 QQ 验证码登录</a>
   <a class="alt" href="/">← 返回首页</a>
 </form>
 <script>
@@ -423,29 +470,232 @@ function showCaptcha(show) {
   if (show && !$('cap').getAttribute('src')) fresh();
 }
 if (${needCaptcha ? 'true' : 'false'}) fresh();
-// 用 XHR 而不是 fetch/async：老旧浏览器也能登录
-$('f').onsubmit = function (ev) {
+
+$('toggle').onclick = function (ev) {
   ev.preventDefault();
-  $('b').disabled = true; $('e').textContent = '';
+  var box = $('codeBox');
+  var show = box.style.display === 'none';
+  box.style.display = show ? 'block' : 'none';
+  $('toggle').textContent = show ? '返回密码登录' : '没有密码？用 QQ 验证码登录';
+};
+
+function post(url, body, cb) {
   var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/login', true);
+  xhr.open('POST', url, true);
   xhr.setRequestHeader('Content-Type', 'application/json');
   xhr.onreadystatechange = function () {
     if (xhr.readyState !== 4) return;
     var j = {};
     try { j = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
-    if (xhr.status >= 200 && xhr.status < 300 && j.ok) { location.href = '/'; return; }
-    $('e').textContent = j.error || ('登录失败（HTTP ' + xhr.status + '）');
+    cb(xhr.status, j);
+  };
+  xhr.onerror = function () { cb(0, { error: '网络错误' }); };
+  xhr.send(JSON.stringify(body || {}));
+}
+function done(j) {
+  if (j.role === 'owner') { location.href = '/'; return; }
+  location.href = '/me' + (j.needSetPassword ? '?setpwd=1' : '');
+}
+
+// 密码登录
+$('f').onsubmit = function (ev) {
+  ev.preventDefault();
+  $('b').disabled = true; $('e').textContent = '';
+  post('/api/login', { qq: $('u').value.trim(), pass: $('p').value, captcha: $('c').value }, function (st, j) {
+    if (st >= 200 && st < 300 && j.ok) { done(j); return; }
+    $('e').textContent = j.error || ('登录失败（HTTP ' + st + '）');
     if (j.captchaRequired) showCaptcha(true);
     $('b').disabled = false; $('c').value = ''; $('p').value = '';
     if ($('capBox').style.display !== 'none') fresh();
-  };
-  xhr.onerror = function () {
-    $('e').textContent = '网络错误';
-    $('b').disabled = false;
-  };
-  xhr.send(JSON.stringify({ user: $('u').value, pass: $('p').value, captcha: $('c').value }));
+  });
 };
+
+// 发送 QQ 验证码
+var timer = null;
+$('send').onclick = function () {
+  var qq = $('u').value.trim();
+  if (!qq) { $('e').textContent = '先填 QQ 号'; return; }
+  $('send').disabled = true; $('e').textContent = '';
+  post('/api/login/send-code', { qq: qq }, function (st, j) {
+    if (st >= 200 && st < 300 && j.ok) {
+      $('e').textContent = '验证码已私聊发到 QQ，5 分钟内有效';
+      var left = 60;
+      timer = setInterval(function () {
+        if (--left <= 0) { clearInterval(timer); $('send').disabled = false; $('send').textContent = '发送验证码'; return; }
+        $('send').textContent = left + 's';
+      }, 1000);
+    } else {
+      $('e').textContent = j.error || '发送失败';
+      $('send').disabled = false;
+    }
+  });
+};
+
+// 验证码登录
+$('cbtn').onclick = function () {
+  var qq = $('u').value.trim(), code = $('vc').value.trim();
+  if (!qq || !code) { $('e').textContent = '填 QQ 号和验证码'; return; }
+  $('cbtn').disabled = true; $('e').textContent = '';
+  post('/api/login/code', { qq: qq, code: code }, function (st, j) {
+    if (st >= 200 && st < 300 && j.ok) { done(j); return; }
+    $('e').textContent = j.error || ('登录失败（HTTP ' + st + '）');
+    $('cbtn').disabled = false;
+  });
+};
+</script></body></html>`;
+}
+
+/** 非所有者的「我的账号」页：只能看/管自己的游戏绑定与密码 */
+function mePage(sess) {
+  const qq = String(sess.qq);
+  const isOwner = sess.role === 'owner';
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我的账号 · 小钠</title>
+<style>
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+*{box-sizing:border-box}
+body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:560px;margin:0 auto}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
+  background:linear-gradient(135deg,#1677ff,#4096ff)}
+h1{margin:0;font-size:17px}
+.sub{color:var(--sub);font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px}
+h2{margin:0 0 12px;font-size:15px}
+label{display:block;font-size:13px;color:var(--sub);margin:10px 0 5px}
+input{width:100%;min-height:42px;padding:0 12px;border-radius:8px;border:1px solid #d9d9d9;font-size:15px;background:#fff}
+input:focus{outline:none;border-color:var(--accent)}
+button{min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
+  color:#fff;font-size:14px;font-family:inherit;cursor:pointer}
+button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button:disabled{opacity:.55;cursor:default}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.list{margin-top:10px}
+.item{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.item b{flex:1;font-weight:600;font-size:14px}
+.hint{color:var(--sub);font-size:12px;line-height:1.6}
+.err{color:var(--danger);font-size:12px;min-height:16px;margin-top:8px;white-space:pre-wrap}
+.ok{color:#16a34a}
+#capimg{height:52px;border:1px solid #d9d9d9;border-radius:8px;background:#fff}
+</style></head><body><div class="wrap">
+<div class="head"><div class="logo">🤖</div><div><h1>我的账号</h1>
+  <div class="sub">QQ ${qq}${isOwner ? ' · 所有者' : ''}</div></div></div>
+
+<div class="card">
+  <h2>我的游戏绑定</h2>
+  <div class="hint">这里只能管理你自己 QQ 下的绑定。解绑后被封禁/白名单会同步更新。</div>
+  <div class="list" id="list"><span class="hint">加载中…</span></div>
+  <div class="row" style="margin-top:12px">
+    <input id="gid" placeholder="要绑定的游戏ID，如 Steve" style="flex:1;min-width:160px">
+    <button id="start" class="ghost">发送验证</button>
+  </div>
+  <div id="verifyBox" style="display:none;margin-top:10px">
+    <div class="hint">在游戏里按提示输入下面 4 位验证码，或直接把验证码填在下面：</div>
+    <img id="capimg" alt="验证码">
+    <div class="row" style="margin-top:8px">
+      <input id="vcode" inputmode="numeric" maxlength="4" placeholder="4 位验证码" style="flex:1;min-width:120px">
+      <button id="verify">确认绑定</button>
+    </div>
+  </div>
+  <div class="err" id="bindErr"></div>
+</div>
+
+<div class="card">
+  <h2>登录密码</h2>
+  <div class="hint" id="pwdHint">设置后可用 QQ 号 + 密码登录；忘记密码就用验证码登录后重设。</div>
+  <div id="oldWrap" style="display:none"><label>原密码</label><input id="oldPass" type="password"></div>
+  <label>新密码（至少 6 位）</label><input id="newPass" type="password">
+  <label>确认新密码</label><input id="newPass2" type="password">
+  <div class="row" style="margin-top:12px"><button id="savePwd">保存密码</button></div>
+  <div class="err" id="pwdErr"></div>
+</div>
+
+<div class="row" style="justify-content:space-between">
+  <button id="logout" class="ghost">退出登录</button>
+  <span class="hint">小钠控制面板</span>
+</div>
+</div>
+<script>
+var $=function(i){return document.getElementById(i)};
+function post(url,body,cb){
+  var xhr=new XMLHttpRequest();xhr.open('POST',url,true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    cb(xhr.status,j)};
+  xhr.onerror=function(){cb(0,{error:'网络错误'})};
+  xhr.send(JSON.stringify(body||{}));
+}
+function get(url,cb){
+  var xhr=new XMLHttpRequest();xhr.open('GET',url,true);
+  xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    cb(xhr.status,j)};
+  xhr.send();
+}
+function load(){
+  get('/api/me',function(st,j){
+    if(st===401){location.href='/login';return}
+    if(!j.ok){$('list').innerHTML='<span class="hint">'+ (j.error||'加载失败') +'</span>';return}
+    var bs=j.bindings||[];
+    $('list').innerHTML=bs.length?bs.map(function(b){
+      return '<div class="item"><b>'+b.id+'</b><button class="ghost" data-id="'+b.id+'" style="min-height:32px;padding:0 12px;font-size:12px">解绑</button></div>'
+    }).join(''):'<span class="hint">还没有绑定任何游戏ID</span>';
+    Array.prototype.forEach.call(document.querySelectorAll('#list [data-id]'),function(btn){
+      btn.onclick=function(){
+        if(!confirm('确认解绑 '+btn.dataset.id+' ？'))return;
+        post('/api/me/unbind',{gameId:btn.dataset.id},function(s,r){
+          if(!r.ok){alert(r.error||'解绑失败');return}
+          load();
+        });
+      };
+    });
+    $('oldWrap').style.display=(j.hasPassword && !j.viaCode)?'block':'none';
+    $('pwdHint').textContent=j.hasPassword?(j.viaCode?'本次是验证码登录，可直接设置新密码。':'忘记密码就用验证码登录后重设。'):'还没设置密码，设置后就能用 QQ 号+密码登录。';
+  });
+}
+$('start').onclick=function(){
+  var gid=$('gid').value.trim();
+  if(!gid){$('bindErr').textContent='先填游戏ID';return}
+  $('start').disabled=true;$('bindErr').textContent='';
+  post('/api/me/bind/start',{gameId:gid},function(st,j){
+    if(!j.ok){$('bindErr').textContent=j.error||'发起绑定失败';$('start').disabled=false;return}
+    $('verifyBox').style.display='block';
+    $('capimg').src=j.image;
+    $('bindErr').textContent='验证码 '+(j.ttlSec||180)+' 秒内有效';
+    $('start').disabled=false;
+  });
+};
+$('verify').onclick=function(){
+  var code=$('vcode').value.trim();
+  if(!code){$('bindErr').textContent='填验证码';return}
+  $('verify').disabled=true;$('bindErr').textContent='';
+  post('/api/me/bind/verify',{code:code},function(st,j){
+    $('verify').disabled=false;
+    if(!j.ok){$('bindErr').textContent=j.error||'验证失败';return}
+    $('bindErr').textContent=j.msg||'绑定成功';
+    $('bindErr').className='err ok';
+    $('verifyBox').style.display='none';$('vcode').value='';$('gid').value='';
+    load();
+  });
+};
+$('savePwd').onclick=function(){
+  var a=$('newPass').value,b=$('newPass2').value;
+  if(a!==b){$('pwdErr').textContent='两次输入不一致';return}
+  $('savePwd').disabled=true;$('pwdErr').textContent='';
+  post('/api/me/password',{oldPass:$('oldPass').value,newPass:a},function(st,j){
+    $('savePwd').disabled=false;
+    if(!j.ok){$('pwdErr').textContent=j.error||'保存失败';return}
+    $('pwdErr').className='err ok';$('pwdErr').textContent='密码已保存';
+    $('oldPass').value='';$('newPass').value='';$('newPass2').value='';
+    $('oldWrap').style.display='block';
+  });
+};
+$('logout').onclick=function(){post('/api/logout',{},function(){location.href='/login'})};
+load();
 </script></body></html>`;
 }
 
@@ -575,17 +825,34 @@ async function route(req, res, url) {
 
   // 主页：未登录给空白主页（只有右上角登录入口），登录后才给控制面板
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    const file = authed(req) ? WEB_DIR : HOME_FILE;
+    const s = sessionOf(req);
+    // 非所有者不配进管理面板，统一去「我的账号」
+    if (s && s.role !== 'owner') {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    const file = s ? WEB_DIR : HOME_FILE;
     if (!fs.existsSync(file)) return sendJSON(res, 500, { error: `缺少 ${path.relative(ROOT, file)}` });
     const html = fs.readFileSync(file);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(html);
   }
 
-  // 登录页单独一个地址；已登录访问时直接回主页
+  // 我的账号：非所有者登录后的唯一入口
+  if (url.pathname === '/me' || url.pathname === '/me.html') {
+    const s = sessionOf(req);
+    if (!s) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return sendHtml(res, 200, mePage(s));
+  }
+
+  // 登录页单独一个地址；已登录访问时直接回对应首页
   if (url.pathname === '/login' || url.pathname === '/login.html') {
-    if (authed(req)) {
-      res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+    const s = sessionOf(req);
+    if (s) {
+      res.writeHead(302, { Location: s.role === 'owner' ? '/' : '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
@@ -599,8 +866,13 @@ async function route(req, res, url) {
 
   // 网页 QQ 客户端：必须登录，未登录先去登录页
   if (url.pathname === '/qq' || url.pathname === '/qq.html') {
-    if (!authed(req)) {
+    const s = sessionOf(req);
+    if (!s) {
       res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (s.role !== 'owner') {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
     const qq = path.join(path.dirname(WEB_DIR), 'qq.html');
@@ -609,27 +881,35 @@ async function route(req, res, url) {
   }
 
   // 网页 QQ（Stapxs QQ Lite 原版）：/ssqq 是入口，它引用 /Stapxs-QQ-Lite-2.0/... 的绝对资源路径
-  if (url.pathname === '/ssqq' || url.pathname === '/ssqq/') {
-    if (!authed(req)) {
+  // 它拿到的是机器人 QQ 的完整 OneBot 权限，只给所有者
+  if (url.pathname === '/ssqq' || url.pathname === '/ssqq/'
+    || url.pathname.startsWith(SSQQ_PREFIX) || url.pathname.startsWith('/ssqq/')) {
+    const s = sessionOf(req);
+    if (!s) {
       res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
       return res.end();
     }
-    const idx = path.join(SSQQ_DIR, 'index.html');
-    if (!fs.existsSync(idx)) {
-      return sendJSON(res, 500, { error: '缺少 web/ssqq（Stapxs QQ Lite 静态资源）' });
-    }
-    return sendHtml(res, 200, fs.readFileSync(idx));
-  }
-  if (url.pathname.startsWith(SSQQ_PREFIX) || url.pathname.startsWith('/ssqq/')) {
-    if (!authed(req)) {
-      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+    if (s.role !== 'owner') {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
       return res.end();
+    }
+    if (url.pathname === '/ssqq' || url.pathname === '/ssqq/') {
+      const idx = path.join(SSQQ_DIR, 'index.html');
+      if (!fs.existsSync(idx)) {
+        return sendJSON(res, 500, { error: '缺少 web/ssqq（Stapxs QQ Lite 静态资源）' });
+      }
+      return sendHtml(res, 200, fs.readFileSync(idx));
     }
     return serveSsqqFile(res, url.pathname);
   }
 
   // 老旧浏览器兼容页（纯 ES5 + XHR，只保留状态 / 登录 / 试用）
   if (url.pathname === '/legacy' || url.pathname === '/legacy.html') {
+    const s = sessionOf(req);
+    if (s && s.role !== 'owner') {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     const legacy = path.join(path.dirname(WEB_DIR), 'legacy.html');
     if (!fs.existsSync(legacy)) return sendJSON(res, 500, { error: '缺少 web/legacy.html' });
     return sendHtml(res, 200, fs.readFileSync(legacy));
@@ -658,6 +938,8 @@ async function route(req, res, url) {
       return sendJSON(res, 429, { ok: false, error: `尝试次数过多，请 ${min} 分钟后再试` });
     }
     const body = await readBody(req);
+    const qq = String(body.qq || '').trim();
+    const pass = String(body.pass || '');
 
     // 人机验证「按需」要求：只有当这个 IP 已连续输错到阈值时才校验验证码；
     // 平时只需账号密码，不给正常登录加负担。
@@ -671,7 +953,19 @@ async function route(req, res, url) {
       if (!p || Date.now() > p.exp) bad = '验证码已过期，请重新输入';
       else if (String(body.captcha || '').trim() !== p.answer) bad = '验证码不对';
     }
-    if (!bad && !(safeEq(body.user, PANEL_USER) && safeEq(body.pass, PANEL_PASS))) bad = '账号或密码不对';
+    if (!bad && !/^\d{5,14}$/.test(qq)) bad = '请输入 QQ 号';
+    if (!bad) {
+      const isOwner = qq === String(process.env.BOT_OWNER || '').trim();
+      if (isOwner) {
+        // 所有者：网页改过密码就认账号密码，否则沿用 .env 的 WEBUI_PASSWORD
+        const ok = hasPassword(qq) ? verifyPassword(qq, pass) : (PANEL_PASS ? safeEq(pass, PANEL_PASS) : false);
+        if (!ok) bad = 'QQ 号或密码不对';
+      } else if (!hasPassword(qq)) {
+        bad = canLoginByCode(qq) ? '该 QQ 还没设置密码，请用「验证码登录」' : '该 QQ 没有绑定游戏ID，不能登录面板';
+      } else if (!verifyPassword(qq, pass)) {
+        bad = 'QQ 号或密码不对';
+      }
+    }
 
     if (bad) {
       const n = ((f && f.n) || 0) + 1;
@@ -686,12 +980,56 @@ async function route(req, res, url) {
     }
 
     failLog.delete(ip);
-    const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, Date.now() + SESSION_TTL);
-    saveSessions();
-    logger.info(`🔓 面板登录成功（${ip}）`);
-    res.setHeader('Set-Cookie', `xn_sess=${token}; Path=/; HttpOnly; SameSite=Lax${cookieSecure()}; Max-Age=${SESSION_TTL / 1000}`);
-    return sendJSON(res, 200, { ok: true });
+    const s = startSession(res, qq, ip);
+    return sendJSON(res, s.status, s.body);
+  }
+
+  // 发送 QQ 验证码（登录用，bot 私聊发送）
+  if (url.pathname === '/api/login/send-code' && req.method === 'POST') {
+    const body = await readBody(req);
+    const qq = String(body.qq || '').trim();
+    if (!/^\d{5,14}$/.test(qq)) return sendJSON(res, 400, { ok: false, error: '请输入 QQ 号' });
+    if (!canLoginByCode(qq)) return sendJSON(res, 403, { ok: false, error: '该 QQ 没有绑定游戏ID，不能登录面板' });
+    const now = Date.now();
+    const rec = codeSendLog.get(qq);
+    if (rec && now - rec.at < QQ_CODE_SEND_GAP) {
+      return sendJSON(res, 429, { ok: false, error: `发送太频繁，请 ${Math.ceil((QQ_CODE_SEND_GAP - (now - rec.at)) / 1000)} 秒后再试` });
+    }
+    const hourN = rec && now - rec.hourAt < 3600000 ? rec.hourN + 1 : 1;
+    if (hourN > QQ_CODE_MAX_PER_HOUR) return sendJSON(res, 429, { ok: false, error: '这个 QQ 一小时最多发 5 次验证码' });
+    const call = getSendMsg();
+    if (!call) return sendJSON(res, 503, { ok: false, error: '机器人还没连上 QQ，发不了验证码' });
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    try {
+      await call('send_private_msg', { user_id: Number(qq), message: `【小钠面板】登录验证码：${code}（5 分钟内有效）。不是你本人操作请忽略，别把验证码发给任何人。` });
+    } catch (e) {
+      logger.warn(`[面板] 给 QQ ${qq} 发验证码失败：${e && e.message ? e.message : e}`);
+      return sendJSON(res, 502, { ok: false, error: '验证码发送失败（对方可能没加机器人好友）' });
+    }
+    loginCodes.set(qq, { code, exp: now + QQ_CODE_TTL, tries: 0 });
+    codeSendLog.set(qq, { at: now, hourAt: rec && now - rec.hourAt < 3600000 ? rec.hourAt : now, hourN });
+    logger.info(`[面板] 已给 QQ ${qq} 发送登录验证码`);
+    return sendJSON(res, 200, { ok: true, ttl: QQ_CODE_TTL / 1000 });
+  }
+
+  // 用 QQ 验证码登录（首次登录后引导设置密码）
+  if (url.pathname === '/api/login/code' && req.method === 'POST') {
+    const body = await readBody(req);
+    const qq = String(body.qq || '').trim();
+    const code = String(body.code || '').trim();
+    if (!/^\d{5,14}$/.test(qq)) return sendJSON(res, 400, { ok: false, error: '请输入 QQ 号' });
+    if (!canLoginByCode(qq)) return sendJSON(res, 403, { ok: false, error: '该 QQ 没有绑定游戏ID，不能登录面板' });
+    const c = loginCodes.get(qq);
+    if (!c || Date.now() > c.exp) return sendJSON(res, 401, { ok: false, error: '验证码已过期，请重新发送' });
+    if (c.tries >= QQ_CODE_MAX_TRIES) { loginCodes.delete(qq); return sendJSON(res, 401, { ok: false, error: '验证码错太多次，请重新发送' }); }
+    if (!safeEq(code, c.code)) {
+      c.tries += 1;
+      return sendJSON(res, 401, { ok: false, error: `验证码不对（还能试 ${QQ_CODE_MAX_TRIES - c.tries} 次）` });
+    }
+    loginCodes.delete(qq);
+    const needSetPassword = !hasPassword(qq);
+    const r = startSession(res, qq, clientIp(req), true);
+    return sendJSON(res, r.status, { ...r.body, needSetPassword });
   }
 
   if (url.pathname === '/api/logout') {
@@ -708,7 +1046,9 @@ async function route(req, res, url) {
 
   // 网页直聊（原「私聊试用」）：必须登录，按所有者身份跑；不经过 QQ
   if (url.pathname === '/api/trial/chat' && req.method === 'POST') {
-    if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '请先登录', login: true });
+    const sess = sessionOf(req);
+    if (!sess) return sendJSON(res, 401, { ok: false, error: '请先登录', login: true });
+    if (sess.role !== 'owner') return sendJSON(res, 403, { ok: false, error: '只有所有者可以使用网页直聊' });
     if (!trialChat) return sendJSON(res, 503, { ok: false, error: '聊天未就绪（机器人还没起来）' });
     const cid = trialClientId(req, res);   // 每个浏览器一份内存历史，互不串
     const body = await readBody(req);
@@ -747,15 +1087,77 @@ async function route(req, res, url) {
 
   // 直聊会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
   if (url.pathname === '/api/trial/reset' && req.method === 'POST') {
-    if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
+    const sess = sessionOf(req);
+    if (!sess) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
+    if (sess.role !== 'owner') return sendJSON(res, 403, { ok: false, error: '只有所有者可以使用网页直聊' });
     if (trialReset) trialReset(trialClientId(req, res));
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // 当前登录身份（前端据此决定进管理面板还是「我的账号」）
+  if (url.pathname === '/api/session' && req.method === 'GET') {
+    const s = sessionOf(req);
+    if (!s) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
+    return sendJSON(res, 200, { ok: true, qq: s.qq, role: s.role, viaCode: s.code, hasPassword: hasPassword(s.qq) });
   }
 
   if (!url.pathname.startsWith('/api/')) return sendJSON(res, 404, { error: 'not found' });
 
   // 其余所有接口一律要求登录（含日志、授权列表、接管）
-  if (!authed(req)) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
+  const sess = sessionOf(req);
+  if (!sess) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
+  // 权限隔离：只有所有者能碰管理接口；其他登录用户只能用自己的 /api/me/*
+  if (sess.role !== 'owner' && !url.pathname.startsWith('/api/me')) {
+    return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
+  }
+
+  // ---------- 我的账号（所有登录用户）：管理自己的游戏绑定 / 改密码 ----------
+  if (url.pathname === '/api/me' && req.method === 'GET') {
+    const ids = getGameIdsOf(sess.qq).map((id) => ({ id, qq: sess.qq }));
+    return sendJSON(res, 200, {
+      ok: true, qq: sess.qq, role: sess.role, viaCode: sess.code,
+      hasPassword: hasPassword(sess.qq), bindings: ids,
+    });
+  }
+  if (url.pathname === '/api/me/unbind' && req.method === 'POST') {
+    const b = await readBody(req);
+    const gameId = String(b.gameId || '').trim();
+    if (!gameId) return sendJSON(res, 400, { ok: false, error: '请选择要解绑的游戏ID' });
+    const r = unbindSelf(sess.qq, gameId);
+    if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+    logger.info(`[面板] QQ ${sess.qq} 自助解绑游戏ID ${gameId}`);
+    return sendJSON(res, 200, { ok: true, msg: r.msg });
+  }
+  if (url.pathname === '/api/me/bind/start' && req.method === 'POST') {
+    const b = await readBody(req);
+    const r = startBind(sess.qq, String(b.gameId || '').trim());
+    if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+    // startBind 返回的是 PNG Buffer，转成 data URL 给网页显示
+    const img = Buffer.isBuffer(r.image) ? 'data:image/png;base64,' + r.image.toString('base64') : String(r.image || '');
+    return sendJSON(res, 200, { ok: true, image: img, gameId: r.gameId, ttlSec: r.ttlSec });
+  }
+  if (url.pathname === '/api/me/bind/verify' && req.method === 'POST') {
+    const b = await readBody(req);
+    const ans = String(b.code || '').trim();
+    const r = answerCaptcha(sess.qq, ans);
+    if (!r.handled) return sendJSON(res, 400, { ok: false, error: '没有待验证的绑定，请先点「发送验证」' });
+    if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.msg || '验证失败' });
+    logger.info(`[面板] QQ ${sess.qq} 自助绑定成功：${r.msg || ''}`);
+    return sendJSON(res, 200, { ok: true, msg: r.msg || '绑定成功' });
+  }
+  if (url.pathname === '/api/me/password' && req.method === 'POST') {
+    const b = await readBody(req);
+    const oldPass = String(b.oldPass || '');
+    const newPass = String(b.newPass || '');
+    if (newPass.length < 6 || newPass.length > 64) return sendJSON(res, 400, { ok: false, error: '新密码长度 6-64 位' });
+    // 验证码登录的会话本身就证明了 QQ 归属，允许不输原密码直接重设（忘记密码的恢复路径）
+    if (hasPassword(sess.qq) && !sess.code && !verifyPassword(sess.qq, oldPass)) {
+      return sendJSON(res, 400, { ok: false, error: '原密码不对' });
+    }
+    if (!setPassword(sess.qq, newPass)) return sendJSON(res, 500, { ok: false, error: '保存失败' });
+    logger.info(`[面板] QQ ${sess.qq} 已修改网页密码`);
+    return sendJSON(res, 200, { ok: true });
+  }
 
   if (url.pathname === '/api/status') {
     const ls = await connectionStatus();
@@ -1154,8 +1556,14 @@ export async function startWebUI() {
     let pathname = '';
     try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { /* 坏请求直接丢弃 */ }
     if (pathname !== '/ssqq/ws') { socket.destroy(); return; }
-    if (!authed(req)) {
+    const wsSess = sessionOf(req);
+    if (!wsSess) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (wsSess.role !== 'owner') {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -1217,7 +1625,7 @@ export async function startWebUI() {
     .filter((n) => n && n.family === 'IPv4' && !n.internal)
     .map((n) => `${scheme}://${n.address}:${webuiPort}`);
   const shown = host === '0.0.0.0' && lan.length ? lan.join('  ') : `${scheme}://${host}:${webuiPort}`;
-  logger.info(`${httpsOn ? '🔒' : '🌐'} WebUI(${httpsOn ? 'HTTPS' : 'HTTP'}): ${shown}  [需登录，账号 ${PANEL_USER}]`);
+  logger.info(`${httpsOn ? '🔒' : '🌐'} WebUI(${httpsOn ? 'HTTPS' : 'HTTP'}): ${shown}  [需 QQ 号登录，所有者：${perm.getOwner() || '未配置'}]`);
   if (httpsOn) {
     logger.info(`   证书：${CERT_FILE}（由本地根 CA 签发；已自动装入当前用户受信任根证书，Firefox 需手动导入 data/tls/ca.crt）`);
   } else {
