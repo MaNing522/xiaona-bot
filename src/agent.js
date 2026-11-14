@@ -204,6 +204,15 @@ export const AGENT_TOOLS = [
     },
   },
   {
+    minRole: 'master',
+    function: {
+      name: 'bot_update',
+      description: '把小钠自己更新到 GitHub 仓库的最新代码（直连失败会自动换镜像，成功后自动重启）。**只在对方是主人/所有者、且明确要求"更新/升级/拉最新代码/把你自己更新一下"时才用**；不要自己主动更新，也别为了尝鲜调用。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (_args, ctx) => (ctx.selfUpdate ? ctx.selfUpdate() : '当前场景不能更新。'),
+  },
+  {
     minRole: 'guest',
     function: {
       name: 'read_history',

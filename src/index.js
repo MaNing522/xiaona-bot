@@ -760,6 +760,12 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
+        // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
+        selfUpdate: async () => {
+            const res = await fetchAndApplyUpdate();
+            if (res.ok && res.updated) pendingSelfRestart = true;
+            return res.message;
+        },
         // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
         sing: async (lyrics, song = '') => {
             if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';
@@ -1235,6 +1241,8 @@ function updateSources() {
 }
 
 /** 更新成功后重启自己：PM2 环境用 pm2 restart（detached，免得被一起杀掉） */
+let pendingSelfRestart = false; // agent 调 bot_update 后，等回复发完再重启
+
 function scheduleSelfRestart() {
     if (process.env.pm_id === undefined) return false;
     const name = process.env.name || 'xiaona-bot';
@@ -1249,13 +1257,10 @@ function scheduleSelfRestart() {
     return true;
 }
 
-/** #更新：拉最新代码 → 依赖有变化就补装 → 重启（所有者/主人可用） */
-async function doSelfUpdate(event, r) {
-    if (r !== 'owner' && r !== 'master') return sendReply(event, '❌ 只有所有者/主人可以拉取更新');
-
-    await sendReply(event, '🔄 正在从 GitHub 拉取更新…');
+/** #更新 / agent 工具共用：拉代码 + 补依赖，返回结果（不重启，重启由调用方决定） */
+async function fetchAndApplyUpdate() {
     const before = await runGit(['rev-parse', '--short', 'HEAD']);
-    if (!before.ok) return sendReply(event, '❌ 当前目录不是 git 仓库或 git 不可用：' + before.err.slice(0, 200));
+    if (!before.ok) return { ok: false, message: '❌ 当前目录不是 git 仓库或 git 不可用：' + before.err.slice(0, 200) };
     const oldHead = before.out;
 
     let lastErr = '';
@@ -1267,24 +1272,22 @@ async function doSelfUpdate(event, r) {
         logger.info(`[更新] 源「${src.name}」失败：${lastErr.split('\n')[0] || '未知错误'}`);
     }
     if (!used) {
-        return sendReply(event, '❌ GitHub 直连和所有镜像都拉取失败，最后一次报错：\n' + lastErr.slice(0, 300));
+        return { ok: false, message: '❌ GitHub 直连和所有镜像都拉取失败，最后一次报错：\n' + lastErr.slice(0, 300) };
     }
     logger.info(`[更新] 拉取成功，源：${used}`);
 
     const merge = await runGit(['merge', '--ff-only', 'FETCH_HEAD']);
     if (!merge.ok) {
-        return sendReply(event, '❌ 拉到了更新但合并失败（服务器上有冲突的本地改动）：\n' + merge.out.slice(0, 300));
+        return { ok: false, message: '❌ 拉到了更新但合并失败（服务器上有冲突的本地改动）：\n' + merge.out.slice(0, 300) };
     }
     const after = await runGit(['rev-parse', '--short', 'HEAD']);
     const newHead = after.out;
-    if (newHead === oldHead) return sendReply(event, `✅ 已是最新（${newHead}）`);
+    if (newHead === oldHead) return { ok: true, updated: false, message: `✅ 已是最新（${newHead}）` };
 
     // package.json 变了就补装依赖，否则新代码可能起不来
     const changed = await runGit(['diff', '--name-only', oldHead, newHead]);
     let npmMsg = '';
     if (/(^|\n)package(-lock)?\.json(\n|$)/.test(changed.out)) {
-        npmMsg = '\n📦 依赖有变化，正在安装…';
-        await sendReply(event, `✅ 代码已更新到 ${newHead}${npmMsg}`);
         const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         const npm = await new Promise((resolve) => {
             execFile(npmCmd, ['install', '--omit=dev', '--no-audit', '--no-fund', '--registry=https://registry.npmmirror.com'],
@@ -1292,17 +1295,30 @@ async function doSelfUpdate(event, r) {
                 (err, stdout, stderr) => resolve({ ok: !err, err: String(stderr || '').trim() }));
         });
         if (!npm.ok) {
-            return sendReply(event, '⚠️ 代码已更新，但依赖安装失败（先别重启）：\n' + npm.err.slice(0, 300));
+            return { ok: false, updated: true, message: `⚠️ 代码已更新到 ${newHead}，但依赖安装失败（先别重启）：\n` + npm.err.slice(0, 300) };
         }
         npmMsg = '\n📦 依赖已装好';
     }
 
     const log = await runGit(['log', '--oneline', `${oldHead}..${newHead}`]);
     const changes = log.out.split('\n').filter(Boolean).slice(0, 6).join('\n');
+    return {
+        ok: true,
+        updated: true,
+        message: `✅ 已更新 ${oldHead} → ${newHead}（源：${used}）${npmMsg}\n${changes}`,
+    };
+}
+
+/** #更新：拉最新代码 → 依赖有变化就补装 → 重启（所有者/主人可用） */
+async function doSelfUpdate(event, r) {
+    if (r !== 'owner' && r !== 'master') return sendReply(event, '❌ 只有所有者/主人可以拉取更新');
+
+    await sendReply(event, '🔄 正在从 GitHub 拉取更新…');
+    const res = await fetchAndApplyUpdate();
+    if (!res.ok || !res.updated) return sendReply(event, res.message);
+
     const willRestart = scheduleSelfRestart();
-    await sendReply(event,
-        `✅ 已更新 ${oldHead} → ${newHead}（源：${used}）${npmMsg}\n${changes}`
-        + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
+    await sendReply(event, res.message + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
 }
 
 async function handleCommand(event, text) {
@@ -3029,6 +3045,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null) {
         const finalReply = parts.join('\n');
         recordMessage(memKey, 'ai', finalReply, { scene: memScene });
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
+        // agent 在回复过程中拉过更新：等这条回完再重启，别把没发出去的话吞了
+        if (pendingSelfRestart) {
+            pendingSelfRestart = false;
+            if (scheduleSelfRestart()) logger.info('[更新] 回复已发出，准备重启');
+            else logger.info('[更新] 非 PM2 环境，需手动重启生效');
+        }
     } catch (err) {
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
         logger.error('❌ 处理异常:', briefApiErr(err));
