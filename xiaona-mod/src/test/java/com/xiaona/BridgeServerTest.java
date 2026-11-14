@@ -129,7 +129,7 @@ public class BridgeServerTest {
     @Test
     public void testRejectsUnsignedAndWrongSignature() throws Exception {
         Config c = newConfig();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0), "桥应能正常启动");
         try {
             int port = srv.boundPort();
@@ -153,12 +153,27 @@ public class BridgeServerTest {
         }
     }
 
+    /** 位置热力图接口：没有采样数据时返回 200 + 空列表，网页据此显示"暂无数据" */
+    @Test
+    public void testPositionsEndpointReturnsEmptyList() throws Exception {
+        Config c = newConfig();
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
+        assertTrue(srv.start("127.0.0.1", 0));
+        try {
+            int port = srv.boundPort();
+            assertEquals(200, statusOf(port, "/bridge/positions",
+                    ts(), UUID.randomUUID().toString().replace("-", ""), null));
+        } finally {
+            srv.stop();
+        }
+    }
+
     /** 白名单模式：本机推来的绑定名单要落到闸门缓存（单个变更 / 整张名单替换） */
     @Test
     public void testWhitelistPushUpdatesGate() throws Exception {
         Config c = newConfig();
         WhitelistGate gate = new WhitelistGate(c.whitelist);
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, gate);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, gate, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -189,7 +204,7 @@ public class BridgeServerTest {
     public void testWhitelistQueryResponse() throws Exception {
         Config c = newConfig();
         WhitelistGate gate = new WhitelistGate(c.whitelist);
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, gate);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, gate, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             String[] r = postJson(srv.boundPort(), "/bridge/whitelist_response",
@@ -211,7 +226,7 @@ public class BridgeServerTest {
     public void testEventsAreDeliveredOverSse() throws Exception {
         Config c = newConfig();
         McEvents events = new McEvents(32);
-        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -272,7 +287,7 @@ public class BridgeServerTest {
     @Test
     public void testBindCheckAcceptsPlayerVerdict() throws Exception {
         Config c = newConfig();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -305,7 +320,7 @@ public class BridgeServerTest {
         Config c = newConfig();
         c.bridge.maxStreamClients = 1;
         McEvents events = new McEvents(32);
-        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -336,7 +351,7 @@ public class BridgeServerTest {
     public void testSendRejectsWhenToggleOff() throws Exception {
         Config c = newConfig();
         RuntimeToggles toggles = new RuntimeToggles(c);
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), toggles, null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), toggles, null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -360,7 +375,7 @@ public class BridgeServerTest {
     public void testSecretTooShortRefusesToStart() {
         Config c = new Config();
         c.bridge.secret = "tooshort";
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertFalse(srv.start("127.0.0.1", 0), "密钥不合格时桥必须拒绝启动（fail-closed）");
         assertFalse(srv.isRunning());
     }
@@ -369,7 +384,7 @@ public class BridgeServerTest {
     @Test
     public void testPlayersTargetValidation() throws Exception {
         Config c = newConfig();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -445,7 +460,7 @@ public class BridgeServerTest {
         c.plan.user = "paneluser";
         c.plan.password = "panelpass";
         c.plan.server = "main";
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();
@@ -480,7 +495,7 @@ public class BridgeServerTest {
             assertEquals(401, raw.getResponseCode(), "取玩家数据也必须签名");
 
             // 面板不通（换成一个没人监听的端口）：给出可定位的原因
-            BridgeServer dead = new BridgeServer(deadPlanConfig(), new McEvents(32), new RuntimeToggles(c), null, null);
+            BridgeServer dead = new BridgeServer(deadPlanConfig(), new McEvents(32), new RuntimeToggles(c), null, null, null);
             assertTrue(dead.start("127.0.0.1", 0));
             try {
                 String[] fail = postJson(dead.boundPort(), "/bridge/player", "{\"name\":\"Steve\"}");
@@ -533,7 +548,7 @@ public class BridgeServerTest {
         Config c = newConfig();
         c.plan.url = "http://127.0.0.1:" + plan.getAddress().getPort();
         c.plan.server = "MyServer";               // 明明配了名字，但对面不接受
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             String[] r = postJson(srv.boundPort(), "/bridge/player", "{\"name\":\"Steve\"}");
@@ -572,7 +587,7 @@ public class BridgeServerTest {
 
         Config c = newConfig();
         c.plan.url = "http://127.0.0.1:" + plan.getAddress().getPort();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             String[] r = postJson(srv.boundPort(), "/bridge/player", "{\"name\":\"Steve\"}");
@@ -601,7 +616,7 @@ public class BridgeServerTest {
 
         Config c = newConfig();
         c.plan.url = "http://127.0.0.1:" + plan.getAddress().getPort();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             String[] r = postJson(srv.boundPort(), "/bridge/player", "{\"name\":\"Steve\"}");
@@ -659,7 +674,7 @@ public class BridgeServerTest {
 
         Config c = newConfig();
         c.plan.url = "http://127.0.0.1:" + plan.getAddress().getPort();
-        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, new McEvents(32), new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             String[] r = postJson(srv.boundPort(), "/bridge/player", "{\"name\":\"Heavy\"}");
@@ -710,7 +725,7 @@ public class BridgeServerTest {
     public void testStaleLastEventIdFromPreviousRunStillReceivesEvents() throws Exception {
         Config c = newConfig();
         McEvents events = new McEvents(32);
-        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null);
+        BridgeServer srv = new BridgeServer(c, events, new RuntimeToggles(c), null, null, null);
         assertTrue(srv.start("127.0.0.1", 0));
         try {
             int port = srv.boundPort();

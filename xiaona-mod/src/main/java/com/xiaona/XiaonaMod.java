@@ -33,6 +33,7 @@ public class XiaonaMod implements ModInitializer {
     private BridgeServer bridge;
     private BindBoard bindBoard;
     private WhitelistGate whitelistGate;
+    private PositionHistory positions;
     private PortMux portMux;
     /** 提前占住的对外端口；只有拿到了才允许把 MC 挪到内部端口 */
     private java.net.ServerSocket reservedShare = null;
@@ -55,7 +56,11 @@ public class XiaonaMod implements ModInitializer {
             bindBoard = whitelistMode ? null : new BindBoard(config.board);
             whitelistGate = new WhitelistGate(config.whitelist);
             whitelistGate.setEvents(events);   // 进服时顺着事件流向本机实时询问绑定状态
-            bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate);
+            if (config.heatmap != null && config.heatmap.enabled) {
+                positions = new PositionHistory(config.heatmap.sampleSec, config.heatmap.retainMin,
+                        config.heatmap.maxPointsPerPlayer);
+            }
+            bridge = new BridgeServer(config, events, toggles, bindBoard, whitelistGate, positions);
             preparePortRelocation();
         } catch (Throwable e) {
             BotState.error("初始化失败: " + e.getMessage());
@@ -73,6 +78,11 @@ public class XiaonaMod implements ModInitializer {
             }
             startListen(server);
             if (bridge != null) bridge.logCapabilities();
+        });
+
+        // 位置采样：每个 tick 转给 PositionHistory，它自己按 heatmap.sampleSec 降频
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (positions != null) positions.onTick(server);
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {

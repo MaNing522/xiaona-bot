@@ -3,6 +3,7 @@ package com.xiaona;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 
 /**
  * 版本差异的收敛点（1.21.1 / 1.21.8 实现）。
@@ -23,5 +24,10 @@ final class Compat {
 
     static void executeCommand(MinecraftServer server, ServerCommandSource src, String command) {
         server.getCommandManager().executeWithPrefix(src, command);
+    }
+
+    /** 玩家所在维度（1.21.1 / 1.21.8 这一代仍叫 getWorld()） */
+    static ServerWorld worldOf(ServerPlayerEntity p) {
+        return (ServerWorld) p.getWorld();
     }
 }

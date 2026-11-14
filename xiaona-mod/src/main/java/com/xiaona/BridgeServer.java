@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   GET  /bridge/stream   SSE 事件流（公聊 / /xn 私聊 / 进出服 / 死亡 / 成就）
  *   POST /bridge/send     把文本注入游戏（全服广播 / 单个玩家 / 一批玩家）
  *   GET  /bridge/players  在线玩家 + 是否 OP
+ *   GET  /bridge/positions 最近的玩家位置采样（网页位置热力图）
  *   POST /bridge/player   取 Plan 面板里某个玩家的数据（靠本机去取，面板端口不对外开放）
  *   POST /bridge/bindcheck 本机回"某个玩家是否已绑定"（决定这名玩家显不显示计分板）
  *   POST /bridge/whitelist 本机推"谁绑定了游戏ID"（白名单模式：单人变更 / 整张名单）
@@ -91,6 +92,9 @@ public class BridgeServer {
     private final BindBoard board;
     /** 白名单模式的判定闸门：接收本机推来的绑定名单 */
     private final WhitelistGate whitelistGate;
+    /** 在线玩家位置采样（网页「位置热力图」用） */
+    private final PositionHistory positions;
+    private final Config.Heatmap heatmapCfg;
 
     private volatile HttpServer server;
     private volatile int sharePort = 0;      // 复用端口（0 = 未启用复用）
@@ -103,13 +107,15 @@ public class BridgeServer {
     private final PlanAvailability planAvail;
 
     public BridgeServer(Config cfg, McEvents events, RuntimeToggles toggles, BindBoard board,
-                        WhitelistGate whitelistGate) {
+                        WhitelistGate whitelistGate, PositionHistory positions) {
         this.bcfg = cfg.bridge;
         this.pcfg = cfg.plan == null ? new Config.Plan() : cfg.plan;
         this.events = events;
         this.toggles = toggles;
         this.board = board;
         this.whitelistGate = whitelistGate;
+        this.positions = positions;
+        this.heatmapCfg = cfg.heatmap == null ? new Config.Heatmap() : cfg.heatmap;
         this.auth = new BridgeAuth(cfg.bridge);
         this.planAvail = PlanAvailability.create(this.pcfg);
     }
@@ -181,6 +187,7 @@ public class BridgeServer {
         hs.createContext("/bridge/stream", ex -> route(ex, this::handleStream));
         hs.createContext("/bridge/send", ex -> route(ex, this::handleSend));
         hs.createContext("/bridge/players", ex -> route(ex, this::handlePlayers));
+        hs.createContext("/bridge/positions", ex -> route(ex, this::handlePositions));
         hs.createContext("/bridge/player", ex -> route(ex, this::handlePlanPlayer));
         hs.createContext("/bridge/bindcheck", ex -> route(ex, this::handleBindCheck));
         hs.createContext("/bridge/whitelist", ex -> route(ex, this::handleWhitelist));
@@ -270,6 +277,19 @@ public class BridgeServer {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);
         m.put("players", list);
+        sendJson(ex, 200, m);
+    }
+
+    /**
+     * 位置热力图数据：最近的玩家位置采样。
+     * 返回 {@code {ok, sampleSec, retainMin, players:[{name, dim, pts:[[x,z],...], last:{x,z,t}}]}}。
+     */
+    private void handlePositions(HttpExchange ex, String body) throws IOException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", true);
+        m.put("sampleSec", heatmapCfg.sampleSec);
+        m.put("retainMin", heatmapCfg.retainMin);
+        m.put("players", positions == null ? List.of() : positions.snapshot());
         sendJson(ex, 200, m);
     }
 

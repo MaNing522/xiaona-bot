@@ -521,6 +521,19 @@ export async function getOnlineOps() {
     }
 }
 
+/**
+ * 玩家位置采样（网页「位置热力图」用）。服务器 mod 需 ≥ 2.11.0，
+ * 旧版没有 /bridge/positions，会抛错，调用方据此提示升级。
+ */
+export async function getPlayerPositions() {
+    const r = await api('/bridge/positions');
+    return {
+        sampleSec: Number(r && r.sampleSec) || 0,
+        retainMin: Number(r && r.retainMin) || 0,
+        players: (r && Array.isArray(r.players)) ? r.players : [],
+    };
+}
+
 export function isMcConnected() { return connected; }
 
 // ---------- 事件流 ----------

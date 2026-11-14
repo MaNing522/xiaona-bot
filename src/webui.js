@@ -17,7 +17,7 @@ import { renderCaptcha } from './captcha.js';
 import { bot, logs, takeover, pushTakeoverMsg, getSendMsg, setTakeoverMode } from './state.js';
 import { logger } from './logger.js';
 import { isAiEnabled, balanceEndpoint, getProviderInfo } from './aiService.js';
-import { isMcConnected, getGameBans, banPlayers, banEachPlayer, unbanEachPlayer, revokePunishments, getBridgeTarget, isMcConfigured } from './mcbridge.js';
+import { isMcConnected, getGameBans, banPlayers, banEachPlayer, unbanEachPlayer, revokePunishments, getBridgeTarget, isMcConfigured, getPlayerPositions } from './mcbridge.js';
 import { listProviders, getActiveId, saveProvider, deleteProvider, setActive } from './aiProviders.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
@@ -798,6 +798,7 @@ button:disabled{opacity:.55;cursor:default}
 <div id="list"><div class="hint">加载中…</div></div>
 
 <div class="row" style="justify-content:space-between">
+  <a class="hint" href="/heatmap">📍 位置热力图</a>
   <a class="hint" href="/me">← 我的账号</a>
   <button id="logout" class="ghost">退出登录</button>
 </div>
@@ -884,6 +885,239 @@ $('q').oninput=render;
 $('refresh').onclick=load;
 $('logout').onclick=function(){post('/api/logout',{},function(){location.href='/login'})};
 load();
+</script></body></html>`;
+}
+
+/** 位置热力图页（所有者/主人/管理员）：全服玩家最近的活动位置，一人一色 */
+function heatmapPage(sess) {
+  const home = sess.role === 'owner' ? '/' : '/admin';
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>位置热力图 · 小钠</title>
+<style>
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+*{box-sizing:border-box}
+body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:980px;margin:0 auto}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
+  background:linear-gradient(135deg,#1677ff,#4096ff)}
+h1{margin:0;font-size:17px}
+.sub{color:var(--sub);font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{min-height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
+  color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
+button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button.dim{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button.dim.on{background:#e6f4ff;border-color:var(--accent);color:var(--accent);font-weight:600}
+button:disabled{opacity:.55;cursor:default}
+.hint{color:var(--sub);font-size:12px;line-height:1.6}
+.err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
+#cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+canvas{display:block;width:100%}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:999px;
+  background:#fff;border:1px solid var(--line);cursor:pointer;user-select:none}
+.chip.off{opacity:.4;text-decoration:line-through}
+.dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+.meta{color:var(--sub);font-size:12px}
+a{color:var(--accent);text-decoration:none}
+</style></head><body><div class="wrap">
+<div class="head"><div class="logo">🗺️</div><div><h1>位置热力图</h1>
+  <div class="sub">全服玩家最近的活动位置 · 每个玩家一种颜色</div></div></div>
+
+<div class="card">
+  <div class="row">
+    <div id="dims" class="row"></div>
+    <span style="flex:1"></span>
+    <label class="hint row" style="gap:4px"><input type="checkbox" id="auto" checked> 自动刷新</label>
+    <button id="refresh" class="ghost">刷新</button>
+  </div>
+  <div class="meta" id="meta" style="margin-top:8px">加载中…</div>
+  <div class="err" id="err"></div>
+</div>
+
+<div class="card" style="padding:10px">
+  <div id="cvwrap"><canvas id="cv"></canvas></div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="row" style="justify-content:space-between">
+  <a class="hint" href="${home}">← 返回</a>
+  <span class="hint">小钠 · 位置热力图</span>
+</div>
+</div>
+<script>
+var $=function(i){return document.getElementById(i)};
+var DATA=null, DIM='', HIDDEN={}, timer=null, COLORS={};
+var DIM_NAME={'minecraft:overworld':'主世界','minecraft:the_nether':'下界','minecraft:the_end':'末地'};
+function dimName(d){return DIM_NAME[d]||d||'未知维度'}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function get(url,cb){
+  var xhr=new XMLHttpRequest();xhr.open('GET',url,true);
+  xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    cb(xhr.status,j)};
+  xhr.onerror=function(){cb(0,{error:'网络错误'})};
+  xhr.send();
+}
+function colorFor(name){
+  if(!COLORS[name]){
+    var names=allNames(), i=names.indexOf(name);
+    COLORS[name]='hsl('+Math.round(((i<0?0:i)*137.508)%360)+',72%,52%)';
+  }
+  return COLORS[name];
+}
+function allNames(){
+  var seen={}, out=[];
+  (DATA&&DATA.players||[]).forEach(function(p){if(!seen[p.name]){seen[p.name]=1;out.push(p.name)}});
+  out.sort();return out;
+}
+function dims(){
+  var seen={}, out=[];
+  (DATA&&DATA.players||[]).forEach(function(p){if(!seen[p.dim]){seen[p.dim]=1;out.push(p.dim)}});
+  var order=['minecraft:overworld','minecraft:the_nether','minecraft:the_end'];
+  out.sort(function(a,b){
+    var ia=order.indexOf(a), ib=order.indexOf(b);
+    return (ia<0?99:ia)-(ib<0?99:ib)||String(a).localeCompare(String(b));
+  });
+  return out;
+}
+function series(){
+  return ((DATA&&DATA.players)||[]).filter(function(p){return p.dim===DIM && !HIDDEN[p.name+'|'+p.dim]});
+}
+function renderDims(){
+  var ds=dims();
+  if(!DIM || ds.indexOf(DIM)<0) DIM=ds[0]||'';
+  $('dims').innerHTML=ds.map(function(d){
+    var n=((DATA&&DATA.players)||[]).filter(function(p){return p.dim===d}).length;
+    return '<button class="dim'+(d===DIM?' on':'')+'" data-dim="'+esc(d)+'">'+esc(dimName(d))+' ('+n+')</button>';
+  }).join('')||'<span class="hint">还没有采样数据</span>';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-dim]'),function(b){
+    b.onclick=function(){DIM=b.dataset.dim;renderDims();draw()};
+  });
+}
+function draw(){
+  var cv=$('cv'), wrap=$('cvwrap');
+  var dpr=window.devicePixelRatio||1;
+  var w=Math.max(300,wrap.clientWidth-2);
+  var h=Math.max(360,Math.min(640,Math.round(w*0.62)));
+  cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
+  cv.style.height=h+'px';
+  var ctx=cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  var list=series();
+  if(!list.length){
+    ctx.fillStyle='#8a919f';ctx.font='14px sans-serif';ctx.textAlign='center';
+    ctx.fillText(DATA?'这个维度暂时没有采样数据':'还没有数据',w/2,h/2);
+    return;
+  }
+  var minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  list.forEach(function(p){(p.pts||[]).forEach(function(pt){
+    if(pt[0]<minX)minX=pt[0];if(pt[0]>maxX)maxX=pt[0];
+    if(pt[1]<minZ)minZ=pt[1];if(pt[1]>maxZ)maxZ=pt[1];
+  })});
+  if(!isFinite(minX)){minX=0;maxX=128;minZ=0;maxZ=128}
+  var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ), span=Math.max(spanX,spanZ);
+  var pad=Math.max(48,span*0.08);
+  var cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
+  var half=span/2+pad;
+  minX=cx-half;maxX=cx+half;minZ=cz-half;maxZ=cz+half;
+  var sx=w/(maxX-minX), sz=h/(maxZ-minZ);
+  function px(x){return (x-minX)*sx}
+  function pz(z){return (z-minZ)*sz}
+
+  // 网格：从 16 起步，选一个让格线不超过 14 条的步长
+  var steps=[16,32,64,128,256,512,1024,2048,4096,8192,16384];
+  var step=steps[steps.length-1];
+  for(var i=0;i<steps.length;i++){if((maxX-minX)/steps[i]<=14){step=steps[i];break}}
+  ctx.strokeStyle='#e8ecf2';ctx.fillStyle='#a8b0bd';ctx.lineWidth=1;ctx.font='10px sans-serif';
+  ctx.textAlign='center';ctx.textBaseline='top';
+  for(var gx=Math.ceil(minX/step)*step;gx<=maxX;gx+=step){
+    var X=px(gx);ctx.beginPath();ctx.moveTo(X,0);ctx.lineTo(X,h);ctx.stroke();
+    ctx.fillText(String(Math.round(gx)),X,4);
+  }
+  ctx.textAlign='left';ctx.textBaseline='middle';
+  for(var gz=Math.ceil(minZ/step)*step;gz<=maxZ;gz+=step){
+    var Z=pz(gz);ctx.beginPath();ctx.moveTo(0,Z);ctx.lineTo(w,Z);ctx.stroke();
+    ctx.fillText(String(Math.round(gz)),4,Z);
+  }
+  ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
+
+  // 热力：每个玩家一张径向渐变精灵，additive 叠加；颜色区分玩家
+  var R=Math.max(14,Math.min(w,h)*0.05);
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  list.forEach(function(p){
+    var color=colorFor(p.name);
+    var sp=sprite(color);
+    ctx.globalAlpha=0.10;
+    (p.pts||[]).forEach(function(pt){
+      ctx.drawImage(sp,px(pt[0])-R,pz(pt[1])-R,R*2,R*2);
+    });
+  });
+  ctx.restore();
+
+  // 最后位置：圆点 + 名字
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
+  list.forEach(function(p){
+    if(!p.last)return;
+    var color=colorFor(p.name), X=px(p.last.x), Z=pz(p.last.z);
+    ctx.beginPath();ctx.arc(X,Z,5,0,Math.PI*2);
+    ctx.fillStyle=color;ctx.fill();
+    ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.strokeText(p.name,X+9,Z);
+    ctx.fillStyle='#1f2329';ctx.fillText(p.name,X+9,Z);
+  });
+
+  // 图例
+  var all=((DATA&&DATA.players)||[]).filter(function(p){return p.dim===DIM});
+  $('legend').innerHTML=all.map(function(p){
+    var k=p.name+'|'+p.dim, off=!!HIDDEN[k];
+    return '<span class="chip'+(off?' off':'')+'" data-k="'+esc(k)+'"><span class="dot" style="background:'+colorFor(p.name)+'"></span>'
+      +esc(p.name)+' <span class="meta">'+(p.pts||[]).length+' 点</span></span>';
+  }).join('');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-k]'),function(el){
+    el.onclick=function(){
+      var k=el.dataset.k;
+      if(HIDDEN[k])delete HIDDEN[k];else HIDDEN[k]=1;
+      draw();
+    };
+  });
+}
+var sprites={};
+function sprite(color){
+  if(sprites[color])return sprites[color];
+  var c=document.createElement('canvas');c.width=c.height=64;
+  var g=c.getContext('2d');
+  var grd=g.createRadialGradient(32,32,0,32,32,32);
+  grd.addColorStop(0,color);grd.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=grd;g.fillRect(0,0,64,64);
+  sprites[color]=c;return c;
+}
+function load(){
+  $('err').textContent='';
+  get('/api/heatmap',function(st,j){
+    if(st===401){location.href='/login';return}
+    if(!j.ok){$('err').textContent=j.error||'加载失败';return}
+    DATA=j;
+    var d=new Date();
+    $('meta').textContent='采样间隔 '+(j.sampleSec||'?')+' 秒 · 保留 '+(j.retainMin||'?')+' 分钟 · 更新 '
+      +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+    renderDims();draw();
+  });
+}
+$('refresh').onclick=load;
+$('auto').onchange=function(){
+  if(timer){clearInterval(timer);timer=null}
+  if($('auto').checked)timer=setInterval(load,15000);
+};
+window.addEventListener('resize',function(){if(DATA)draw()});
+load();
+if($('auto').checked)timer=setInterval(load,15000);
 </script></body></html>`;
 }
 
@@ -1048,6 +1282,20 @@ async function route(req, res, url) {
       return res.end();
     }
     return sendHtml(res, 200, adminPage(s));
+  }
+
+  // 位置热力图：全服玩家最近的活动位置（所有者/主人/管理员）
+  if (url.pathname === '/heatmap' || url.pathname === '/heatmap.html') {
+    const s = sessionOf(req);
+    if (!s) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (!canAdmin(s.role)) {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return sendHtml(res, 200, heatmapPage(s));
   }
 
   // 登录页单独一个地址；已登录访问时直接回对应首页
@@ -1321,9 +1569,10 @@ async function route(req, res, url) {
   if (!sess) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
   // 权限隔离：只有所有者能碰全部管理接口；主人/管理员额外可用 /api/admin/*，其他人只能用自己的 /api/me/*
   const adminApi = url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/');
+  const heatApi = url.pathname === '/api/heatmap';
   if (sess.role !== 'owner'
     && !url.pathname.startsWith('/api/me')
-    && !(adminApi && canAdmin(sess.role))) {
+    && !((adminApi || heatApi) && canAdmin(sess.role))) {
     return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
   }
 
@@ -1375,6 +1624,24 @@ async function route(req, res, url) {
     if (!setPassword(sess.qq, newPass)) return sendJSON(res, 500, { ok: false, error: '保存失败' });
     logger.info(`[面板] QQ ${sess.qq} 已修改网页密码`);
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // ---------- 位置热力图数据（所有者/主人/管理员） ----------
+  if (heatApi && req.method === 'GET') {
+    if (!isMcConnected()) return sendJSON(res, 200, { ok: false, error: 'MC 服务器还没连上桥' });
+    try {
+      const d = await getPlayerPositions();
+      return sendJSON(res, 200, { ok: true, ...d });
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const old = /404|not\s*found/i.test(msg);
+      return sendJSON(res, 502, {
+        ok: false,
+        error: old
+          ? '服务器 mod 版本过旧（需要 2.11.0），请先把新版 mod 放到 MC 服务器'
+          : `读取位置失败：${msg}`,
+      });
+    }
   }
 
   // ---------- 管理子页：管理所有人的账户与绑定（所有者/主人/管理员） ----------

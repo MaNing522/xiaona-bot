@@ -22,6 +22,18 @@ public class Config {
     public Plan plan = new Plan();
     public Board board = new Board();
     public Whitelist whitelist = new Whitelist();
+    public Heatmap heatmap = new Heatmap();
+
+    /**
+     * 位置采样（网页「位置热力图」）：每隔 sampleSec 秒记录一次在线玩家的 X/Z，
+     * 只保留最近 retainMin 分钟、每条线最多 maxPointsPerPlayer 个点；数据只在内存里。
+     */
+    public static class Heatmap {
+        public boolean enabled = true;
+        public int sampleSec = 5;             // 采样间隔（秒），2~60
+        public int retainMin = 60;            // 保留时长（分钟），1~1440
+        public int maxPointsPerPlayer = 720;  // 每个玩家/维度最多点数，60~20000
+    }
 
     /**
      * 未绑定玩家的侧边栏计分板：进服时若还没绑定游戏ID，就给一条"进QQ群发 #绑定"的指引，
@@ -185,5 +197,10 @@ public class Config {
         if (whitelist.kickMessage == null || whitelist.kickMessage.isBlank()) {
             whitelist.kickMessage = "你还未绑定游戏ID。\n请加入 QQ 群 {group}，发送 #绑定 <游戏ID> 完成绑定后再进服。";
         }
+
+        if (heatmap == null) heatmap = new Heatmap();
+        heatmap.sampleSec = Math.min(60, Math.max(2, heatmap.sampleSec));
+        heatmap.retainMin = Math.min(1440, Math.max(1, heatmap.retainMin));
+        heatmap.maxPointsPerPlayer = Math.min(20000, Math.max(60, heatmap.maxPointsPerPlayer));
     }
 }
