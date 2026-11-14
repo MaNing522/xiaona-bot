@@ -320,7 +320,13 @@ public class McEvents {
         if (s == null) return out;
         try {
             for (ServerPlayerEntity p : s.getPlayerManager().getPlayerList()) {
-                out.add(new String[]{p.getName().getString(), String.valueOf(isOp(s, p))});
+                String dim = "";
+                try {
+                    dim = Compat.worldOf(p).getRegistryKey().getValue().toString();
+                } catch (Exception ignored) {
+                    // 拿不到维度不影响其余信息
+                }
+                out.add(new String[]{p.getName().getString(), String.valueOf(isOp(s, p)), dim});
             }
         } catch (Exception ignored) {
         }

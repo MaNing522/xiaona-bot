@@ -40,6 +40,15 @@ function fmtPos(p) {
   return `${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}`;
 }
 
+/** 维度 ID → 中文（主世界/下界/末地），未知维度原样返回 */
+export function dimLabel(dim) {
+  const s = String(dim || '').replace(/^minecraft:/, '');
+  if (s === 'overworld') return '主世界';
+  if (s === 'the_nether') return '下界';
+  if (s === 'the_end') return '末地';
+  return s || '未知';
+}
+
 function requireOnline() {
   if (!bot || meta.state !== 'online' || !bot.entity) {
     throw new Error(`小钠现在不在服务器里（${meta.state === 'connecting' ? '正在连接' : '离线'}），先用 mcbot_join 进去`);
@@ -111,7 +120,7 @@ export function status() {
   if (meta.version) lines.push(`协议版本：${meta.version}`);
   if (meta.error) lines.push(`最近错误：${meta.error}`);
   if (b && b.entity && meta.state === 'online') {
-    lines.push(`坐标：${fmtPos(b.entity.position)}（维度 ${b.game && b.game.dimension ? b.game.dimension : '未知'}）`);
+    lines.push(`坐标：${fmtPos(b.entity.position)}（维度 ${dimLabel(b.game && b.game.dimension)}）`);
     lines.push(`血量：${b.health ?? '?'} / 饥饿：${b.food ?? '?'}`);
     const held = b.heldItem;
     lines.push(`手持：${held ? `${held.name} ×${held.count}` : '空手'}`);
@@ -282,14 +291,14 @@ export function nearbyPlayers(radius = 64) {
     list.push({ e, d, health });
   }
   list.sort((a, b2) => a.d - b2.d);
-  if (!list.length) return `渲染范围内（${r} 格）没有其他玩家。`;
+  if (!list.length) return `当前维度：${dimLabel(b.game && b.game.dimension)}；渲染范围内（${r} 格）没有其他玩家。`;
   const lines = list.map(({ e, d, health }) => {
     const name = e.username || e.name || '(未知)';
     const held = e.heldItem ? `，手持 ${e.heldItem.name}` : '';
     const hp = health != null ? `，血量 ${Math.round(health * 2) / 2}` : '';
     return `- ${name}：${fmtPos(e.position)}，距离 ${Math.round(d)} 格${hp}${held}`;
   });
-  return `渲染范围内（${r} 格）共 ${lines.length} 名玩家：\n${lines.join('\n')}`;
+  return `当前维度：${dimLabel(b.game && b.game.dimension)}；渲染范围内（${r} 格）共 ${lines.length} 名玩家：\n${lines.join('\n')}`;
 }
 
 /** 发送任意服务器命令（自动补 /，一条消息一条命令） */

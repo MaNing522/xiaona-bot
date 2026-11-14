@@ -17,7 +17,7 @@ const TOOL_HINTS = {
     analyze_image: '读懂本条消息里的图片（画面内容、截图里的报错/文字 OCR）。只有本条消息带 [图片] 时才用',
     mc_status: '查 Minecraft 服务器状态/在线玩家。查自己的服不填参数，查别人的服填地址；**查 MC 服务器一律用它，不要用 web_search**',
     player_query: '查某个玩家的游玩时长、最后在线等统计数据（来自服务器 Plan 插件）',
-    player_pos: '查某个在线玩家当前的坐标（X/Y/Z）',
+    player_pos: '查某个在线玩家当前的坐标（X/Y/Z）和所在维度',
     mcbot_join: '用你自己的 MC 客户端（离线名 xiaona）进某个服务器看看',
     mcbot_leave: '退出当前的 MC 服务器',
     mcbot_status: '查看自己 MC 客户端的坐标、血量、背包、在线玩家',

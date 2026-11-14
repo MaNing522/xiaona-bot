@@ -77,7 +77,7 @@ export const AGENT_TOOLS = [
     minRole: 'guest',
     function: {
       name: 'player_pos',
-      description: '查询某个在线玩家当前的坐标（X/Y/Z）。只需要游戏ID，不会改动任何东西；玩家不在线时会返回服务器提示。',
+      description: '查询某个在线玩家当前的坐标（X/Y/Z）和所在维度（主世界/下界/末地）。只需要游戏ID，不会改动任何东西；玩家不在线时会返回服务器提示。',
       parameters: {
         type: 'object',
         properties: { name: { type: 'string', description: '玩家游戏ID，3-16 位字母/数字/下划线' } },
@@ -87,7 +87,18 @@ export const AGENT_TOOLS = [
     run: async (args, ctx) => {
       const name = String(args.name || '').trim();
       if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return '玩家名格式不对（3-16 位字母、数字或下划线）。';
-      return ctx.runCommand(`data get entity ${name} Pos`);
+      const pos = await ctx.runCommand(`data get entity ${name} Pos`);
+      let dimText = '';
+      try {
+        dimText = await ctx.runCommand(`data get entity ${name} Dimension`);
+      } catch { /* 查不到维度不影响坐标结果 */ }
+      const raw = (String(dimText || '').match(/minecraft:[a-z_]+/) || [])[0] || '';
+      const label = {
+        'minecraft:overworld': '主世界',
+        'minecraft:the_nether': '下界',
+        'minecraft:the_end': '末地',
+      }[raw] || raw;
+      return `${pos}${label ? `\n所在维度：${label}` : ''}`;
     },
   },
   {

@@ -270,6 +270,8 @@ public class BridgeServer {
             Map<String, Object> o = new LinkedHashMap<>();
             o.put("name", p[0]);
             o.put("op", Boolean.parseBoolean(p[1]));
+            // 维度（minecraft:overworld / the_nether / the_end），旧版 mod 没有这个字段
+            o.put("dim", p.length > 2 ? p[2] : "");
             list.add(o);
         }
         Map<String, Object> m = new LinkedHashMap<>();

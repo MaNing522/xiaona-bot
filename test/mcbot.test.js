@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { yawOfDirection, status, chat, command, nearbyPlayers, login } from '../src/mcbot.js';
+import { yawOfDirection, dimLabel, status, chat, command, nearbyPlayers, login } from '../src/mcbot.js';
 
 describe('mcbot 基础', () => {
+  it('维度 ID 翻译成中文', () => {
+    expect(dimLabel('minecraft:overworld')).toBe('主世界');
+    expect(dimLabel('minecraft:the_nether')).toBe('下界');
+    expect(dimLabel('the_end')).toBe('末地');
+    expect(dimLabel('mod:custom')).toBe('mod:custom');
+    expect(dimLabel('')).toBe('未知');
+  });
+
   it('指南针方向映射到 MC yaw', () => {
     expect(yawOfDirection('south')).toBe(0);
     expect(yawOfDirection('north')).toBeCloseTo(Math.PI);

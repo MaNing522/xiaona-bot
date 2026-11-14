@@ -818,6 +818,15 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
     };
 }
 
+/** 维度 ID → 中文（在线玩家列表用） */
+function mcDimLabel(dim) {
+    const s = String(dim || '').replace(/^minecraft:/, '');
+    if (s === 'overworld') return '主世界';
+    if (s === 'the_nether') return '下界';
+    if (s === 'the_end') return '末地';
+    return s;
+}
+
 /**
  * 工具：MC 服务器状态。
  * - 不填 address：查小钠自己连着的那个服（桥）——是否连接 + 在线玩家。
@@ -842,7 +851,12 @@ async function agentMcStatus(address) {
     if (connected) {
         try { players = await getPlayers(true); } catch { players = []; }
     }
-    const names = players.map((p) => p && p.name).filter(Boolean);
+    const names = players.map((p) => {
+        const n = p && p.name;
+        if (!n) return '';
+        const d = mcDimLabel(p.dim);
+        return d ? `${n}（${d}）` : n;
+    }).filter(Boolean);
     const who = mcServerInfoLine();
     return `MC 服务器${who ? `：${who}` : ''}；${connected ? '已连接' : '未连接'}；在线玩家 ${names.length} 人`
         + (names.length ? `（${names.join('、')}）` : '');
