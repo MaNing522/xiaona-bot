@@ -899,7 +899,7 @@ load();
 </script></body></html>`;
 }
 
-/** 位置热力图页（所有者/主人/管理员）：全服玩家最近的活动位置，一人一色 */
+/** 位置热力图页（所有者/主人/管理员）：三个维度同时画，一人一色，主世界↔下界坐标互映 */
 function heatmapPage(sess) {
   const home = sess.role === 'owner' ? '/' : '/admin';
   return `<!doctype html>
@@ -911,38 +911,46 @@ function heatmapPage(sess) {
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:980px;margin:0 auto}
+.wrap{max-width:1180px;margin:0 auto}
 .head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
   background:linear-gradient(135deg,#1677ff,#4096ff)}
 h1{margin:0;font-size:17px}
+h2{margin:0 0 8px;font-size:15px}
 .sub{color:var(--sub);font-size:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 button{min-height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
   color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
 button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
-button.dim{background:#fff;color:var(--txt);border-color:#d9d9d9}
-button.dim.on{background:#e6f4ff;border-color:var(--accent);color:var(--accent);font-weight:600}
+button.mini{min-height:26px;padding:0 10px;font-size:12px;margin-left:auto}
 button:disabled{opacity:.55;cursor:default}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
-#cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.maps{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:1000px){.maps{grid-template-columns:1fr 1fr}}
+.maps .mapcard:first-child{grid-column:1/-1}
+.mapcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.maph{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 canvas{display:block;width:100%}
-.legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.tip{position:absolute;display:none;pointer-events:none;background:rgba(31,35,41,.9);color:#fff;
+  font-size:12px;padding:3px 8px;border-radius:6px;white-space:nowrap;z-index:2}
+.legend{display:flex;gap:8px;flex-wrap:wrap}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:999px;
   background:#fff;border:1px solid var(--line);cursor:pointer;user-select:none}
 .chip.off{opacity:.4;text-decoration:line-through}
 .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+.find{color:var(--accent);text-decoration:none;font-size:12px;border-left:1px solid var(--line);padding-left:8px}
 .meta{color:var(--sub);font-size:12px}
 a{color:var(--accent);text-decoration:none}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🗺️</div><div><h1>位置热力图</h1>
-  <div class="sub">全服玩家最近的活动位置 · 每个玩家一种颜色</div></div></div>
+  <div class="sub">全服玩家最近的活动位置 · 每个玩家一种颜色 · 三个维度同时显示</div></div></div>
 
 <div class="card">
   <div class="row">
-    <div id="dims" class="row"></div>
+    <label class="hint row" style="gap:4px"><input type="checkbox" id="mapNether" checked> 主世界 ↔ 下界坐标互映（×8）</label>
     <span style="flex:1"></span>
     <label class="hint row" style="gap:4px"><input type="checkbox" id="auto" checked> 自动刷新</label>
     <button id="refresh" class="ghost">刷新</button>
@@ -951,8 +959,27 @@ a{color:var(--accent);text-decoration:none}
   <div class="err" id="err"></div>
 </div>
 
-<div class="card" style="padding:10px">
-  <div id="cvwrap"><canvas id="cv"></canvas></div>
+<div class="maps">
+  <div class="mapcard">
+    <div class="maph"><b>主世界</b><span class="meta" id="mt-overworld">—</span>
+      <button class="ghost mini" data-reset="minecraft:overworld">全图</button></div>
+    <div class="cvwrap"><canvas id="cv-overworld"></canvas><div class="tip" id="tip-overworld"></div></div>
+  </div>
+  <div class="mapcard">
+    <div class="maph"><b>下界</b><span class="meta" id="mt-the_nether">—</span>
+      <button class="ghost mini" data-reset="minecraft:the_nether">全图</button></div>
+    <div class="cvwrap"><canvas id="cv-the_nether"></canvas><div class="tip" id="tip-the_nether"></div></div>
+  </div>
+  <div class="mapcard">
+    <div class="maph"><b>末地</b><span class="meta" id="mt-the_end">—</span>
+      <button class="ghost mini" data-reset="minecraft:the_end">全图</button></div>
+    <div class="cvwrap"><canvas id="cv-the_end"></canvas><div class="tip" id="tip-the_end"></div></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <h2>玩家图例</h2>
+  <div class="hint" style="margin:0 0 8px">点整块可隐藏/显示；点「定位」把对应维度缩放到他当前位置。</div>
   <div class="legend" id="legend"></div>
 </div>
 
@@ -963,9 +990,12 @@ a{color:var(--accent);text-decoration:none}
 </div>
 <script>
 var $=function(i){return document.getElementById(i)};
-var DATA=null, DIM='', HIDDEN={}, timer=null, COLORS={};
-var DIM_NAME={'minecraft:overworld':'主世界','minecraft:the_nether':'下界','minecraft:the_end':'末地'};
-function dimName(d){return DIM_NAME[d]||d||'未知维度'}
+var DIMS=[
+  {id:'minecraft:overworld',cid:'overworld',name:'主世界'},
+  {id:'minecraft:the_nether',cid:'the_nether',name:'下界'},
+  {id:'minecraft:the_end',cid:'the_end',name:'末地'}
+];
+var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, MAPON=true;
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function get(url,cb){
   var xhr=new XMLHttpRequest();xhr.open('GET',url,true);
@@ -974,6 +1004,11 @@ function get(url,cb){
   xhr.onerror=function(){cb(0,{error:'网络错误'})};
   xhr.send();
 }
+function allNames(){
+  var seen={}, out=[];
+  (DATA&&DATA.players||[]).forEach(function(p){if(!seen[p.name]){seen[p.name]=1;out.push(p.name)}});
+  out.sort();return out;
+}
 function colorFor(name){
   if(!COLORS[name]){
     var names=allNames(), i=names.indexOf(name);
@@ -981,47 +1016,54 @@ function colorFor(name){
   }
   return COLORS[name];
 }
-function allNames(){
-  var seen={}, out=[];
-  (DATA&&DATA.players||[]).forEach(function(p){if(!seen[p.name]){seen[p.name]=1;out.push(p.name)}});
-  out.sort();return out;
-}
-function dims(){
-  var seen={}, out=[];
-  (DATA&&DATA.players||[]).forEach(function(p){if(!seen[p.dim]){seen[p.dim]=1;out.push(p.dim)}});
-  var order=['minecraft:overworld','minecraft:the_nether','minecraft:the_end'];
-  out.sort(function(a,b){
-    var ia=order.indexOf(a), ib=order.indexOf(b);
-    return (ia<0?99:ia)-(ib<0?99:ib)||String(a).localeCompare(String(b));
+function rawSeries(dim){
+  return ((DATA&&DATA.players)||[]).filter(function(p){
+    return p.dim===dim && !HIDDEN[p.name+'|'+p.dim];
   });
+}
+function mapped(p,f){
+  return {
+    name:p.name, mapped:true,
+    pts:(p.pts||[]).map(function(pt){return [pt[0]*f,pt[1]*f]}),
+    last:p.last?{x:p.last.x*f,z:p.last.z*f}:null
+  };
+}
+function seriesOf(dim){
+  var out=rawSeries(dim).map(function(p){return {name:p.name,mapped:false,pts:p.pts||[],last:p.last||null}});
+  if(MAPON){
+    if(dim==='minecraft:overworld'){
+      rawSeries('minecraft:the_nether').forEach(function(p){out.push(mapped(p,8))});
+    }else if(dim==='minecraft:the_nether'){
+      rawSeries('minecraft:overworld').forEach(function(p){out.push(mapped(p,1/8))});
+    }
+  }
   return out;
 }
-function series(){
-  return ((DATA&&DATA.players)||[]).filter(function(p){return p.dim===DIM && !HIDDEN[p.name+'|'+p.dim]});
+var sprites={};
+function sprite(color){
+  if(sprites[color])return sprites[color];
+  var c=document.createElement('canvas');c.width=c.height=64;
+  var g=c.getContext('2d');
+  var grd=g.createRadialGradient(32,32,0,32,32,32);
+  grd.addColorStop(0,color);grd.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=grd;g.fillRect(0,0,64,64);
+  sprites[color]=c;return c;
 }
-function renderDims(){
-  var ds=dims();
-  if(!DIM || ds.indexOf(DIM)<0) DIM=ds[0]||'';
-  $('dims').innerHTML=ds.map(function(d){
-    var n=((DATA&&DATA.players)||[]).filter(function(p){return p.dim===d}).length;
-    return '<button class="dim'+(d===DIM?' on':'')+'" data-dim="'+esc(d)+'">'+esc(dimName(d))+' ('+n+')</button>';
-  }).join('')||'<span class="hint">还没有采样数据</span>';
-  Array.prototype.forEach.call(document.querySelectorAll('[data-dim]'),function(b){
-    b.onclick=function(){DIM=b.dataset.dim;renderDims();draw()};
-  });
-}
-function draw(){
-  var cv=$('cv'), wrap=$('cvwrap');
+function drawOne(d){
+  var cv=$('cv-'+d.cid), wrap=cv.parentNode, tip=$('tip-'+d.cid);
+  if(!cv)return;
   var dpr=window.devicePixelRatio||1;
   var w=Math.max(300,wrap.clientWidth-2);
-  var h=Math.max(360,Math.min(640,Math.round(w*0.62)));
+  var h=Math.max(300,Math.min(470,Math.round(w*0.55)));
   cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
   cv.style.height=h+'px';
   var ctx=cv.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,w,h);
-  var list=series();
+  var list=seriesOf(d.id);
+  $('mt-'+d.cid).textContent=list.length?('· '+list.length+' 名玩家'):'· 暂无数据';
   if(!list.length){
+    TRANS[d.id]=null;
     ctx.fillStyle='#8a919f';ctx.font='14px sans-serif';ctx.textAlign='center';
     ctx.fillText(DATA?'这个维度暂时没有采样数据':'还没有数据',w/2,h/2);
     return;
@@ -1032,16 +1074,21 @@ function draw(){
     if(pt[1]<minZ)minZ=pt[1];if(pt[1]>maxZ)maxZ=pt[1];
   })});
   if(!isFinite(minX)){minX=0;maxX=128;minZ=0;maxZ=128}
-  var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ), span=Math.max(spanX,spanZ);
-  var pad=Math.max(48,span*0.08);
-  var cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-  var half=span/2+pad;
-  minX=cx-half;maxX=cx+half;minZ=cz-half;maxZ=cz+half;
+  var view=VIEW[d.id];
+  if(view){
+    minX=view.x-view.span/2;maxX=view.x+view.span/2;
+    minZ=view.z-view.span/2;maxZ=view.z+view.span/2;
+  }else{
+    var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ), span=Math.max(spanX,spanZ);
+    var pad=Math.max(48,span*0.08);
+    var cx=(minX+maxX)/2, cz=(minZ+maxZ)/2, half=span/2+pad;
+    minX=cx-half;maxX=cx+half;minZ=cz-half;maxZ=cz+half;
+  }
   var sx=w/(maxX-minX), sz=h/(maxZ-minZ);
+  TRANS[d.id]={minX:minX,minZ:minZ,sx:sx,sz:sz,w:w,h:h};
   function px(x){return (x-minX)*sx}
   function pz(z){return (z-minZ)*sz}
 
-  // 网格：从 16 起步，选一个让格线不超过 14 条的步长
   var steps=[16,32,64,128,256,512,1024,2048,4096,8192,16384];
   var step=steps[steps.length-1];
   for(var i=0;i<steps.length;i++){if((maxX-minX)/steps[i]<=14){step=steps[i];break}}
@@ -1058,56 +1105,87 @@ function draw(){
   }
   ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
 
-  // 热力：每个玩家一张径向渐变精灵，additive 叠加；颜色区分玩家
-  var R=Math.max(14,Math.min(w,h)*0.05);
+  var R=Math.max(12,Math.min(w,h)*0.05);
   ctx.save();
   ctx.globalCompositeOperation='lighter';
   list.forEach(function(p){
-    var color=colorFor(p.name);
-    var sp=sprite(color);
-    ctx.globalAlpha=0.10;
+    var sp=sprite(colorFor(p.name));
+    ctx.globalAlpha=p.mapped?0.07:0.10;
     (p.pts||[]).forEach(function(pt){
       ctx.drawImage(sp,px(pt[0])-R,pz(pt[1])-R,R*2,R*2);
     });
   });
   ctx.restore();
 
-  // 最后位置：圆点 + 名字
+  // 当前位置标点：己维度用圆点，映射过来的用菱形
   ctx.font='12px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
   list.forEach(function(p){
     if(!p.last)return;
     var color=colorFor(p.name), X=px(p.last.x), Z=pz(p.last.z);
-    ctx.beginPath();ctx.arc(X,Z,5,0,Math.PI*2);
+    ctx.beginPath();
+    if(p.mapped){
+      ctx.moveTo(X,Z-5);ctx.lineTo(X+5,Z);ctx.lineTo(X,Z+5);ctx.lineTo(X-5,Z);ctx.closePath();
+    }else{
+      ctx.arc(X,Z,5.5,0,Math.PI*2);
+    }
     ctx.fillStyle=color;ctx.fill();
     ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
-    ctx.lineWidth=3;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.strokeText(p.name,X+9,Z);
-    ctx.fillStyle='#1f2329';ctx.fillText(p.name,X+9,Z);
+    var label=p.name+(p.mapped?(d.id==='minecraft:overworld'?' ×8':' ÷8'):'');
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.strokeText(label,X+9,Z);
+    ctx.fillStyle='#1f2329';ctx.fillText(label,X+9,Z);
   });
 
-  // 图例
-  var all=((DATA&&DATA.players)||[]).filter(function(p){return p.dim===DIM});
-  $('legend').innerHTML=all.map(function(p){
+  // 鼠标位置显示世界坐标
+  cv.onmousemove=function(e){
+    var t=TRANS[d.id];if(!t)return;
+    var mx=e.offsetX, mz=e.offsetY;
+    var wx=t.minX+mx/t.sx, wz=t.minZ+mz/t.sz;
+    tip.style.display='block';
+    tip.textContent='X '+Math.round(wx)+'   Z '+Math.round(wz);
+    var left=mx+14, top=mz+14;
+    if(left+tip.offsetWidth>t.w-4)left=Math.max(4,mx-tip.offsetWidth-10);
+    if(top+tip.offsetHeight>t.h-4)top=Math.max(4,mz-tip.offsetHeight-10);
+    tip.style.left=left+'px';tip.style.top=top+'px';
+  };
+  cv.onmouseleave=function(){tip.style.display='none'};
+}
+function drawAll(){DIMS.forEach(drawOne)}
+function renderLegend(){
+  var seen={}, list=[];
+  (DATA&&DATA.players||[]).forEach(function(p){
+    var k=p.name+'|'+p.dim;
+    if(seen[k])return;seen[k]=1;list.push(p);
+  });
+  if(!list.length){$('legend').innerHTML='<span class="hint">还没有数据</span>';return;}
+  $('legend').innerHTML=list.map(function(p){
     var k=p.name+'|'+p.dim, off=!!HIDDEN[k];
-    return '<span class="chip'+(off?' off':'')+'" data-k="'+esc(k)+'"><span class="dot" style="background:'+colorFor(p.name)+'"></span>'
-      +esc(p.name)+' <span class="meta">'+(p.pts||[]).length+' 点</span></span>';
+    return '<span class="chip'+(off?' off':'')+'" data-k="'+esc(k)+'">'
+      +'<span class="dot" style="background:'+colorFor(p.name)+'"></span>'+esc(p.name)
+      +' <span class="meta">'+esc(dimName(p.dim))+' · '+(p.pts||[]).length+' 点</span>'
+      +'<a href="#" class="find" data-find="'+esc(k)+'">定位</a></span>';
   }).join('');
-  Array.prototype.forEach.call(document.querySelectorAll('[data-k]'),function(el){
-    el.onclick=function(){
+  Array.prototype.forEach.call(document.querySelectorAll('#legend [data-k]'),function(el){
+    el.onclick=function(ev){
+      if(ev.target&&ev.target.dataset&&ev.target.dataset.find)return;
       var k=el.dataset.k;
       if(HIDDEN[k])delete HIDDEN[k];else HIDDEN[k]=1;
-      draw();
+      drawAll();renderLegend();
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#legend [data-find]'),function(a){
+    a.onclick=function(ev){
+      ev.preventDefault();ev.stopPropagation();
+      var k=a.dataset.find, i=k.lastIndexOf('|');
+      var dim=k.slice(i+1);
+      var p=((DATA&&DATA.players)||[]).filter(function(x){return x.name+'|'+x.dim===k})[0];
+      if(!p||!p.last)return;
+      VIEW[dim]={x:p.last.x,z:p.last.z,span:256};
+      drawOne(DIMS.filter(function(d){return d.id===dim})[0]||DIMS[0]);
     };
   });
 }
-var sprites={};
-function sprite(color){
-  if(sprites[color])return sprites[color];
-  var c=document.createElement('canvas');c.width=c.height=64;
-  var g=c.getContext('2d');
-  var grd=g.createRadialGradient(32,32,0,32,32,32);
-  grd.addColorStop(0,color);grd.addColorStop(1,'rgba(0,0,0,0)');
-  g.fillStyle=grd;g.fillRect(0,0,64,64);
-  sprites[color]=c;return c;
+function dimName(d){
+  return ({'minecraft:overworld':'主世界','minecraft:the_nether':'下界','minecraft:the_end':'末地'})[d]||d||'未知维度';
 }
 function load(){
   $('err').textContent='';
@@ -1118,15 +1196,22 @@ function load(){
     var d=new Date();
     $('meta').textContent='采样间隔 '+(j.sampleSec||'?')+' 秒 · 保留 '+(j.retainMin||'?')+' 分钟 · 更新 '
       +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-    renderDims();draw();
+    drawAll();renderLegend();
   });
 }
 $('refresh').onclick=load;
+$('mapNether').onchange=function(){MAPON=$('mapNether').checked;drawAll()};
 $('auto').onchange=function(){
   if(timer){clearInterval(timer);timer=null}
   if($('auto').checked)timer=setInterval(load,15000);
 };
-window.addEventListener('resize',function(){if(DATA)draw()});
+Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'),function(b){
+  b.onclick=function(){
+    VIEW[b.dataset.reset]=null;
+    drawOne(DIMS.filter(function(d){return d.id===b.dataset.reset})[0]||DIMS[0]);
+  };
+});
+window.addEventListener('resize',function(){if(DATA)drawAll()});
 load();
 if($('auto').checked)timer=setInterval(load,15000);
 </script></body></html>`;
