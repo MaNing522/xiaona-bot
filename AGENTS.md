@@ -95,6 +95,7 @@ cd c:\QQBot; .\restart.bat
   2. `pm2 save` 写过 `~/.pm2/dump.pm2`。**改过 `pm2` 的启动参数/名字后必须重新 `pm2 save`**，否则重启还是旧配置。
   SnowLuma 是 Docker 容器，`RestartPolicy=unless-stopped`（`docker update --restart=unless-stopped snowluma` 可重设），所以 QQ 登录态随容器数据卷保留；ASR 由 `start.js` 每次启动自己拉起，不用单独守护。
   验证命令：`systemctl is-enabled pm2-root; pm2 list; docker inspect snowluma --format '{{.HostConfig.RestartPolicy.Name}}'; curl -s 127.0.0.1:8899/health`。
+- **「机器人老掉线」先查服务器 swap（2026-11-14 踩过）**：阿里云镜像在 `/etc/sysctl.d/99-apsara-sysctl.conf` 里把 `vm.swappiness` 设成 `0`，1.7G 内存的机器上用满后内核不肯换出匿名页，只能反复踢页缓存再从磁盘重读 —— 表现为 `vmstat` 的 `wa` 90%+、`b` 40+、load 40+（但单进程 CPU 都很低），QQ/SnowLuma 被拖到每分钟掉线一次（bot 日志刷 `[连接] 已断开，3秒后重连…`）。已改为 `60`，写在 `/etc/sysctl.conf` 和 `/etc/sysctl.d/99-zzzz-swappiness.conf`（后者排序在 apsara 之后，防止被覆盖）。排查三连：`cat /proc/sys/vm/swappiness`、`vmstat 1 3`、`free -m`（看 Swap 是否 `used` 恒为 0）。
 
 ## 6. 约定与文件地图
 
