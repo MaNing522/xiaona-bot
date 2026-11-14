@@ -48,3 +48,18 @@ export function verifyPassword(qq, pass) {
     const want = Buffer.from(a.hash, 'hex');
     return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
+
+/** 所有设过网页密码的 QQ（管理页用） */
+export function listAccounts() {
+    return Object.keys(loadAll().accounts || {});
+}
+
+/** 清除某个 QQ 的网页密码（管理页用）；返回是否真的删掉了 */
+export function deletePassword(qq) {
+    const all = loadAll();
+    const key = String(qq);
+    if (!all.accounts[key]) return false;
+    delete all.accounts[key];
+    writeJsonAtomic(FILE, all);
+    return true;
+}

@@ -352,6 +352,40 @@ export function answerCaptcha(qq, text) {
   };
 }
 
+/**
+ * 管理员在网页上直接绑定（跳过图形验证码，以管理身份操作）。
+ * 规则与 startBind 一致：不能是封禁中的 QQ、格式合法、同一 QQ 不重复、不超上限，
+ * 且该游戏ID 不能已经绑在别的 QQ 上。
+ * @returns {{ok:boolean, error?:string, ids?:string[]}}
+ */
+export function forceBind(qq, gameId) {
+  const key = String(qq || '').trim();
+  if (!/^\d{5,14}$/.test(key)) return { ok: false, error: 'QQ 号格式不对（5-14 位数字）' };
+  const ban = isBanned(key);
+  if (ban) return { ok: false, error: `QQ ${key} 处于封禁中，无法绑定` };
+  const id = String(gameId || '').trim();
+  if (!GAME_ID.test(id)) return { ok: false, error: '游戏ID 只能是 3-16 位的字母、数字或下划线' };
+  const ids = getGameIdsOf(key);
+  if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
+    return { ok: false, error: `QQ ${key} 已经绑定了 ${id}` };
+  }
+  const owner2 = getQqOf(id);
+  if (owner2 && owner2 !== key) {
+    return { ok: false, error: `游戏ID ${id} 已被 QQ ${owner2} 绑定，请先解绑` };
+  }
+  if (ids.length >= limitOf(key)) {
+    return { ok: false, error: `QQ ${key} 已绑满 ${limitOf(key)} 个游戏ID` };
+  }
+  const entry = data.qq[key] || (data.qq[key] = { ids: [], at: 0 });
+  if (!Array.isArray(entry.ids)) entry.ids = [];
+  entry.ids.push(id);
+  entry.at = Date.now();
+  save();
+  logger.info(`[绑定] 管理员给 QQ ${key} 直接绑定游戏ID ${id}（该QQ共 ${entry.ids.length} 个）`);
+  notifyChange([id]);
+  return { ok: true, ids: entry.ids.slice() };
+}
+
 /** 解绑：arg 为游戏ID，或 all/全部 清空 */
 export function unbind(qq, arg) {
   const key = String(qq);

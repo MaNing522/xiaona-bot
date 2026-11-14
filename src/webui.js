@@ -27,8 +27,9 @@ import { config, reloadConfig, CONFIG_PATH } from './config.js';
 import {
   bindingOverview, forceUnbind, clearUnbinds, banUser, unbanUser,
   deleteUnbind, restoreUnbind, getGameIdsOf, startBind, answerCaptcha, unbind as unbindSelf,
+  forceBind,
 } from './binding.js';
-import { hasPassword, setPassword, verifyPassword } from './webAccounts.js';
+import { hasPassword, setPassword, verifyPassword, listAccounts, deletePassword } from './webAccounts.js';
 import { ROOT } from './paths.js';
 import { ensureTls, CERT_FILE } from './tls.js';
 import { transcribe } from './asr.js';
@@ -261,13 +262,53 @@ function isBoundQq(qq) {
   try { return getGameIdsOf(qq).length > 0; } catch { return false; }
 }
 
-/** 能否用验证码登录：所有者、主人/管理员，或已绑定玩家 */
+/** 能否用验证码登录：所有者、主人/管理员，或已绑定玩家（还必须在桥接群里，见 groupMember） */
 function canLoginByCode(qq) {
   if (!/^\d{5,14}$/.test(qq)) return false;
   if (qq === String(process.env.BOT_OWNER || '').trim()) return true;
   const role = perm.role(qq);
   if (role === 'owner' || role === 'master' || role === 'admin') return true;
   return isBoundQq(qq);
+}
+
+// ---------- 群成员门槛：只有加入桥接群的用户才能登录面板 ----------
+const BRIDGE_GROUP = String(process.env.MC_BRIDGE_GROUP || '').trim();
+const MEMBER_TTL = 5 * 60 * 1000;   // 在群里：缓存 5 分钟，免得每次登录都打 OneBot
+const NON_MEMBER_TTL = 60 * 1000;   // 不在群里：缓存 1 分钟，方便刚进群的人尽快登录
+const memberCache = new Map();      // qq -> { ok, exp, error }
+
+/** 是否为管理级角色（能用 /admin 子页面） */
+function canAdmin(role) {
+  return role === 'owner' || role === 'master' || role === 'admin';
+}
+
+/**
+ * 查 QQ 是否在桥接群里（OneBot get_group_member_info）。
+ * 未配置群 / 机器人没连上 / 查询失败都按“不能登录”处理（fail-closed）。
+ * @returns {Promise<{ok:boolean, error?:string}>}
+ */
+async function groupMember(qq) {
+  if (!BRIDGE_GROUP) {
+    return { ok: false, error: '面板还没配置桥接群（MC_BRIDGE_GROUP），暂时无法登录，请联系主人' };
+  }
+  const now = Date.now();
+  const c = memberCache.get(qq);
+  if (c && now < c.exp) return c.ok ? { ok: true } : { ok: false, error: c.error };
+  const call = getSendMsg();
+  if (!call) return { ok: false, error: '机器人还没连上 QQ，暂时无法验证群成员身份，请稍后再试' };
+  try {
+    const info = await call('get_group_member_info', {
+      group_id: Number(BRIDGE_GROUP), user_id: Number(qq), no_cache: true,
+    });
+    const uid = info && (info.user_id != null ? info.user_id : (info.data && info.data.user_id));
+    const ok = String(uid == null ? '' : uid) === String(qq);
+    const error = ok ? '' : '只有在小钠的群里才能登录面板';
+    memberCache.set(qq, { ok, exp: now + (ok ? MEMBER_TTL : NON_MEMBER_TTL), error });
+    return ok ? { ok: true } : { ok: false, error };
+  } catch (e) {
+    logger.info(`[面板] 查询 QQ ${qq} 的群成员身份失败：${e && e.message ? e.message : e}`);
+    return { ok: false, error: '无法确认群成员身份（机器人可能没连上 QQ），请稍后再试' };
+  }
 }
 
 function parseCookies(req) {
@@ -457,6 +498,7 @@ button:disabled{opacity:.6;cursor:default}
     <button type="button" id="cbtn" style="background:var(--card2);color:var(--txt);border-color:#d9d9d9">验证码登录</button>
   </div>
   <div class="err" id="e">${msg}</div>
+  <div class="sub" style="margin-top:10px;text-align:center">只有加入小钠的群、并已绑定游戏ID的成员才能登录</div>
   <a class="alt" href="#" id="toggle">没有密码？用 QQ 验证码登录</a>
   <a class="alt" href="/">← 返回首页</a>
 </form>
@@ -494,6 +536,7 @@ function post(url, body, cb) {
 }
 function done(j) {
   if (j.role === 'owner') { location.href = '/'; return; }
+  if (j.role === 'master' || j.role === 'admin') { location.href = '/admin'; return; }
   location.href = '/me' + (j.needSetPassword ? '?setpwd=1' : '');
 }
 
@@ -616,8 +659,8 @@ button:disabled{opacity:.55;cursor:default}
 </div>
 
 <div class="row" style="justify-content:space-between">
+  ${canAdmin(sess.role) ? '<a class="hint" href="/admin">管理面板 →</a>' : '<span class="hint">小钠控制面板</span>'}
   <button id="logout" class="ghost">退出登录</button>
-  <span class="hint">小钠控制面板</span>
 </div>
 </div>
 <script>
@@ -694,6 +737,151 @@ $('savePwd').onclick=function(){
     $('oldWrap').style.display='block';
   });
 };
+$('logout').onclick=function(){post('/api/logout',{},function(){location.href='/login'})};
+load();
+</script></body></html>`;
+}
+
+/** 管理子页（主人/管理员）：管理所有人的网页账户与游戏绑定 */
+function adminPage(sess) {
+  const qq = String(sess.qq);
+  const roleName = { owner: '所有者', master: '主人', admin: '管理员' }[sess.role] || '管理员';
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>管理中心 · 小钠</title>
+<style>
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+*{box-sizing:border-box}
+body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:760px;margin:0 auto}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
+  background:linear-gradient(135deg,#1677ff,#4096ff)}
+h1{margin:0;font-size:17px}
+.sub{color:var(--sub);font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+.user{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+.uhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.uhead b{font-size:15px}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#eef4ff;color:var(--accent)}
+.tag.bad{background:#fff1f0;color:var(--danger)}
+.tag.off{background:#f2f3f5;color:var(--sub)}
+.ids{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:4px 10px;border-radius:999px;background:#f5f7fa;border:1px solid var(--line)}
+.chip button{border:0;background:transparent;color:var(--danger);cursor:pointer;font-size:14px;padding:0;line-height:1}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+input{min-height:38px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9;font-size:14px;background:#fff}
+input:focus{outline:none;border-color:var(--accent)}
+input[type=text]{flex:1;min-width:150px}
+button{min-height:38px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
+  color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
+button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button:disabled{opacity:.55;cursor:default}
+.hint{color:var(--sub);font-size:12px;line-height:1.6}
+.err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
+.ok{color:#16a34a}
+</style></head><body><div class="wrap">
+<div class="head"><div class="logo">🛠️</div><div><h1>管理中心</h1>
+  <div class="sub">${roleName} ${qq} · 管理所有人的账户与游戏绑定</div></div></div>
+
+<div class="card">
+  <div class="row" style="margin:0">
+    <input id="q" type="text" placeholder="搜索 QQ 或游戏ID">
+    <button id="refresh" class="ghost">刷新</button>
+  </div>
+  <div class="hint" style="margin-top:8px">登录门槛：QQ 必须在桥接群里。这里可以直接给人补绑/解绑游戏ID、清除网页密码（对方之后用验证码登录重设）。</div>
+  <div class="err" id="msg"></div>
+</div>
+
+<div id="list"><div class="hint">加载中…</div></div>
+
+<div class="row" style="justify-content:space-between">
+  <a class="hint" href="/me">← 我的账号</a>
+  <button id="logout" class="ghost">退出登录</button>
+</div>
+</div>
+<script>
+var $=function(i){return document.getElementById(i)};
+var USERS=[];
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function post(url,body,cb){
+  var xhr=new XMLHttpRequest();xhr.open('POST',url,true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    cb(xhr.status,j)};
+  xhr.onerror=function(){cb(0,{error:'网络错误'})};
+  xhr.send(JSON.stringify(body||{}));
+}
+function get(url,cb){
+  var xhr=new XMLHttpRequest();xhr.open('GET',url,true);
+  xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    cb(xhr.status,j)};
+  xhr.send();
+}
+function flash(t,ok){var m=$('msg');m.className='err'+(ok?' ok':'');m.textContent=t||''}
+function load(){
+  get('/api/admin/users',function(st,j){
+    if(st===401){location.href='/login';return}
+    if(!j.ok){flash(j.error||'加载失败');return}
+    USERS=j.users||[];render();
+  });
+}
+function render(){
+  var kw=($('q').value||'').trim().toLowerCase();
+  var list=USERS.filter(function(u){
+    if(!kw)return true;
+    return u.qq.toLowerCase().indexOf(kw)>=0||(u.ids||[]).some(function(id){return id.toLowerCase().indexOf(kw)>=0});
+  });
+  if(!list.length){$('list').innerHTML='<div class="hint">没有匹配的用户</div>';return}
+  $('list').innerHTML=list.map(function(u){
+    var ids=(u.ids||[]).map(function(id){
+      return '<span class="chip">'+esc(id)+'<button data-unbind="'+esc(u.qq)+'" data-id="'+esc(id)+'" title="解绑">×</button></span>';
+    }).join('')||'<span class="hint">还没有绑定</span>';
+    return '<div class="user">'
+      +'<div class="uhead"><b>QQ '+esc(u.qq)+'</b>'
+      +'<span class="tag">'+esc(u.roleName||u.role||'普通用户')+'</span>'
+      +(u.banned?'<span class="tag bad">封禁中'+(u.banReason?'：'+esc(u.banReason):'')+'</span>':'')
+      +'<span class="tag '+(u.hasPassword?'':'off')+'">'+(u.hasPassword?'已设密码':'未设密码')+'</span></div>'
+      +'<div class="ids">'+ids+'</div>'
+      +'<div class="row"><input type="text" placeholder="要补绑的游戏ID" data-gid="'+esc(u.qq)+'">'
+      +'<button class="ghost" data-bind="'+esc(u.qq)+'">绑定</button>'
+      +(u.hasPassword?'<button class="ghost" data-pwd="'+esc(u.qq)+'">清除密码</button>':'')
+      +'</div></div>';
+  }).join('');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-unbind]'),function(b){
+    b.onclick=function(){
+      if(!confirm('确认解绑 QQ '+b.dataset.unbind+' 的 '+b.dataset.id+' ？'))return;
+      post('/api/admin/unbind',{qq:b.dataset.unbind,gameId:b.dataset.id},function(st,r){
+        flash(r.ok?('已解绑 '+b.dataset.id):(r.error||'解绑失败'),!!r.ok);if(r.ok)load();
+      });
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-bind]'),function(b){
+    b.onclick=function(){
+      var qq=b.dataset.bind;
+      var inp=document.querySelector('[data-gid="'+qq+'"]');
+      var gid=(inp&&inp.value||'').trim();
+      if(!gid){flash('先填游戏ID');return}
+      b.disabled=true;
+      post('/api/admin/bind',{qq:qq,gameId:gid},function(st,r){
+        b.disabled=false;
+        flash(r.ok?('已给 QQ '+qq+' 绑定 '+gid):(r.error||'绑定失败'),!!r.ok);if(r.ok)load();
+      });
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-pwd]'),function(b){
+    b.onclick=function(){
+      if(!confirm('清除 QQ '+b.dataset.pwd+' 的网页密码？对方之后要用验证码登录重设。'))return;
+      post('/api/admin/password/clear',{qq:b.dataset.pwd},function(st,r){
+        flash(r.ok?'已清除密码':(r.error||'清除失败'),!!r.ok);if(r.ok)load();
+      });
+    };
+  });
+}
+$('q').oninput=render;
+$('refresh').onclick=load;
 $('logout').onclick=function(){post('/api/logout',{},function(){location.href='/login'})};
 load();
 </script></body></html>`;
@@ -826,9 +1014,9 @@ async function route(req, res, url) {
   // 主页：未登录给空白主页（只有右上角登录入口），登录后才给控制面板
   if (url.pathname === '/' || url.pathname === '/index.html') {
     const s = sessionOf(req);
-    // 非所有者不配进管理面板，统一去「我的账号」
+    // 非所有者不配进管理面板：管理员去 /admin，普通玩家去「我的账号」
     if (s && s.role !== 'owner') {
-      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      res.writeHead(302, { Location: canAdmin(s.role) ? '/admin' : '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
     const file = s ? WEB_DIR : HOME_FILE;
@@ -848,11 +1036,25 @@ async function route(req, res, url) {
     return sendHtml(res, 200, mePage(s));
   }
 
+  // 管理子页：主人 / 管理员管理所有人的账户与游戏绑定
+  if (url.pathname === '/admin' || url.pathname === '/admin.html') {
+    const s = sessionOf(req);
+    if (!s) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (!canAdmin(s.role)) {
+      res.writeHead(302, { Location: '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return sendHtml(res, 200, adminPage(s));
+  }
+
   // 登录页单独一个地址；已登录访问时直接回对应首页
   if (url.pathname === '/login' || url.pathname === '/login.html') {
     const s = sessionOf(req);
     if (s) {
-      res.writeHead(302, { Location: s.role === 'owner' ? '/' : '/me', 'Cache-Control': 'no-store' });
+      res.writeHead(302, { Location: s.role === 'owner' ? '/' : (canAdmin(s.role) ? '/admin' : '/me'), 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
@@ -960,10 +1162,17 @@ async function route(req, res, url) {
         // 所有者：网页改过密码就认账号密码，否则沿用 .env 的 WEBUI_PASSWORD
         const ok = hasPassword(qq) ? verifyPassword(qq, pass) : (PANEL_PASS ? safeEq(pass, PANEL_PASS) : false);
         if (!ok) bad = 'QQ 号或密码不对';
-      } else if (!hasPassword(qq)) {
-        bad = canLoginByCode(qq) ? '该 QQ 还没设置密码，请用「验证码登录」' : '该 QQ 没有绑定游戏ID，不能登录面板';
-      } else if (!verifyPassword(qq, pass)) {
-        bad = 'QQ 号或密码不对';
+      } else {
+        const gate = await groupMember(qq);
+        if (!gate.ok) {
+          bad = gate.error || '只有在小钠的群里才能登录面板';
+        } else if (!canLoginByCode(qq)) {
+          bad = '该 QQ 没有绑定游戏ID，不能登录面板';
+        } else if (!hasPassword(qq)) {
+          bad = '该 QQ 还没设置密码，请用「验证码登录」';
+        } else if (!verifyPassword(qq, pass)) {
+          bad = 'QQ 号或密码不对';
+        }
       }
     }
 
@@ -990,6 +1199,8 @@ async function route(req, res, url) {
     const qq = String(body.qq || '').trim();
     if (!/^\d{5,14}$/.test(qq)) return sendJSON(res, 400, { ok: false, error: '请输入 QQ 号' });
     if (!canLoginByCode(qq)) return sendJSON(res, 403, { ok: false, error: '该 QQ 没有绑定游戏ID，不能登录面板' });
+    const gate = await groupMember(qq);
+    if (!gate.ok) return sendJSON(res, 403, { ok: false, error: gate.error || '只有在小钠的群里才能登录面板' });
     const now = Date.now();
     const rec = codeSendLog.get(qq);
     if (rec && now - rec.at < QQ_CODE_SEND_GAP) {
@@ -1019,6 +1230,8 @@ async function route(req, res, url) {
     const code = String(body.code || '').trim();
     if (!/^\d{5,14}$/.test(qq)) return sendJSON(res, 400, { ok: false, error: '请输入 QQ 号' });
     if (!canLoginByCode(qq)) return sendJSON(res, 403, { ok: false, error: '该 QQ 没有绑定游戏ID，不能登录面板' });
+    const gate = await groupMember(qq);
+    if (!gate.ok) return sendJSON(res, 403, { ok: false, error: gate.error || '只有在小钠的群里才能登录面板' });
     const c = loginCodes.get(qq);
     if (!c || Date.now() > c.exp) return sendJSON(res, 401, { ok: false, error: '验证码已过期，请重新发送' });
     if (c.tries >= QQ_CODE_MAX_TRIES) { loginCodes.delete(qq); return sendJSON(res, 401, { ok: false, error: '验证码错太多次，请重新发送' }); }
@@ -1106,8 +1319,11 @@ async function route(req, res, url) {
   // 其余所有接口一律要求登录（含日志、授权列表、接管）
   const sess = sessionOf(req);
   if (!sess) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
-  // 权限隔离：只有所有者能碰管理接口；其他登录用户只能用自己的 /api/me/*
-  if (sess.role !== 'owner' && !url.pathname.startsWith('/api/me')) {
+  // 权限隔离：只有所有者能碰全部管理接口；主人/管理员额外可用 /api/admin/*，其他人只能用自己的 /api/me/*
+  const adminApi = url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/');
+  if (sess.role !== 'owner'
+    && !url.pathname.startsWith('/api/me')
+    && !(adminApi && canAdmin(sess.role))) {
     return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
   }
 
@@ -1159,6 +1375,76 @@ async function route(req, res, url) {
     if (!setPassword(sess.qq, newPass)) return sendJSON(res, 500, { ok: false, error: '保存失败' });
     logger.info(`[面板] QQ ${sess.qq} 已修改网页密码`);
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // ---------- 管理子页：管理所有人的账户与绑定（所有者/主人/管理员） ----------
+  if (adminApi) {
+    if (!canAdmin(sess.role)) return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
+
+    if (url.pathname === '/api/admin/users' && req.method === 'GET') {
+      const ov = bindingOverview();
+      const map = new Map();
+      const add = (qq) => {
+        const k = String(qq || '').trim();
+        if (!/^\d{5,14}$/.test(k)) return null;
+        if (!map.has(k)) {
+          map.set(k, {
+            qq: k, ids: [], role: perm.role(k), banned: false, banReason: '', hasPassword: hasPassword(k),
+          });
+        }
+        return map.get(k);
+      };
+      for (const b of ov.bound) {
+        const u = add(b.qq);
+        if (u) { u.ids = b.ids.slice(); u.banned = !!b.banned; u.banReason = b.banReason || ''; }
+      }
+      for (const b of ov.bans) {
+        const u = add(b.qq);
+        if (u) { u.banned = true; u.banReason = b.reason || ''; }
+      }
+      for (const q of listAccounts()) add(q);
+      for (const q of [perm.getMaster2(), ...perm.listExtraOwners(), ...perm.listExtraAdmins(), ...perm.listAuthorized()]) add(q);
+      const ROLE_NAME = { owner: '所有者', master: '主人', admin: '管理员', authorized: '授权用户', guest: '普通用户' };
+      const RANK = { owner: 0, master: 1, admin: 2, authorized: 3, guest: 4 };
+      const users = [...map.values()]
+        .map((u) => ({ ...u, roleName: ROLE_NAME[u.role] || u.role }))
+        .sort((a, b) => (RANK[a.role] - RANK[b.role]) || a.qq.localeCompare(b.qq));
+      return sendJSON(res, 200, { ok: true, group: BRIDGE_GROUP, users, maxPerQQ: ov.maxPerQQ });
+    }
+
+    if (url.pathname === '/api/admin/bind' && req.method === 'POST') {
+      const b = await readBody(req);
+      const target = String(b.qq || '').trim();
+      const gameId = String(b.gameId || '').trim();
+      const r = forceBind(target, gameId);
+      if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+      logger.info(`[面板] ${sess.qq}(${sess.role}) 给 QQ ${target} 绑定游戏ID ${gameId}`);
+      return sendJSON(res, 200, { ok: true, ids: r.ids });
+    }
+
+    if (url.pathname === '/api/admin/unbind' && req.method === 'POST') {
+      const b = await readBody(req);
+      const target = String(b.qq || '').trim();
+      const gameId = String(b.gameId || '').trim();
+      const r = forceUnbind(target, gameId);
+      if (!r.ok) return sendJSON(res, 400, { ok: false, error: r.error });
+      logger.info(`[面板] ${sess.qq}(${sess.role}) 解绑 QQ ${target} 的游戏ID ${gameId}`);
+      return sendJSON(res, 200, { ok: true, ids: r.ids });
+    }
+
+    if (url.pathname === '/api/admin/password/clear' && req.method === 'POST') {
+      const b = await readBody(req);
+      const target = String(b.qq || '').trim();
+      if (!/^\d{5,14}$/.test(target)) return sendJSON(res, 400, { ok: false, error: 'QQ 号格式不对' });
+      if (target === String(process.env.BOT_OWNER || '').trim()) {
+        return sendJSON(res, 403, { ok: false, error: '所有者的密码不能在这里清除' });
+      }
+      if (!deletePassword(target)) return sendJSON(res, 404, { ok: false, error: '该 QQ 没设置网页密码' });
+      logger.info(`[面板] ${sess.qq}(${sess.role}) 清除了 QQ ${target} 的网页密码`);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    return sendJSON(res, 404, { ok: false, error: 'api not found' });
   }
 
   if (url.pathname === '/api/status') {
