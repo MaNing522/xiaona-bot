@@ -449,8 +449,10 @@ public class BridgeServer {
             return;
         }
         List<String> names = strList(o, "players", MAX_TARGETS);
-        if (names.isEmpty()) { sendJson(ex, 400, Map.of("ok", false, "error", "players 不能为空")); return; }
+        List<String> ids = strList(o, "ids", MAX_TARGETS);
+        if (names.isEmpty() && ids.isEmpty()) { sendJson(ex, 400, Map.of("ok", false, "error", "players / ids 不能同时为空")); return; }
         boolean banned = !o.has("banned") || o.get("banned").isJsonNull() || o.get("banned").getAsBoolean();
+        if (banned && names.isEmpty()) { sendJson(ex, 400, Map.of("ok", false, "error", "封禁要用 players 传玩家名")); return; }
         // 原因只保留一行、限长，避免撑坏名单文件里的 JSON
         String reason0 = opt(o, "reason").replaceAll("[\\r\\n\\t]+", " ").trim();
         if (reason0.length() > 100) reason0 = reason0.substring(0, 100);
@@ -463,7 +465,18 @@ public class BridgeServer {
         String provider = BanService.currentId();
         try {
             BanProvider p = BanService.provider(s);
-            BanProvider.Result r = banned ? p.ban(names, reason) : p.unban(names);
+            BanProvider.Result r;
+            if (!banned && !ids.isEmpty()) {
+                // 按惩罚ID撤销（Paradigm）；不支持ID的来源明确报错，让调用方回退按名字解封
+                if (!p.supportsIdRevoke()) {
+                    sendJson(ex, 200, Map.of("ok", false, "provider", p.id(),
+                            "error", "当前封禁来源（" + p.id() + "）不支持按惩罚ID撤销，请按玩家名解封"));
+                    return;
+                }
+                r = p.revoke(ids, reason);
+            } else {
+                r = banned ? p.ban(names, reason) : p.unban(names);
+            }
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("ok", true);
             m.put("provider", p.id());
@@ -489,9 +502,9 @@ public class BridgeServer {
     }
 
     /**
-     * 读取服务器封禁名单（网页控制面板展示与解封用）。
-     * 返回 {@code {"ok":true,"provider":"vanilla|paradigm","bans":[{"name","uuid","reason","source","created","expires"}]}}，
-     * expires=0 表示永久封禁。读取失败时返回 {@code ok:false}，绝不拿空列表冒充"没有封禁"。
+     * 读取惩罚历史（网页「惩罚历史」与按ID撤销用）。
+     * 返回 {@code {"ok":true,"provider":"vanilla|paradigm","bans":[{"id","type","status","name","uuid","reason","source","created","expires","revokedAt"}]}}，
+     * expires=0 表示永久；id 是 Paradigm 的惩罚ID（原版为空）。读取失败时返回 {@code ok:false}，绝不拿空列表冒充"没有记录"。
      */
     private void handleBans(HttpExchange ex, String body) throws IOException {
         if (!toggles.enabled) { sendJson(ex, 403, Map.of("ok", false, "error", "整机已关闭")); return; }
@@ -502,14 +515,18 @@ public class BridgeServer {
         try {
             BanProvider p = BanService.provider(s);
             List<Map<String, Object>> list = new ArrayList<>();
-            for (BanProvider.BanRow r : p.list()) {
+            for (BanProvider.BanRow r : p.history()) {
                 Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", r.id());
+                m.put("type", r.type());
+                m.put("status", r.status());
                 m.put("name", r.name());
                 m.put("uuid", r.uuid());
                 m.put("reason", r.reason());
                 m.put("source", r.source());
                 m.put("created", r.created());
                 m.put("expires", r.expires());
+                m.put("revokedAt", r.revokedAt());
                 list.add(m);
             }
             Map<String, Object> m = new LinkedHashMap<>();

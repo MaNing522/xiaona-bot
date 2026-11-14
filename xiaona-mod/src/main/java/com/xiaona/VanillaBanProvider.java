@@ -42,12 +42,16 @@ final class VanillaBanProvider implements BanProvider {
             try {
                 for (BannedPlayerEntry e : server.getPlayerManager().getUserBanList().values()) {
                     list.add(new BanRow(
+                            "",
+                            "BAN",
+                            "ACTIVE",
                             e.getKey().name(),
                             String.valueOf(e.getKey().id()),
                             e.getReason() == null ? "" : e.getReason(),
                             e.getSource() == null ? "" : e.getSource(),
                             e.getCreationDate() == null ? 0 : e.getCreationDate().getTime(),
-                            e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime()));
+                            e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime(),
+                            0));
                 }
             } catch (Throwable t) {
                 BotState.error("[桥] 读取封禁名单失败：" + t.getMessage());
@@ -136,3 +140,4 @@ final class VanillaBanProvider implements BanProvider {
         return new Result(done, failed, errors);
     }
 }
+

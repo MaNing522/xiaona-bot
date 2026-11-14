@@ -39,6 +39,58 @@ final class ParadigmBanProvider implements BanProvider {
     }
 
     @Override
+    public List<BanRow> history() {
+        String provider = ParadigmStorage.provider(configDir);
+        Path db = ParadigmStorage.dbPath(configDir, provider);
+        return ParadigmDb.readHistory(db, 200);
+    }
+
+    @Override
+    public boolean supportsIdRevoke() {
+        return true;
+    }
+
+    /**
+     * 按惩罚ID撤销（Paradigm 官方推荐：/paradigm punishment revoke <id>）。
+     * 老版本没有该命令时，退回 /unban <id>（仅对 BAN 有效）。
+     */
+    @Override
+    public Result revoke(List<String> ids, String reason) {
+        List<String> done = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        Map<String, String> errors = new LinkedHashMap<>();
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                for (String id : ids) {
+                    if (!id.matches("[A-Za-z0-9_-]{3,64}")) {
+                        failed.add(id);
+                        errors.put(id, "惩罚ID格式不对");
+                        continue;
+                    }
+                    try {
+                        BanCommandRunner.run(server, BanCommandRunner.revokeCommand(id));
+                        done.add(id);
+                    } catch (BanException first) {
+                        try {
+                            BanCommandRunner.run(server, BanCommandRunner.unbanCommand(id));
+                            done.add(id);
+                        } catch (BanException second) {
+                            failed.add(id);
+                            errors.put(id, second.getMessage());
+                            BotState.error("[封禁] 撤销惩罚 " + id + " 失败：" + second.getMessage());
+                        }
+                    }
+                }
+            } finally {
+                finished.complete(null);
+            }
+        });
+        try { finished.get(5, TimeUnit.SECONDS); } catch (Exception ignore) { /* 超时按已处理的结果返回 */ }
+        return new Result(done, failed, errors);
+    }
+
+    @Override
     public Result ban(List<String> names, String reason) {
         List<String> done = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -107,3 +159,4 @@ final class ParadigmBanProvider implements BanProvider {
         return new Result(done, failed, errors);
     }
 }
+

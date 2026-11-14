@@ -50,12 +50,16 @@ final class VanillaBanProvider implements BanProvider {
                     GameProfile key = keyOf(e);
                     if (key == null) continue;
                     list.add(new BanRow(
+                            "",
+                            "BAN",
+                            "ACTIVE",
                             key.getName(),
                             String.valueOf(key.getId()),
                             e.getReason() == null ? "" : e.getReason(),
                             e.getSource() == null ? "" : e.getSource(),
                             e.getCreationDate() == null ? 0 : e.getCreationDate().getTime(),
-                            e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime()));
+                            e.getExpiryDate() == null ? 0 : e.getExpiryDate().getTime(),
+                            0));
                 }
             } catch (Throwable t) {
                 BotState.error("[桥] 读取封禁名单失败：" + t.getMessage());
@@ -168,3 +172,4 @@ final class VanillaBanProvider implements BanProvider {
                 ("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8)), name);
     }
 }
+

@@ -43,6 +43,11 @@ final class BanCommandRunner {
         return "pardon " + name;
     }
 
+    /** Paradigm 按惩罚ID撤销：/paradigm punishment revoke &lt;id&gt; */
+    static String revokeCommand(String punishmentId) {
+        return "paradigm punishment revoke " + punishmentId;
+    }
+
     /** 原因压成一行、限长，避免换行把命令拆断 */
     static String cleanReason(String reason) {
         String r = String.valueOf(reason == null ? "" : reason)
@@ -57,3 +62,4 @@ final class BanCommandRunner {
         return i < 0 ? cmd : cmd.substring(0, i);
     }
 }
+
