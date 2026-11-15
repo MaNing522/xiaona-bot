@@ -443,10 +443,9 @@ function loginPage(msg = '', needCaptcha = false) {
   --txt:#1f2329; --sub:#8a919f; --accent:#1677ff; --danger:#ff4d4f; --radius:10px;
 }
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:var(--bg);color:var(--txt);
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
-  gap:18px;padding:max(24px,5vh) 20px 28px}
 .card{width:360px;max-width:100%;padding:28px 26px;border-radius:var(--radius);
   background:var(--card);border:1px solid #f0f0f0;box-shadow:0 2px 12px rgba(0,0,0,.06)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
@@ -473,19 +472,7 @@ button:disabled{opacity:.6;cursor:default}
 .card{animation:xnUp .38s cubic-bezier(.2,.8,.25,1) both}
 .err:not(:empty){animation:xnUp .25s ease both}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-.kao{width:min(680px,100%);background:var(--card);border:1px solid #f0f0f0;border-radius:var(--radius);
-  padding:14px 20px;box-shadow:0 2px 12px rgba(0,0,0,.04);font-size:13px;line-height:1.7}
-.kao summary{cursor:pointer;font-weight:600;font-size:14px;outline:none}
-.kao[open] summary{margin-bottom:8px}
-.kao p{margin:7px 0}
-.kao ul,.kao ol{margin:6px 0 9px;padding-left:21px}
-.kao li{margin:2px 0}
-.kao a{color:var(--accent);text-decoration:none}
-.kao a:hover{text-decoration:underline}
 </style></head><body>
-<!-- 保持 Android 开放：倒计时横幅（脚本自带样式与 20 种语言，自动跟随浏览器语言） -->
-<script src="https://keepandroidopen.org/banner.js" defer></script>
-<div class="wrap">
 <form class="card" id="f">
   <div class="brand">
     <div class="logo">🤖</div>
@@ -519,39 +506,6 @@ button:disabled{opacity:.6;cursor:default}
   <a class="alt" href="#" id="toggle">没有密码？用 QQ 验证码登录</a>
   <a class="alt" href="/">← 返回首页</a>
 </form>
-<details class="kao" open>
-  <summary>为什么会看到页面顶部的横幅？</summary>
-  <div>
-    <p>因为 Google 于 2025 年 8 月宣布，从 2027 年起，未先向 Google 注册，将不再能为 Android 平台开发应用程序。注册内容包括但不限于：</p>
-    <ul>
-      <li>向 Google 支付费用</li>
-      <li>同意 Google 的条款及其条件</li>
-      <li>提供政府的身份证明</li>
-      <li>上传开发者的私人签名密钥证明</li>
-      <li>列出目前以及将来的应用标识符</li>
-    </ul>
-    <p><strong>对于我们最直观的影响是什么？</strong><br>你的梯子，你的手机 MC 启动器，相当一部分中国软件，都不被允许使用。</p>
-    <p>在 2026 年 3 月 19 日，Google 公布了在封锁生效之后，针对“高级用户”允许从未经验证的开发者应用安装的“高级流程”机制的详细信息。它是这样的：</p>
-    <ol>
-      <li>通过点击“关于手机”里的软件版本号七次打开开发者模式</li>
-      <li>在“设置 &gt; 系统”中，打开开发人员选项并下滑到“允许未经验证的软件包”</li>
-      <li>切换开关并在一个警告界面中答复，确认你没有被胁迫</li>
-      <li>输入你的设备解锁 PIN 码/密码</li>
-      <li>重启你的设备</li>
-      <li>等待 24 小时</li>
-      <li>在安全延长期结束时返回“未经验证的软件包”菜单</li>
-      <li>继续跳转另外的警告界面的警示并选择“暂时允许”（七天）或“永久允许”</li>
-      <li>在随后的警告界面中，确认你了解该风险</li>
-      <li>通过点击软件包管理程序中的“仍然安装”选项，你现在可以在设备上安装未经验证的软件包</li>
-    </ol>
-    <p>这个完整的流程是通过 Google Play 服务进行的，而不是 Android 系统，这意味着不用系统更新和任何用户同意，Google 可以随时修改、限制或移除它。</p>
-    <p>我的观点保持不变：一旦他们的封锁在 2027 年生效，所有来自未注册的开发者的应用将被封禁。</p>
-    <p>而且，即使 Google 能够保留上述安装方法，这一坨也远远超出了一个正常用户的能力范围。</p>
-    <p>详细资料可阅读 <a href="https://keepandroidopen.org/zh-CN/" target="_blank" rel="noopener">保持 Android 开放</a>，也可以 <a href="https://www.change.org/p/stop-google-from-limiting-apk-file-usage/" target="_blank" rel="noopener">签署 change.org 的请愿书</a>。</p>
-    <p>最后我想说：我操你妈的傻逼 Google。</p>
-  </div>
-</details>
-</div>
 <script>
 var $ = function (i) { return document.getElementById(i); };
 function fresh() { $('cap').src = '/api/captcha?t=' + Date.now(); }
