@@ -281,8 +281,8 @@ public class BridgeServer {
     }
 
     /**
-     * 位置热力图数据：玩家加载过的区块（永久记录，支持 since 时间筛选）。
-     * 返回 {@code {ok, since, players:[{name, dim, pts:[[chunkX,chunkZ],...], last:{x,z,t}}]}}。
+     * 位置热力图数据：玩家走过的区块（永久记录，支持 since 时间筛选）。
+     * 返回 {@code {ok, since, players:[{name, dim, pts:[[chunkX,chunkZ,次数,最近时间],...], last:{x,z,t}}]}}。
      */
     private void handlePositions(HttpExchange ex, String body) throws IOException {
         long since = 0;

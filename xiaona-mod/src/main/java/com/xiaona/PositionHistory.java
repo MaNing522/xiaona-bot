@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,13 +22,14 @@ import java.util.Map;
 /**
  * 玩家"加载过的区块"记录（网页「位置热力图」）。
  *
- * 不再按固定间隔记点：玩家每踏进一个新区块就记一条 <b>区块坐标</b>（同一区块只保留首次/最近时间），
- * 所以图上看到的是"他加载过哪些区块"，走多少画多少，不是按时间采样的轨迹点。
+ * 不再按固定间隔记点：玩家每踏进一个新区块就记一条 <b>区块坐标</b>（同一区块只保留首次/最近时间，
+ * 并在每次重新踏进来时累加"进入次数"），所以图上看到的是"他加载过哪些区块、各走过几次"，
+ * 不是按时间采样的轨迹点。
  * 数据永久保存在 {@code config/xiaona-heatmap.json}（定期落盘 + 停服时落盘），
  * HTTP 线程用 {@link #snapshot(long)} 按时间筛选读取。
  */
 public final class PositionHistory {
-    /** 一个玩家在某维度的记录：区块 key → [首次时间, 最近时间]，外加最后位置 */
+    /** 一个玩家在某维度的记录：区块 key → [首次时间, 最近时间, 进入次数]，外加最后位置 */
     private static final class Series {
         final Map<Long, long[]> chunks = new HashMap<>();
         double lastX;
@@ -39,6 +41,8 @@ public final class PositionHistory {
     private final Object lock = new Object();
     /** 玩家名 → 维度 → 记录 */
     private final Map<String, Map<String, Series>> data = new HashMap<>();
+    /** 玩家名 → 上次所在位置（维度|区块 key）：只有换了区块/维度才把新区块的次数 +1 */
+    private final Map<String, String> lastPlace = new HashMap<>();
     private final Path file = FabricLoader.getInstance().getConfigDir().resolve("xiaona-heatmap.json");
     private final long saveMs;
     private long lastSave = System.currentTimeMillis();
@@ -48,7 +52,7 @@ public final class PositionHistory {
         load();
     }
 
-    /** 服务端每个 tick 调用一次：只在新进入区块时记点，同一区块更新"最近时间" */
+    /** 服务端每个 tick 调用一次：同一区块只刷新"最近时间"，重新踏进来才累加次数 */
     public void onTick(MinecraftServer server) {
         if (server == null) return;
         long now = System.currentTimeMillis();
@@ -63,11 +67,18 @@ public final class PositionHistory {
                     int cx = ((int) Math.floor(x)) >> 4;
                     int cz = ((int) Math.floor(z)) >> 4;
                     long key = key(cx, cz);
+                    String place = dim + "|" + key;
                     Series s = data.computeIfAbsent(name, k -> new HashMap<>())
                             .computeIfAbsent(dim, k -> new Series());
                     long[] rec = s.chunks.get(key);
-                    if (rec == null) s.chunks.put(key, new long[]{now, now});
-                    else rec[1] = now;
+                    if (rec == null) {
+                        s.chunks.put(key, new long[]{now, now, 1});
+                    } else {
+                        rec[1] = now;
+                        // 从别的区块（或别的维度）重新踏进来才算"又走了一次"，站着不动不涨
+                        if (!place.equals(lastPlace.get(name))) rec[2] += 1;
+                    }
+                    lastPlace.put(name, place);
                     s.lastX = round(x);
                     s.lastZ = round(z);
                     s.lastT = now;
@@ -82,7 +93,7 @@ public final class PositionHistory {
     /** 停服前/定时落盘 */
     public void saveNow() {
         JsonObject root = new JsonObject();
-        root.addProperty("version", 1);
+        root.addProperty("version", 2);
         JsonObject players = new JsonObject();
         synchronized (lock) {
             for (Map.Entry<String, Map<String, Series>> pe : data.entrySet()) {
@@ -96,6 +107,7 @@ public final class PositionHistory {
                         q.add((int) k);
                         q.add(ce.getValue()[0]);
                         q.add(ce.getValue()[1]);
+                        q.add(ce.getValue()[2]);
                         arr.add(q);
                     }
                     dims.add(de.getKey(), arr);
@@ -115,7 +127,7 @@ public final class PositionHistory {
 
     /**
      * HTTP 线程读快照（只返回"最近时间 >= since"的区块）：
-     * {@code [{name, dim, pts:[[chunkX,chunkZ],...], last:{x,z,t}}]}
+     * {@code [{name, dim, pts:[[chunkX,chunkZ,次数,最近时间],...], last:{x,z,t}}]}
      */
     public List<Map<String, Object>> snapshot(long since) {
         List<Map<String, Object>> out = new ArrayList<>();
@@ -123,11 +135,13 @@ public final class PositionHistory {
             for (Map.Entry<String, Map<String, Series>> pe : data.entrySet()) {
                 for (Map.Entry<String, Series> de : pe.getValue().entrySet()) {
                     Series s = de.getValue();
-                    List<int[]> pts = new ArrayList<>();
+                    List<List<Object>> pts = new ArrayList<>();
                     for (Map.Entry<Long, long[]> ce : s.chunks.entrySet()) {
-                        if (ce.getValue()[1] < since) continue;
+                        long[] v = ce.getValue();
+                        if (v[1] < since) continue;
                         long k = ce.getKey();
-                        pts.add(new int[]{(int) (k >> 32), (int) k});
+                        // 次数和最近时间都给出去：网页按"最后走过的玩家"上色、按次数调深浅
+                        pts.add(Arrays.asList((int) (k >> 32), (int) k, v[2], v[1]));
                     }
                     if (pts.isEmpty()) continue;
                     Map<String, Object> o = new LinkedHashMap<>();
@@ -165,8 +179,10 @@ public final class PositionHistory {
                         if (!it.isJsonArray()) continue;
                         JsonArray q = it.getAsJsonArray();
                         if (q.size() < 4) continue;
+                        // 旧文件每条 4 项（没有次数），按走过 1 次补
+                        long cnt = q.size() >= 5 ? q.get(4).getAsLong() : 1;
                         s.chunks.put(key(q.get(0).getAsInt(), q.get(1).getAsInt()),
-                                new long[]{q.get(2).getAsLong(), q.get(3).getAsLong()});
+                                new long[]{q.get(2).getAsLong(), q.get(3).getAsLong(), Math.max(1, cnt)});
                     }
                     if (!s.chunks.isEmpty()) dims.put(de.getKey(), s);
                 }
