@@ -935,6 +935,10 @@ select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9
 .cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 canvas{display:block;width:100%;cursor:grab;user-select:none}
 canvas:active{cursor:grabbing}
+body.annotating canvas,body.annotating canvas:active{cursor:crosshair}
+.tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.tools button{min-height:30px;padding:0 12px;font-size:12.5px;margin:0}
+.tools button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .tip{position:absolute;display:none;pointer-events:none;background:rgba(31,35,41,.9);color:#fff;
   font-size:12px;padding:3px 8px;border-radius:6px;white-space:nowrap;z-index:2}
 /* 主区（三张地图）+ 右侧玩家图例栏 */
@@ -978,6 +982,14 @@ a{color:var(--accent);text-decoration:none}
   </div>
   <div class="meta" id="meta" style="margin-top:8px">加载中…</div>
   <div class="err" id="err"></div>
+  <div class="tools" id="modeBar">
+    <span class="hint">地图标记：</span>
+    <button class="ghost" data-mode="pan">拖动</button>
+    <button class="ghost" data-mode="point">标点</button>
+    <button class="ghost" data-mode="circle">圈画</button>
+    <button class="ghost" id="clearMarks">清除全部标记</button>
+    <span class="hint">标点=单击；圈画=按住拖出范围；右键点标记可删除（标记按维度分别保存）</span>
+  </div>
 </div>
 
 <div class="layout">
@@ -1019,6 +1031,16 @@ var DIMS=[
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
 var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null;
+// 地图标记（标点/圈画）：按维度存方块坐标，落 localStorage，缩放平移时跟着走
+var MODE='pan', DRAW=null, PREVIEW={}, MARKS={};
+try{MARKS=JSON.parse(localStorage.getItem('xnHeatMarks')||'{}')||{}}catch(e){MARKS={}}
+function saveMarks(){try{localStorage.setItem('xnHeatMarks',JSON.stringify(MARKS))}catch(e){}}
+function addMark(dim,m){
+  if(!MARKS[dim])MARKS[dim]=[];
+  MARKS[dim].push(m);
+  saveMarks();
+  drawOne(dimById(dim)||DIMS[0]);
+}
 var SINCE=Number(localStorage.getItem('xnHeatSince'));
 if(!isFinite(SINCE)||SINCE<0)SINCE=86400000;
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -1060,6 +1082,33 @@ function fitView(dim,list,w,h){
   var spanX=Math.max(128,maxX-minX), spanZ=Math.max(128,maxZ-minZ);
   var span=Math.max(spanX, spanZ*(w/h));
   return {cx:(minX+maxX)/2, cz:(minZ+maxZ)/2, span:span*1.12};
+}
+// 地图标记：橙色点 / 虚线圆；PREVIEW 是圈画过程中的预览
+function drawMarks(ctx,d,px,pz,t){
+  var ms=MARKS[d.id]||[];
+  ctx.save();
+  ms.forEach(function(m){
+    if(!m||!isFinite(m.x)||!isFinite(m.z))return;
+    if(m.t==='c'){
+      ctx.beginPath();ctx.arc(px(m.x),pz(m.z),Math.max(2,m.r*t.sx),0,Math.PI*2);
+      ctx.setLineDash([7,5]);ctx.lineWidth=2;ctx.strokeStyle='#ff7a45';ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();ctx.arc(px(m.x),pz(m.z),2.5,0,Math.PI*2);ctx.fillStyle='#ff7a45';ctx.fill();
+    }else{
+      var X=px(m.x),Z=pz(m.z);
+      ctx.beginPath();ctx.arc(X,Z,5,0,Math.PI*2);ctx.fillStyle='#ff7a45';ctx.fill();
+      ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
+      ctx.beginPath();ctx.moveTo(X-9,Z);ctx.lineTo(X+9,Z);ctx.moveTo(X,Z-9);ctx.lineTo(X,Z+9);
+      ctx.lineWidth=1.5;ctx.strokeStyle='rgba(255,122,69,.85)';ctx.stroke();
+    }
+  });
+  var pv=PREVIEW[d.id];
+  if(pv&&pv.t==='c'){
+    ctx.beginPath();ctx.arc(px(pv.x),pz(pv.z),Math.max(2,pv.r*t.sx),0,Math.PI*2);
+    ctx.setLineDash([7,5]);ctx.lineWidth=2;ctx.strokeStyle='#faad14';ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
 }
 function drawOne(d){
   var cv=$('cv-'+d.cid), wrap=cv.parentNode, tip=$('tip-'+d.cid);
@@ -1129,6 +1178,9 @@ function drawOne(d){
     ctx.fillStyle='#1f2329';ctx.fillText(p.name,X+9,Z);
   });
 
+  // 标点 / 圈画（跟着缩放平移走）
+  drawMarks(ctx,d,px,pz,TRANS[d.id]);
+
   // 悬停显示方块坐标
   cv.onmousemove=function(e){
     var t=TRANS[d.id];if(!t)return;
@@ -1142,12 +1194,40 @@ function drawOne(d){
     tip.style.left=left+'px';tip.style.top=top+'px';
   };
   cv.onmouseleave=function(){tip.style.display='none'};
-  // 拖动移动
+  // 左键：拖动移动 / 标点 / 圈画（按当前模式）
   cv.onmousedown=function(e){
     var vv=VIEW[d.id], t=TRANS[d.id];
-    if(!vv||!t)return;
-    DRAG={dim:d.id,x:e.clientX,y:e.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
+    if(!vv||!t||e.button===2)return;
+    if(MODE==='pan'){
+      DRAG={dim:d.id,x:e.clientX,y:e.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
+    }else{
+      var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
+      if(MODE==='point'){
+        addMark(d.id,{t:'p',x:wx,z:wz});
+      }else{
+        DRAW={dim:d.id,mode:'circle',rect:cv.getBoundingClientRect(),wx:wx,wz:wz};
+        PREVIEW[d.id]={t:'c',x:wx,z:wz,r:0};
+        drawOne(d);
+      }
+    }
     e.preventDefault();
+  };
+  // 右键：删掉光标附近（或圆环上）的标记
+  cv.oncontextmenu=function(e){
+    e.preventDefault();
+    var t=TRANS[d.id];if(!t)return;
+    var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
+    var ms=MARKS[d.id]||[], best=-1, bestD=Infinity;
+    ms.forEach(function(m,i){
+      var dx=(m.x-wx)*t.sx, dz=(m.z-wz)*t.sz, dist=Math.sqrt(dx*dx+dz*dz);
+      var hit=m.t==='c'?Math.abs(dist-m.r*t.sx)<10:dist<10;
+      if(hit&&dist<bestD){bestD=dist;best=i}
+    });
+    if(best>=0){
+      ms.splice(best,1);
+      saveMarks();
+      drawOne(d);
+    }
   };
   // 滚轮缩放（以光标为中心）
   cv.onwheel=function(e){
@@ -1165,6 +1245,15 @@ function drawOne(d){
   };
 }
 window.addEventListener('mousemove',function(e){
+  // 圈画：以按下点为圆心，拖到哪半径就到哪
+  if(DRAW&&DRAW.mode==='circle'){
+    var t=TRANS[DRAW.dim];if(!t)return;
+    var mx=e.clientX-DRAW.rect.left, my=e.clientY-DRAW.rect.top;
+    var wx=t.minX+mx/t.sx, wz=t.minZ+my/t.sz;
+    PREVIEW[DRAW.dim]={t:'c',x:DRAW.wx,z:DRAW.wz,r:Math.sqrt((wx-DRAW.wx)*(wx-DRAW.wx)+(wz-DRAW.wz)*(wz-DRAW.wz))};
+    drawOne(dimById(DRAW.dim));
+    return;
+  }
   if(!DRAG)return;
   var vv=VIEW[DRAG.dim];if(!vv)return;
   var perPx=DRAG.span/DRAG.w;
@@ -1172,7 +1261,36 @@ window.addEventListener('mousemove',function(e){
   vv.cz=DRAG.cz-(e.clientY-DRAG.y)*perPx;
   drawOne(dimById(DRAG.dim));
 });
-window.addEventListener('mouseup',function(){DRAG=null});
+window.addEventListener('mouseup',function(){
+  if(DRAW){
+    var dd=DRAW.dim, pv=PREVIEW[dd];
+    if(DRAW.mode==='circle'&&pv&&pv.r>=8){
+      MARKS[dd]=(MARKS[dd]||[]).concat([{t:'c',x:pv.x,z:pv.z,r:pv.r}]);
+      saveMarks();
+    }
+    PREVIEW[dd]=null;
+    DRAW=null;
+    drawOne(dimById(dd)||DIMS[0]);
+  }
+  DRAG=null;
+});
+function setMode(m){
+  MODE=m;
+  document.body.classList.toggle('annotating',m!=='pan');
+  Array.prototype.forEach.call(document.querySelectorAll('#modeBar [data-mode]'),function(b){
+    b.classList.toggle('on',b.dataset.mode===m);
+  });
+}
+Array.prototype.forEach.call(document.querySelectorAll('#modeBar [data-mode]'),function(b){
+  b.onclick=function(){setMode(b.dataset.mode)};
+});
+$('clearMarks').onclick=function(){
+  if(!confirm('清空所有维度上的标点和圈画？'))return;
+  MARKS={};
+  saveMarks();
+  drawAll();
+};
+setMode('pan');
 function drawAll(){DIMS.forEach(drawOne)}
 function relTime(t){
   var s=Math.max(0,Date.now()-Number(t||0))/1000;
@@ -1198,18 +1316,33 @@ function renderLegend(){
   });
   names.sort();
   if(!names.length){$('legend').innerHTML='<span class="hint">还没有数据</span>';return;}
+  // 在线名单带维度（/bridge/players 的 dim）；兼容旧结构（纯名字数组）
   var online={};
-  (DATA.online||[]).forEach(function(n){online[String(n).toLowerCase()]=1});
+  (DATA.online||[]).forEach(function(o){
+    if(o&&typeof o==='object'&&o.name)online[String(o.name).toLowerCase()]=o.dim||'';
+    else if(o!=null)online[String(o).toLowerCase()]=null;
+  });
   $('legend').innerHTML=names.map(function(n){
-    var g=byName[n], off=!!HIDDEN[n], isOn=!!online[String(n).toLowerCase()];
+    var g=byName[n], off=!!HIDDEN[n];
+    var isOn=Object.prototype.hasOwnProperty.call(online,String(n).toLowerCase());
     var dims=Object.keys(g.dims).map(dimName).join(' / ');
-    var st=isOn?'<span class="st on">在线</span>'
-      :'<span class="st off">离线'+(g.last&&g.last.t?' · '+relTime(g.last.t):'')+'</span>';
+    // 在线 = 当前所在维度（旧版 mod 没返回 dim 时回退到最后一条记录）；离线 = 最后下线的维度
+    var liveDim=isOn&&online[String(n).toLowerCase()]?dimName(online[String(n).toLowerCase()]):'';
+    var lastDim=g.last&&g.last.dim?dimName(g.last.dim):'';
+    var curDim=liveDim||lastDim;
+    var st;
+    if(isOn){
+      st='<span class="st on">在线'+(curDim?' · '+esc(curDim):'')+'</span>';
+    }else{
+      st='<span class="st off">离线'+(curDim?' · '+esc(curDim):'')
+        +(g.last&&g.last.t?' · '+relTime(g.last.t):'')+'</span>';
+    }
+    var line2=(dims?dims+' · ':'')+g.chunks+' 区块';
     return '<div class="chip'+(off?' off':'')+'" data-k="'+esc(n)+'">'
       +'<div class="ln1"><span class="dot" style="background:'+colorFor(n)+'"></span>'
       +'<span class="nm">'+esc(n)+'</span>'+st
       +'<a href="#" class="find" data-find="'+esc(n)+'">定位</a></div>'
-      +'<div class="ln2">'+esc(dims)+' · '+g.chunks+' 区块</div></div>';
+      +'<div class="ln2">'+esc(line2)+'</div></div>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('#legend [data-k]'),function(el){
     el.onclick=function(ev){
@@ -1801,10 +1934,10 @@ async function route(req, res, url) {
       if (d.unit !== 'chunk') {
         return sendJSON(res, 502, { ok: false, error: '服务器 mod 版本过旧（需要 2.12.0），请先把新版 mod 放到 MC 服务器' });
       }
-      // 在线名单拿不到不影响热力图，图例按「离线」显示即可
+      // 在线名单带维度：图例里显示「在线 · 主世界」
       let online = [];
       try {
-        online = (await getPlayers()).map((p) => p.name);
+        online = (await getPlayers()).map((p) => ({ name: p.name, dim: p.dim || '' }));
       } catch { /* 忽略 */ }
       return sendJSON(res, 200, { ok: true, since, players: d.players, online });
     } catch (e) {
