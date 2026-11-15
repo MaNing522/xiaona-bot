@@ -702,6 +702,7 @@ function gcRender(){
   $('gcfgNum').innerHTML=html;
   // 功能后端：联网搜索 / 图像识别 / MC 服务器连接模式
   const s=c.search||{}, v=c.vision||{}, b=c.bridge||{}, ai=c.ai||{}, mem=c.memory||{};
+  const tts=c.tts||{}, asr=c.asr||{};
   const bridgeMode = Object.prototype.hasOwnProperty.call(BRIDGE_NAMES, String(b.mode||'')) ? String(b.mode||'') : '';
   $('gcfgFunc').innerHTML=
     '<h2 style="font-size:14px;margin:18px 0 4px">联网搜索</h2>'+
@@ -714,6 +715,27 @@ function gcRender(){
     '<div><label>模型名（可选，仅自定义）</label><input id="gcVisionModel" type="text" value="'+esc(v.customModel||'')+'" placeholder="留空由接口决定"></div></div>'+
     '<label>自定义接口地址（仅 custom 后端使用）</label><input id="gcVisionUrl" type="text" value="'+esc(v.customUrl||'')+'" placeholder="https://…/v1/chat/completions">'+
     '<div class="hint">自定义识别接口需为 OpenAI 兼容 /chat/completions 且支持 image_url 图片输入；密钥放 .env 的 VISION_CUSTOM_KEY（留空则免密钥）。</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">语音合成（TTS）</h2>'+
+    '<div class="row">'+
+    '<div><label>TTS 后端</label><select id="gcTtsProv"><option value="">自动（有小米 Key 用小米）</option><option value="xiaomi">小米 MiMo</option><option value="edge">微软 Edge</option></select></div>'+
+    '<div><label>小米音色</label><input id="gcTtsXv" type="text" value="'+esc(tts.xiaomiVoice||'')+'" placeholder="冰糖 / 茉莉 / 苏打 / 白桦"></div>'+
+    '</div>'+
+    '<div class="row" style="grid-template-columns:1fr 1fr 1fr">'+
+    '<div><label>Edge 音色</label><input id="gcTtsEv" type="text" value="'+esc(tts.voice||'')+'" placeholder="zh-CN-XiaoxiaoNeural"></div>'+
+    '<div><label>Edge 语速</label><input id="gcTtsRate" type="text" value="'+esc(tts.rate||'')+'" placeholder="+8%"></div>'+
+    '<div><label>Edge 音量</label><input id="gcTtsVol" type="text" value="'+esc(tts.volume||'')+'" placeholder="+0%"></div>'+
+    '</div>'+
+    '<div class="hint">留空 = 用 .env（TTS_PROVIDER / TTS_XIAOMI_VOICE / TTS_VOICE / TTS_RATE / TTS_VOLUME）。小米 TTS 复用 MIMO_API_KEY；唱歌要让文本以 (唱歌) 开头。</div>'+
+    '<h2 style="font-size:14px;margin:18px 0 4px">语音识别（ASR）</h2>'+
+    '<div class="row">'+
+    '<div><label>识别后端</label><select id="gcAsrProv"><option value="mimo">小米 MiMo（失败自动降本地）</option><option value="local">本地 sherpa-onnx</option><option value="custom">自定义接口</option></select></div>'+
+    '<div><label>识别语言</label><select id="gcAsrLang"><option value="auto">自动</option><option value="zh">中文</option><option value="en">英文</option></select></div>'+
+    '</div>'+
+    '<div class="row">'+
+    '<div><label>自定义识别地址（仅 custom）</label><input id="gcAsrUrl" type="text" value="'+esc(asr.customUrl||'')+'" placeholder="https://…/v1/audio/transcriptions"></div>'+
+    '<div><label>自定义模型名（仅 custom）</label><input id="gcAsrModel" type="text" value="'+esc(asr.customModel||'')+'" placeholder="whisper-1"></div>'+
+    '</div>'+
+    '<div class="hint">小米识别复用 .env 的 MIMO_API_KEY（模型 mimo-v2.5-asr，只吃 wav/mp3，程序会自动把 QQ 语音转成 wav）；没 Key / 调用失败 / 返回空时自动降级到本地 sherpa-onnx。自定义接口密钥仍在 .env 的 ASR_CUSTOM_KEY（或 config.json 的 asr.customKey）。</div>'+
     '<h2 style="font-size:14px;margin:18px 0 4px">MC 服务器连接</h2>'+
     '<div class="row"><div><label>连接模式</label><select id="gcBridge"><option value="">.env 地址（默认）</option><option value="off">无连接</option><option value="loopback">本地回环</option><option value="lan">局域网</option><option value="public">公网地址</option></select></div>'+
     '<div><label>端口（回环 / 局域网用）</label><input id="gcBridgePort" type="number" min="1" max="65535" step="1" value="'+((Number(b.port)>=1&&Number(b.port)<=65535)?Number(b.port):'')+'" placeholder="25565"></div></div>'+
@@ -737,6 +759,10 @@ function gcRender(){
   $('gcBridge').value=bridgeMode;
   $('gcThink').value=String(ai.thinking!==false);
   $('gcEffort').value=['auto','low','high','max'].includes(String(ai.reasoningEffort||'auto'))?String(ai.reasoningEffort||'auto'):'auto';
+  // 语音：后端 / 语言只认支持的值（空 = 自动）
+  $('gcTtsProv').value=['xiaomi','edge'].includes(String(tts.provider||''))?String(tts.provider||''):'';
+  $('gcAsrProv').value=['mimo','local','custom'].includes(String(asr.provider||'mimo'))?String(asr.provider||'mimo'):'mimo';
+  $('gcAsrLang').value=['auto','zh','en'].includes(String(asr.language||'auto'))?String(asr.language||'auto'):'auto';
   // QQ 空间自动说说
   const qz=c.qzone||{};
   $('qzOn').value=String(qz.enabled!==false);
@@ -917,6 +943,10 @@ $('gcSave').onclick=async()=>{  const body={chat:{botReply:$('gcReply').value===
     rateLimit:{},cooldown:{},engage:{},bind:{},
     search:{provider:$('gcSearch').value,limit:Number($('gcSearchLimit').value)||5,customUrl:$('gcSearchUrl').value.trim()},
     vision:{provider:$('gcVision').value,customUrl:$('gcVisionUrl').value.trim(),customModel:$('gcVisionModel').value.trim()},
+    tts:{provider:$('gcTtsProv').value,xiaomiVoice:$('gcTtsXv').value.trim(),voice:$('gcTtsEv').value.trim(),
+      rate:$('gcTtsRate').value.trim(),volume:$('gcTtsVol').value.trim()},
+    asr:{provider:$('gcAsrProv').value,language:$('gcAsrLang').value,
+      customUrl:$('gcAsrUrl').value.trim(),customModel:$('gcAsrModel').value.trim()},
     bridge:{mode:$('gcBridge').value,port:Number($('gcBridgePort').value)||25565,lanHost:$('gcBridgeLan').value.trim(),publicUrl:$('gcBridgePub').value.trim()},
     ai:{thinking:$('gcThink').value==='true',reasoningEffort:$('gcEffort').value,
       contextMessages:Number($('gcCtx').value)||20,temperature:$('gcTemp').value===''?0.7:Number($('gcTemp').value)},

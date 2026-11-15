@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { parseFixList, fixText, transcribe } from '../src/asr.js';
+import { config } from '../src/config.js';
 
 describe('parseFixList', () => {
   it('没写等号的项算作目标名的错写', () => {
@@ -61,24 +62,29 @@ describe('fixText', () => {
 });
 
 describe('transcribe（上传给 FunASR 的请求）', () => {
-  let savedModel, savedUrl, savedEnabled, file;
+  let savedModel, savedUrl, savedEnabled, savedKey, savedProvider, file;
 
   beforeEach(() => {
     savedModel = process.env.ASR_MODEL;
     savedUrl = process.env.ASR_URL;
     savedEnabled = process.env.ASR_ENABLED;
+    savedKey = process.env.MIMO_API_KEY;
+    savedProvider = config().asr.provider;
     delete process.env.ASR_MODEL;      // 用默认模型名
     delete process.env.ASR_URL;        // 走默认地址
+    delete process.env.MIMO_API_KEY;   // 这组用例默认不用小米
     process.env.ASR_ENABLED = 'true';
+    config().asr.provider = 'local';
     file = path.join(os.tmpdir(), `asr-test-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`);
     fs.writeFileSync(file, Buffer.from('RIFF0000WAVEfmt '));
   });
 
   afterEach(() => {
-    for (const [k, v] of [['ASR_MODEL', savedModel], ['ASR_URL', savedUrl], ['ASR_ENABLED', savedEnabled]]) {
+    for (const [k, v] of [['ASR_MODEL', savedModel], ['ASR_URL', savedUrl], ['ASR_ENABLED', savedEnabled], ['MIMO_API_KEY', savedKey]]) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+    config().asr.provider = savedProvider;
     try { fs.unlinkSync(file); } catch { /* 可能已删 */ }
     vi.unstubAllGlobals();
   });
@@ -104,5 +110,42 @@ describe('transcribe（上传给 FunASR 的请求）', () => {
 
     const t = await transcribe({ path: file, format: 'wav' });
     expect(t).toBeNull();
+  });
+
+  it('provider=mimo：优先走小米 V2.5-ASR（input_audio），结果做同音纠正', async () => {
+    config().asr.provider = 'mimo';
+    process.env.MIMO_API_KEY = 'sk-test';
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, opt) => {
+      calls.push({ url: String(url), body: typeof opt.body === 'string' ? JSON.parse(opt.body) : null });
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '小娜你好' } }] }) };
+    }));
+
+    const t = await transcribe({ path: file, format: 'wav' });
+    expect(t).toBe('小钠你好');
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toContain('xiaomimimo.com');
+    expect(calls[0].body.model).toBe('mimo-v2.5-asr');
+    const part = calls[0].body.messages[0].content[0];
+    expect(part.type).toBe('input_audio');
+    expect(part.input_audio.data.startsWith('data:audio/wav;base64,')).toBe(true);
+  });
+
+  it('provider=mimo：小米失败时自动降级到本地识别', async () => {
+    config().asr.provider = 'mimo';
+    process.env.MIMO_API_KEY = 'sk-test';
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('xiaomimimo.com')) {
+        return { ok: false, status: 500, text: async () => 'boom' };
+      }
+      return { ok: true, status: 200, json: async () => ({ text: '小娜在吗' }) };
+    }));
+
+    const t = await transcribe({ path: file, format: 'wav' });
+    expect(t).toBe('小钠在吗');
+    expect(calls.length).toBe(2);
+    expect(calls[1]).toContain('127.0.0.1:8899');
   });
 });

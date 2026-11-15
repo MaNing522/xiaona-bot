@@ -30,6 +30,7 @@ import WebSocket from 'ws';
 import { logger } from './logger.js';
 import { generateSecMsGec } from './edgeDrm.js';
 import { ROOT } from './paths.js';
+import { config } from './config.js';
 
 const VOICE_DIR = path.join(ROOT, 'voice_cache');
 if (!fs.existsSync(VOICE_DIR)) fs.mkdirSync(VOICE_DIR, { recursive: true });
@@ -55,25 +56,28 @@ const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
 // 本机时钟若比服务器慢/快，Sec-MS-GEC 会被判过期（403）。拿到服务器 Date 后校准一次。
 let clockSkewMs = 0;
 
+/** config.json 的 tts 段（网页「全局设置」可改，热加载；留空回退 .env） */
+function ttsCfg() { return (config().tts) || {}; }
+
 function voiceName() {
-    const v = String(process.env.TTS_VOICE || DEFAULT_VOICE).trim();
+    const v = String(ttsCfg().voice || process.env.TTS_VOICE || DEFAULT_VOICE).trim();
     // 音色名要拼进 SSML，只放行标准短名，避免被塞进别的东西
     return /^[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+Neural$/.test(v) ? v : DEFAULT_VOICE;
 }
-function rateValue() { return String(process.env.TTS_RATE || DEFAULT_RATE).trim(); }
+function rateValue() { return String(ttsCfg().rate || process.env.TTS_RATE || DEFAULT_RATE).trim(); }
 /** 音量（SSML prosody volume）：相对默认音量的增减，如 +50% / -30%；Edge 一般只接受 -100%~+100% */
-function volumeValue() { return String(process.env.TTS_VOLUME || DEFAULT_VOLUME).trim(); }
+function volumeValue() { return String(ttsCfg().volume || process.env.TTS_VOLUME || DEFAULT_VOLUME).trim(); }
 
-/** 当前 TTS 后端：显式配了 TTS_PROVIDER 就听它的，否则有小米 key 就用小米，没有就回退 Edge */
+/** 当前 TTS 后端：网页/配置优先，其次 .env；都没配时按有没有小米 key 自动选择 */
 export function ttsProvider() {
-    const p = String(process.env.TTS_PROVIDER || '').trim().toLowerCase();
+    const p = String(ttsCfg().provider || process.env.TTS_PROVIDER || '').trim().toLowerCase();
     if (p === 'xiaomi' || p === 'edge') return p;
     return String(process.env.MIMO_API_KEY || '').trim() ? 'xiaomi' : 'edge';
 }
 
 /** 小米音色名（中文名直接传，如 冰糖 / 茉莉） */
 function xiaomiVoice() {
-    const v = String(process.env.TTS_XIAOMI_VOICE || DEFAULT_XIAOMI_VOICE).trim().replace(/[\r\n'"]/g, '');
+    const v = String(ttsCfg().xiaomiVoice || process.env.TTS_XIAOMI_VOICE || DEFAULT_XIAOMI_VOICE).trim().replace(/[\r\n'"]/g, '');
     return v || DEFAULT_XIAOMI_VOICE;
 }
 

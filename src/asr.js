@@ -4,24 +4,32 @@
 // 用**本地语音识别服务**：QQ 语音是 OneBot 的 record 段（一段音频文件），
 // AI 读不懂音频，先送本地服务转成文字，再拼进给模型看的消息里。
 //
-// 默认后端是 sherpa-onnx（Node 实现，见 src/asrSherpa.js，由 start.js 自动拉起），
-// 也可以用 ASR_ENGINE=funasr 换回 FunASR；两者都是 OpenAI 兼容接口：
+// 默认后端是**小米 MiMo ASR**（复用 .env 的 MIMO_API_KEY，模型 mimo-v2.5-asr）：
+//    POST https://api.xiaomimimo.com/v1/chat/completions
+//    messages 里放 input_audio 的 data URL（只支持 wav / mp3），返回 choices[0].message.content。
+// 没 Key、调用失败、返回空 → 自动降级到**本地 sherpa-onnx**
+// （Node 实现，见 src/asrSherpa.js，由 start.js 自动拉起）。
+// 也可在 config.json 把 asr.provider 设成 local（只用本地）或 custom（自定义接口）。
+// 本地 / 自定义都是 OpenAI 兼容接口：
 //    POST http://127.0.0.1:8899/v1/audio/transcriptions（multipart 上传 file），
 //    返回 JSON 的 text 字段即为识别结果。
 //
 // 两个「补偿」都在这里做，因为语音识别本身不可靠：
-//   1) 转码：QQ 语音多半是 amr / silk，sherpa-onnx 吃不下。挂上 setAudioConverter 后，
+//   1) 转码：QQ 语音多半是 amr / silk，小米和 sherpa 都吃不下。挂上 setAudioConverter 后，
 //      先让 SnowLuma 用自己的 get_record(out_format=wav) 转成 wav 再上传（SnowLuma 内部带 silk 解码）。
 //   2) 同音纠正：模型不认字，常把「小钠」听成「小娜」。按 config.json 的 asr 段把错字改回来，
 //      否则既读着别扭，也匹配不上触发关键词（见 fixText）。
 //
 // 相关 .env（都可留空用默认值）：
+//   MIMO_API_KEY      小米 MiMo Key（ASR 与 TTS 共用）
+//   MIMO_ASR_URL      小米 ASR 地址，默认 https://api.xiaomimimo.com/v1/chat/completions
+//   MIMO_ASR_MODEL    小米 ASR 模型，默认 mimo-v2.5-asr
 //   ASR_URL    本地接口地址，默认 http://127.0.0.1:8899/v1/audio/transcriptions
 //   ASR_MODEL  本地模型名（仅 FunASR 后端有意义）
 //   ASR_TOKEN  本地服务要求鉴权时带 Authorization: Bearer <token>
 //   ASR_ENABLED=false 可整体关闭语音识别（默认开）
 //   ASR_CUSTOM_URL / ASR_CUSTOM_KEY / ASR_CUSTOM_MODEL 自定义接口的兜底
-// 相关 config.json：asr.provider / customUrl / customModel / customKey / language，
+// 相关 config.json：asr.provider（mimo / local / custom）/ customUrl / customModel / customKey / language，
 //   以及 asr.canonicalName / asr.homophones（同音纠正表，见下）
 // 服务没起 / 识别失败时一律返回 null，语音消息仍按 [语音] 占位，不影响其它功能。
 // ============================================================
@@ -39,18 +47,36 @@ const DEFAULT_URL = 'http://127.0.0.1:8899/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'sensevoice';
 const ASR_TIMEOUT_MS = 20000;
 
-/** 服务原生吃得下的格式；其余（amr/silk/wma/spx…）先转码成 wav */
+// 小米 MiMo ASR（OpenAI 兼容的 chat/completions，音频放 input_audio 的 data URL）
+const MIMO_URL = String(process.env.MIMO_ASR_URL || 'https://api.xiaomimimo.com/v1/chat/completions').trim();
+const MIMO_MODEL = String(process.env.MIMO_ASR_MODEL || 'mimo-v2.5-asr').trim();
+const MIMO_TIMEOUT_MS = 30000;
+const MIMO_EXT = new Set(['wav', 'mp3']);
+
+/** 小米只吃 wav/mp3；其余（amr/silk/flac/m4a…）先转码成 wav */
 const NATIVE_EXT = new Set(['wav', 'mp3', 'flac', 'm4a', 'mp4', 'aac', 'ogg', 'opus']);
 
 function endpoint() { return String(process.env.ASR_URL || DEFAULT_URL).trim(); }
 function modelName() { return String(process.env.ASR_MODEL || DEFAULT_MODEL).trim(); }
+function mimoKey() { return String(process.env.MIMO_API_KEY || '').trim(); }
 
 /** config.json 的 asr 段（热加载，改完下一条语音就生效） */
 function asrCfg() { return (config().asr) || {}; }
 
-/** 识别后端：local（本地服务）| custom（自定义 OpenAI 兼容接口） */
+/**
+ * 识别后端：mimo（小米，失败降本地）| local（本地服务）| custom（自定义 OpenAI 兼容接口）。
+ * 默认 mimo —— 网页「全局设置」可改，热加载生效。
+ */
 export function asrProvider() {
-    return String(asrCfg().provider || '').toLowerCase() === 'custom' ? 'custom' : 'local';
+    const p = String(asrCfg().provider || '').toLowerCase();
+    if (p === 'custom' || p === 'local' || p === 'mimo') return p;
+    return 'mimo';
+}
+
+/** 小米 ASR 的语种参数（只认 auto / zh / en） */
+function mimoLanguage() {
+    const v = String(asrCfg().language || 'auto').trim().toLowerCase();
+    return ['auto', 'zh', 'en'].includes(v) ? v : 'auto';
 }
 
 /** custom 后端的地址/模型/密钥（config.json 优先，缺了再看 .env） */
@@ -67,7 +93,10 @@ function customSettings() {
 /** 是否启用语音识别（默认开；ASR_ENABLED=false 关闭） */
 export function asrEnabled() {
     if (String(process.env.ASR_ENABLED || 'true') === 'false') return false;
-    if (asrProvider() === 'custom') return !!customSettings().url;
+    const p = asrProvider();
+    if (p === 'custom') return !!customSettings().url;
+    // mimo 没 Key 时会降本地，所以本地地址在就算启用
+    if (p === 'mimo') return !!mimoKey() || !!endpoint();
     return !!endpoint();
 }
 
@@ -201,34 +230,90 @@ export function transcribe(data) {
     return transcribeCache.get(data);
 }
 
-async function doTranscribe(data) {
-    if (!asrEnabled()) return null;
+/** 降级/失败日志限流：一条语音失败一次就够，别每次刷屏 */
+let lastFallbackWarnAt = 0;
+function warnThrottled(msg) {
+    const now = Date.now();
+    if (now - lastFallbackWarnAt < 60000) return;
+    lastFallbackWarnAt = now;
+    logger.warn(msg);
+}
 
-    // QQ 语音多是非原生格式（amr/silk 且常查不出扩展名）：优先让 SnowLuma 转成 wav，
-    // 转不动再退回原格式上传（此时多半会被服务端拒绝，返回 null → [语音] 占位）。
+/** 读音频：目标格式吃不下就先转码成 wav，转不动退回原格式 */
+async function loadAudio(data, wanted) {
     const ext = extOf(data);
     let audio = null;
-    if (!NATIVE_EXT.has(ext)) audio = await convertToWav(data);
+    if (!wanted.has(ext)) audio = await convertToWav(data);
     if (!audio) audio = await resolveAudio(data);
+    if (!audio || !audio.buf.length) return null;
+    return { buf: audio.buf, ext: audio.ext || ext || 'wav' };
+}
 
-    if (!audio || !audio.buf.length) {
-        logger.debug('[ASR] 拿不到语音音频（record 段里没有可用的 url/path）');
+/** 小米 MiMo ASR：成功返回文字，没 Key / 失败 / 空结果返回 null（调用方降级本地） */
+async function transcribeMimo(audio) {
+    const key = mimoKey();
+    if (!key) {
+        warnThrottled('[ASR] 没配 MIMO_API_KEY，语音识别直接用本地服务');
         return null;
     }
-    const useExt = audio.ext || ext || 'wav';
-    const provider = asrProvider();
-    const custom = provider === 'custom' ? customSettings() : null;
-    const url = custom ? custom.url : endpoint();
+    const ext = audio.ext === 'mp3' ? 'mp3' : 'wav';
+    const mime = ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+    const body = {
+        model: MIMO_MODEL,
+        messages: [{
+            role: 'user',
+            content: [{
+                type: 'input_audio',
+                // 只传 Base64 时 format 必填；这里 data URL 与 format 一起给，最稳
+                input_audio: { data: `data:${mime};base64,${audio.buf.toString('base64')}`, format: ext },
+            }],
+        }],
+        asr_options: { language: mimoLanguage() },
+    };
+    try {
+        const res = await fetch(MIMO_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'api-key': key,
+                'Authorization': `Bearer ${key}`,   // OpenAI 兼容客户端走 Bearer，两个都带上最稳
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(MIMO_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+            let detail = '';
+            try { detail = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 160); } catch { /* 读不出就算了 */ }
+            warnThrottled(`[ASR] 小米语音识别返回 ${res.status}${detail ? '：' + detail : ''}，改用本地识别`);
+            return null;
+        }
+        const j = await res.json().catch(() => null);
+        const raw = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+        const text = fixText(cleanText(raw));
+        if (!text) {
+            warnThrottled('[ASR] 小米语音识别没有返回文字，改用本地识别');
+            return null;
+        }
+        return text;
+    } catch (e) {
+        warnThrottled(`[ASR] 小米语音识别调用失败（${e.message}），改用本地识别`);
+        return null;
+    }
+}
+
+/** 本地 / 自定义的 OpenAI 兼容 multipart 接口 */
+async function transcribeHttp(audio, opt) {
+    const { provider, url, model, key, language } = opt;
     try {
         const form = new FormData();
-        form.append('model', custom ? custom.model : modelName());
+        form.append('model', model);
         form.append('response_format', 'json');
-        if (custom && custom.language) form.append('language', custom.language);
-        form.append('file', new Blob([audio.buf], { type: mimeOf(useExt) }), `audio.${useExt}`);
-        const token = custom ? custom.key : String(process.env.ASR_TOKEN || '').trim();
+        // custom 传 auto 等于让接口自己检测，干脆不传（不是所有实现都认 auto）
+        if (language && language !== 'auto') form.append('language', language);
+        form.append('file', new Blob([audio.buf], { type: mimeOf(audio.ext) }), `audio.${audio.ext}`);
         const res = await fetch(url, {
             method: 'POST',
-            headers: token ? { Authorization: 'Bearer ' + token } : {},
+            headers: key ? { Authorization: 'Bearer ' + key } : {},
             body: form,
             signal: AbortSignal.timeout(ASR_TIMEOUT_MS),
         });
@@ -248,3 +333,42 @@ async function doTranscribe(data) {
     }
 }
 
+async function doTranscribe(data) {
+    if (!asrEnabled()) return null;
+
+    const provider = asrProvider();
+    // 小米只支持 wav/mp3：优先转 wav；转不动就拿原格式（小米会跳过，本地还能试）
+    const audio = await loadAudio(data, provider === 'mimo' ? MIMO_EXT : NATIVE_EXT);
+    if (!audio) {
+        logger.debug('[ASR] 拿不到语音音频（record 段里没有可用的 url/path）');
+        return null;
+    }
+
+    if (provider === 'mimo') {
+        if (MIMO_EXT.has(audio.ext)) {
+            const text = await transcribeMimo(audio);
+            if (text) return text;
+        } else {
+            warnThrottled(`[ASR] 小米只支持 wav/mp3，当前格式是 ${audio.ext}，改用本地识别`);
+        }
+        // 降级：本地服务（没配 key / 调用失败 / 空结果都会走到这里）
+        return transcribeHttp(audio, {
+            provider: 'local',
+            url: endpoint(),
+            model: modelName(),
+            key: String(process.env.ASR_TOKEN || '').trim(),
+        });
+    }
+
+    if (provider === 'custom') {
+        const c = customSettings();
+        return transcribeHttp(audio, { provider: 'custom', url: c.url, model: c.model, key: c.key, language: c.language });
+    }
+
+    return transcribeHttp(audio, {
+        provider: 'local',
+        url: endpoint(),
+        model: modelName(),
+        key: String(process.env.ASR_TOKEN || '').trim(),
+    });
+}

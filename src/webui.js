@@ -208,6 +208,31 @@ function normalizeMemory(raw) {
   };
 }
 
+/** 语音合成段：后端只认空 / xiaomi / edge，其余字段去掉首尾空白 */
+function normalizeTts(raw) {
+  const t = raw && typeof raw === 'object' ? raw : {};
+  const p = String(t.provider || '').trim().toLowerCase();
+  return {
+    provider: ['xiaomi', 'edge'].includes(p) ? p : '',
+    xiaomiVoice: String(t.xiaomiVoice || '').trim(),
+    voice: String(t.voice || '').trim(),
+    rate: String(t.rate || '').trim(),
+    volume: String(t.volume || '').trim(),
+  };
+}
+
+/** 语音识别段：后端 mimo / local / custom，语言 auto / zh / en；其余字段原样保留 */
+function normalizeAsr(raw) {
+  const a = raw && typeof raw === 'object' ? raw : {};
+  const p = String(a.provider || '').trim().toLowerCase();
+  const lang = String(a.language || '').trim().toLowerCase();
+  return {
+    ...a,
+    provider: ['mimo', 'local', 'custom'].includes(p) ? p : 'mimo',
+    language: ['auto', 'zh', 'en'].includes(lang) ? lang : 'auto',
+  };
+}
+
 // ---------- 面板认证：QQ 号 + 密码 / QQ 验证码 + 图形人机验证 + 会话 Cookie ----------
 // 面板能以机器人身份发消息、管理授权，公开到局域网后必须挡一层。
 // 所有者（.env BOT_OWNER）登录后是完整管理面板；其他人（已绑定玩家/管理员）只能进 /me 管自己的绑定。
@@ -2296,6 +2321,7 @@ async function route(req, res, url) {
       chat: { ...base.chat },
       notice: { ...base.notice },
       asr: { ...base.asr },
+      tts: { ...base.tts },
       bind: { ...base.bind },
       // 搜索 / 图像识别 / MC 桥接：可直接在网页切换后端与地址
       search: { ...base.search },
@@ -2306,7 +2332,7 @@ async function route(req, res, url) {
       memory: { ...base.memory },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'bind', 'search', 'vision', 'bridge', 'qzone', 'ai', 'memory']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'tts', 'bind', 'search', 'vision', 'bridge', 'qzone', 'ai', 'memory']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
@@ -2316,6 +2342,9 @@ async function route(req, res, url) {
     // AI / 记忆参数做边界校正：上下文 5~50 条、温度 0~2、每人记忆 5~20 条、思考强度只认已知值
     next.ai = normalizeAi(next.ai);
     next.memory = normalizeMemory(next.memory);
+    // 语音：TTS 后端只认 xiaomi / edge（空=自动），ASR 只认 mimo / local / custom
+    next.tts = normalizeTts(next.tts);
+    next.asr = normalizeAsr(next.asr);
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
     reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
     return sendJSON(res, 200, { ok: true, config: config() });

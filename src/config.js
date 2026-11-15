@@ -49,16 +49,30 @@ export const DEFAULTS = {
         initiatorLeft: 3,
         otherLeft: 1,
     },
+    // 语音合成（TTS）全局设置（网页「全局设置」可改，热加载生效）；留空回退 .env
+    //   provider     ''=自动（有 MIMO_API_KEY 用小米，否则 Edge）| xiaomi | edge
+    //   xiaomiVoice  小米音色（冰糖 / 茉莉 / 苏打 / 白桦…）
+    //   voice        Edge 音色短名（zh-CN-XiaoxiaoNeural…）
+    //   rate/volume  Edge 语速 / 音量（如 +8% / +0%）
+    tts: {
+        provider: '',
+        xiaomiVoice: '',
+        voice: '',
+        rate: '',
+        volume: '',
+    },
     // 语音识别（asr.js）：
-    //   provider = local 用本地服务（sherpa-onnx，由 start.js 拉起）| custom 用自定义 OpenAI 兼容接口
+    //   provider = mimo 小米 MiMo ASR（复用 .env 的 MIMO_API_KEY，失败自动降级本地）
+    //            | local 本地服务（sherpa-onnx，由 start.js 拉起）
+    //            | custom 自定义 OpenAI 兼容接口
     // custom 接口要支持 POST 上传音频（multipart 的 file 字段），返回 JSON 的 text 字段；
     // 地址/密钥也可放 .env 的 ASR_CUSTOM_URL / ASR_CUSTOM_KEY，config.json 里填了优先。
     asr: {
-        provider: 'local',
+        provider: 'mimo',
         customUrl: '',            // custom：完整接口地址，如 https://api.openai.com/v1/audio/transcriptions
         customModel: 'whisper-1', // custom：模型名（接口要 model 参数时用）
         customKey: '',            // custom：接口密钥
-        language: 'zh',           // 识别语言提示（custom 会带上；本地服务忽略）
+        language: 'auto',         // 识别语言提示：auto / zh / en（小米用；custom 为 auto 时不传）
         canonicalName: '小钠',     // 目标名字：错字统一改回它
         // 会被改写成目标名字的错字（逗号分隔）；也可写「错字=正确词」精确指定
         homophones: '小娜,小纳,小呐,小哪,小那,晓娜,晓纳,晓钠,筱钠,筱娜,小拿,笑纳',

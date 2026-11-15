@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { buildSsml, secMsGec, stripEmoji, buildXiaomiRequest, ttsProvider, textToSpeech } from '../src/tts.js';
 import { generateSecMsGec } from '../src/edgeDrm.js';
+import { config } from '../src/config.js';
 import fs from 'fs';
 
 describe('generateSecMsGec（Edge v2 令牌）', () => {
@@ -104,6 +105,17 @@ describe('ttsProvider（后端选择）', () => {
     process.env.MIMO_API_KEY = 'sk-test';
     process.env.TTS_PROVIDER = 'edge';
     expect(ttsProvider()).toBe('edge');
+  });
+
+  it('网页配置（config.tts.provider）优先于 .env', () => {
+    const savedTts = { ...config().tts };
+    try {
+      process.env.TTS_PROVIDER = 'edge';
+      config().tts.provider = 'xiaomi';
+      expect(ttsProvider()).toBe('xiaomi');
+    } finally {
+      Object.assign(config().tts, savedTts);
+    }
   });
 });
 
