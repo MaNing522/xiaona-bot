@@ -966,10 +966,18 @@ body.annotating canvas,body.annotating canvas:active{cursor:crosshair}
 .tools button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .tip{position:absolute;display:none;pointer-events:none;background:rgba(31,35,41,.9);color:#fff;
   font-size:12px;padding:3px 8px;border-radius:6px;white-space:nowrap;z-index:2}
-/* 主区（三张地图）+ 右侧玩家图例栏 */
+/* 主区（三张地图）+ 左侧标记栏 + 右侧玩家图例栏 */
 .layout{display:grid;grid-template-columns:1fr;gap:12px;align-items:start}
-@media(min-width:1100px){.layout{grid-template-columns:minmax(0,1fr) 320px}}
+@media(min-width:1100px){.layout{grid-template-columns:230px minmax(0,1fr) 300px}}
 .sidecard{position:sticky;top:16px}
+.marklist{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 220px);overflow-y:auto}
+.mk{display:flex;align-items:center;gap:6px;padding:5px 6px;border:1px solid var(--line);border-radius:8px;
+  background:#fff;cursor:pointer}
+.mk.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(22,119,255,.12)}
+.mk input[type=color]{width:22px;height:22px;min-height:0;padding:0;margin:0;border:0;background:none;flex:0 0 auto;cursor:pointer}
+.mk input[type=text]{flex:1;min-width:0;min-height:26px;padding:0 6px;margin:0;font-size:12px;border:1px solid transparent;background:transparent}
+.mk input[type=text]:focus{border-color:var(--accent);background:#fff}
+.mk .mkdim{font-size:10.5px;color:var(--sub);flex:0 0 auto}
 .legend{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 220px);overflow-y:auto}
 .chip{display:block;font-size:12.5px;padding:7px 10px;border-radius:8px;
   background:#fff;border:1px solid var(--line);cursor:pointer;user-select:none}
@@ -1011,13 +1019,21 @@ a{color:var(--accent);text-decoration:none}
     <span class="hint">地图标记：</span>
     <button class="ghost" data-mode="pan">拖动</button>
     <button class="ghost" data-mode="point">标点</button>
-    <button class="ghost" data-mode="circle">圈画</button>
-    <button class="ghost" id="clearMarks">清除全部标记</button>
-    <span class="hint">标点=单击；圈画=按住拖出范围；右键点标记可删除（标记按维度分别保存）</span>
+    <button class="ghost" data-mode="brush">笔刷</button>
+    <button class="ghost" data-mode="circle">画圆</button>
+    <button class="ghost" data-mode="erase">橡皮擦</button>
+    <button class="ghost" id="clearMarks">全部清除</button>
+    <span class="hint">标点=单击；笔刷=按住涂画；画圆=按住拖出范围；橡皮擦=点/拖擦除；任何工具下按住右键都能拖动地图</span>
   </div>
 </div>
 
 <div class="layout">
+  <div class="card sidecard markcard">
+    <h2>标记</h2>
+    <div class="hint" style="margin:0 0 8px">点颜色/名称可改；点这一行把地图定位到标记。</div>
+    <div class="marklist" id="markList"></div>
+  </div>
+
   <div class="maps">
     <div class="mapcard">
       <div class="maph"><b>主世界</b><span class="meta" id="mt-overworld">—</span>
@@ -1056,15 +1072,78 @@ var DIMS=[
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
 var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null;
-// 地图标记（标点/圈画）：按维度存方块坐标，落 localStorage，缩放平移时跟着走
-var MODE='pan', DRAW=null, PREVIEW={}, MARKS={};
+// 地图标记（标点 / 笔刷 / 圆）：按维度存方块坐标，落 localStorage，缩放平移时跟着走。
+// 每条标记都有 id / name / color，可在左侧「标记」栏里改名改色。
+var MODE='pan', DRAW=null, ERASE=null, PREVIEW={}, MARKS={}, SEL='';
+var PALETTE=['#ff7a45','#1677ff','#52c41a','#722ed1','#eb2f96','#faad14','#13c2c2'];
 try{MARKS=JSON.parse(localStorage.getItem('xnHeatMarks')||'{}')||{}}catch(e){MARKS={}}
 function saveMarks(){try{localStorage.setItem('xnHeatMarks',JSON.stringify(MARKS))}catch(e){}}
+function newMarkId(){return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+function markCount(){var n=0;Object.keys(MARKS).forEach(function(k){n+=(MARKS[k]||[]).length});return n}
+function defaultColor(){return PALETTE[markCount()%PALETTE.length]}
+function nextMarkName(t){return (t==='c'?'圆 ':t==='b'?'笔刷 ':'标记 ')+(markCount()+1)}
+function markColor(m){return /^#[0-9a-fA-F]{6}$/.test(String(m&&m.color||''))?m.color:'#ff7a45'}
+// 兼容旧数据：补齐 id / name / color
+(function normalizeMarks(){
+  Object.keys(MARKS).forEach(function(dim){
+    if(!Array.isArray(MARKS[dim])){delete MARKS[dim];return}
+    MARKS[dim]=MARKS[dim].filter(function(m){return m&&isFinite(m.x)&&isFinite(m.z)}).map(function(m,i){
+      if(!m.id)m.id=newMarkId()+i;
+      if(!m.color)m.color=PALETTE[i%PALETTE.length];
+      if(!m.name)m.name=(m.t==='c'?'圆 ':m.t==='b'?'笔刷 ':'标记 ')+(i+1);
+      return m;
+    });
+  });
+})();
+function findMark(dim,id){
+  var ms=MARKS[dim]||[];
+  for(var i=0;i<ms.length;i+=1)if(ms[i].id===id)return ms[i];
+  return null;
+}
 function addMark(dim,m){
   if(!MARKS[dim])MARKS[dim]=[];
+  if(!m.id)m.id=newMarkId();
+  if(!m.color)m.color=defaultColor();
+  if(!m.name)m.name=nextMarkName(m.t);
   MARKS[dim].push(m);
+  SEL=m.id;
   saveMarks();
   drawOne(dimById(dim)||DIMS[0]);
+  renderMarkList();
+}
+function distSeg(x,y,x1,y1,x2,y2){
+  var dx=x2-x1, dy=y2-y1, L=dx*dx+dy*dy;
+  var t=L?Math.max(0,Math.min(1,((x-x1)*dx+(y-y1)*dy)/L)):0;
+  var px=x1+t*dx, py=y1+t*dy;
+  return Math.sqrt((x-px)*(x-px)+(y-py)*(y-py));
+}
+/** 橡皮擦：命中点/笔画/圆（圆内也算）就删掉那一条 */
+function eraseAt(dim,wx,wz){
+  var t=TRANS[dim];if(!t)return false;
+  var ms=MARKS[dim]||[], best=-1, bestD=Infinity;
+  ms.forEach(function(m,i){
+    var X=wx*t.sx, Z=wz*t.sz, d=Infinity;
+    if(m.t==='p'){
+      d=Math.sqrt(Math.pow((m.x-wx)*t.sx,2)+Math.pow((m.z-wz)*t.sz,2));
+    }else if(m.t==='c'){
+      var dd=Math.sqrt(Math.pow((m.x-wx)*t.sx,2)+Math.pow((m.z-wz)*t.sz,2)), rr=Math.max(2,m.r*t.sx);
+      d=dd<=rr?0:dd-rr;
+    }else{
+      var pts=m.pts||[];
+      for(var j=1;j<pts.length;j+=1){
+        var q=distSeg(X,Z,pts[j-1][0]*t.sx,pts[j-1][1]*t.sz,pts[j][0]*t.sx,pts[j][1]*t.sz);
+        if(q<d)d=q;
+      }
+    }
+    if(d<12&&d<bestD){bestD=d;best=i}
+  });
+  if(best<0)return false;
+  if(SEL===ms[best].id)SEL='';
+  ms.splice(best,1);
+  saveMarks();
+  drawOne(dimById(dim)||DIMS[0]);
+  renderMarkList();
+  return true;
 }
 var SINCE=Number(localStorage.getItem('xnHeatSince'));
 if(!isFinite(SINCE)||SINCE<0)SINCE=86400000;
@@ -1108,30 +1187,45 @@ function fitView(dim,list,w,h){
   var span=Math.max(spanX, spanZ*(w/h));
   return {cx:(minX+maxX)/2, cz:(minZ+maxZ)/2, span:span*1.12};
 }
-// 地图标记：橙色点 / 虚线圆；PREVIEW 是圈画过程中的预览
+// 地图标记：点 / 笔刷 / 圆；PREVIEW 是绘制过程中的预览
 function drawMarks(ctx,d,px,pz,t){
   var ms=MARKS[d.id]||[];
   ctx.save();
+  ctx.lineCap='round';ctx.lineJoin='round';
   ms.forEach(function(m){
     if(!m||!isFinite(m.x)||!isFinite(m.z))return;
+    var color=markColor(m), sel=m.id===SEL;
+    if(sel){ctx.save();ctx.shadowColor=color;ctx.shadowBlur=10;}
     if(m.t==='c'){
       ctx.beginPath();ctx.arc(px(m.x),pz(m.z),Math.max(2,m.r*t.sx),0,Math.PI*2);
-      ctx.setLineDash([7,5]);ctx.lineWidth=2;ctx.strokeStyle='#ff7a45';ctx.stroke();
+      ctx.setLineDash([7,5]);ctx.lineWidth=sel?3.5:2;ctx.strokeStyle=color;ctx.stroke();
       ctx.setLineDash([]);
-      ctx.beginPath();ctx.arc(px(m.x),pz(m.z),2.5,0,Math.PI*2);ctx.fillStyle='#ff7a45';ctx.fill();
+      ctx.beginPath();ctx.arc(px(m.x),pz(m.z),2.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    }else if(m.t==='b'){
+      var pts=m.pts||[];
+      if(pts.length>1){
+        ctx.beginPath();ctx.moveTo(px(pts[0][0]),pz(pts[0][1]));
+        for(var i=1;i<pts.length;i+=1)ctx.lineTo(px(pts[i][0]),pz(pts[i][1]));
+        ctx.lineWidth=sel?5.5:3.5;ctx.strokeStyle=color;ctx.stroke();
+      }
     }else{
       var X=px(m.x),Z=pz(m.z);
-      ctx.beginPath();ctx.arc(X,Z,5,0,Math.PI*2);ctx.fillStyle='#ff7a45';ctx.fill();
+      ctx.beginPath();ctx.arc(X,Z,sel?6:5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
       ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
       ctx.beginPath();ctx.moveTo(X-9,Z);ctx.lineTo(X+9,Z);ctx.moveTo(X,Z-9);ctx.lineTo(X,Z+9);
-      ctx.lineWidth=1.5;ctx.strokeStyle='rgba(255,122,69,.85)';ctx.stroke();
+      ctx.lineWidth=1.5;ctx.strokeStyle=color;ctx.stroke();
     }
+    if(sel)ctx.restore();
   });
   var pv=PREVIEW[d.id];
   if(pv&&pv.t==='c'){
     ctx.beginPath();ctx.arc(px(pv.x),pz(pv.z),Math.max(2,pv.r*t.sx),0,Math.PI*2);
-    ctx.setLineDash([7,5]);ctx.lineWidth=2;ctx.strokeStyle='#faad14';ctx.stroke();
+    ctx.setLineDash([7,5]);ctx.lineWidth=2;ctx.strokeStyle=pv.color||'#faad14';ctx.stroke();
     ctx.setLineDash([]);
+  }else if(pv&&pv.t==='b'&&pv.pts&&pv.pts.length>1){
+    ctx.beginPath();ctx.moveTo(px(pv.pts[0][0]),pz(pv.pts[0][1]));
+    for(var k=1;k<pv.pts.length;k+=1)ctx.lineTo(px(pv.pts[k][0]),pz(pv.pts[k][1]));
+    ctx.lineWidth=3.5;ctx.strokeStyle=pv.color||'#ff7a45';ctx.stroke();
   }
   ctx.restore();
 }
@@ -1219,41 +1313,36 @@ function drawOne(d){
     tip.style.left=left+'px';tip.style.top=top+'px';
   };
   cv.onmouseleave=function(){tip.style.display='none'};
-  // 左键：拖动移动 / 标点 / 圈画（按当前模式）
+  // 左键：按工具；右键：任何工具下都直接拖动地图
   cv.onmousedown=function(e){
     var vv=VIEW[d.id], t=TRANS[d.id];
-    if(!vv||!t||e.button===2)return;
-    if(MODE==='pan'){
+    if(!vv||!t)return;
+    if(e.button===2||MODE==='pan'){
       DRAG={dim:d.id,x:e.clientX,y:e.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
-    }else{
-      var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
-      if(MODE==='point'){
-        addMark(d.id,{t:'p',x:wx,z:wz});
-      }else{
-        DRAW={dim:d.id,mode:'circle',rect:cv.getBoundingClientRect(),wx:wx,wz:wz};
-        PREVIEW[d.id]={t:'c',x:wx,z:wz,r:0};
-        drawOne(d);
-      }
+      e.preventDefault();
+      return;
     }
-    e.preventDefault();
-  };
-  // 右键：删掉光标附近（或圆环上）的标记
-  cv.oncontextmenu=function(e){
-    e.preventDefault();
-    var t=TRANS[d.id];if(!t)return;
+    if(e.button!==0)return;
+    var rect=cv.getBoundingClientRect();
     var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
-    var ms=MARKS[d.id]||[], best=-1, bestD=Infinity;
-    ms.forEach(function(m,i){
-      var dx=(m.x-wx)*t.sx, dz=(m.z-wz)*t.sz, dist=Math.sqrt(dx*dx+dz*dz);
-      var hit=m.t==='c'?Math.abs(dist-m.r*t.sx)<10:dist<10;
-      if(hit&&dist<bestD){bestD=dist;best=i}
-    });
-    if(best>=0){
-      ms.splice(best,1);
-      saveMarks();
+    if(MODE==='point'){
+      addMark(d.id,{t:'p',x:wx,z:wz});
+    }else if(MODE==='brush'){
+      DRAW={dim:d.id,mode:'brush',rect:rect,pts:[[wx,wz]],color:defaultColor()};
+      PREVIEW[d.id]={t:'b',pts:DRAW.pts.slice(),color:DRAW.color};
       drawOne(d);
+    }else if(MODE==='circle'){
+      DRAW={dim:d.id,mode:'circle',rect:rect,wx:wx,wz:wz};
+      PREVIEW[d.id]={t:'c',x:wx,z:wz,r:0,color:'#faad14'};
+      drawOne(d);
+    }else if(MODE==='erase'){
+      ERASE={dim:d.id,rect:rect};
+      eraseAt(d.id,wx,wz);
     }
+    e.preventDefault();
   };
+  // 右键菜单一律禁用（右键留给拖动地图）
+  cv.oncontextmenu=function(e){e.preventDefault()};
   // 滚轮缩放（以光标为中心）
   cv.onwheel=function(e){
     e.preventDefault();
@@ -1270,14 +1359,37 @@ function drawOne(d){
   };
 }
 window.addEventListener('mousemove',function(e){
-  // 圈画：以按下点为圆心，拖到哪半径就到哪
-  if(DRAW&&DRAW.mode==='circle'){
+  // 橡皮擦：按住拖动连续擦
+  if(ERASE){
+    var et=TRANS[ERASE.dim];
+    if(et){
+      var ex=e.clientX-ERASE.rect.left, ey=e.clientY-ERASE.rect.top;
+      eraseAt(ERASE.dim,et.minX+ex/et.sx,et.minZ+ey/et.sz);
+    }
+    return;
+  }
+  if(DRAW){
     var t=TRANS[DRAW.dim];if(!t)return;
     var mx=e.clientX-DRAW.rect.left, my=e.clientY-DRAW.rect.top;
     var wx=t.minX+mx/t.sx, wz=t.minZ+my/t.sz;
-    PREVIEW[DRAW.dim]={t:'c',x:DRAW.wx,z:DRAW.wz,r:Math.sqrt((wx-DRAW.wx)*(wx-DRAW.wx)+(wz-DRAW.wz)*(wz-DRAW.wz))};
-    drawOne(dimById(DRAW.dim));
-    return;
+    if(DRAW.mode==='circle'){
+      // 画圆：以按下点为圆心，拖到哪半径就到哪
+      PREVIEW[DRAW.dim]={t:'c',x:DRAW.wx,z:DRAW.wz,
+        r:Math.sqrt((wx-DRAW.wx)*(wx-DRAW.wx)+(wz-DRAW.wz)*(wz-DRAW.wz)),color:'#faad14'};
+      drawOne(dimById(DRAW.dim));
+      return;
+    }
+    if(DRAW.mode==='brush'){
+      var last=DRAW.pts[DRAW.pts.length-1];
+      var vv0=VIEW[DRAW.dim], perPx=vv0?vv0.span/t.w:1;
+      var dx=wx-last[0], dz=wz-last[1];
+      if(Math.sqrt(dx*dx+dz*dz)>=perPx*3){
+        DRAW.pts.push([wx,wz]);
+        PREVIEW[DRAW.dim]={t:'b',pts:DRAW.pts.slice(),color:DRAW.color};
+        drawOne(dimById(DRAW.dim));
+      }
+      return;
+    }
   }
   if(!DRAG)return;
   var vv=VIEW[DRAG.dim];if(!vv)return;
@@ -1287,18 +1399,79 @@ window.addEventListener('mousemove',function(e){
   drawOne(dimById(DRAG.dim));
 });
 window.addEventListener('mouseup',function(){
+  ERASE=null;
   if(DRAW){
-    var dd=DRAW.dim, pv=PREVIEW[dd];
+    var dd=DRAW.dim, pv=PREVIEW[dd], mk=null;
     if(DRAW.mode==='circle'&&pv&&pv.r>=8){
-      MARKS[dd]=(MARKS[dd]||[]).concat([{t:'c',x:pv.x,z:pv.z,r:pv.r}]);
-      saveMarks();
+      mk={t:'c',x:pv.x,z:pv.z,r:pv.r,color:pv.color};
+    }else if(DRAW.mode==='brush'&&DRAW.pts&&DRAW.pts.length>1){
+      mk={t:'b',x:DRAW.pts[0][0],z:DRAW.pts[0][1],pts:DRAW.pts.slice(),color:DRAW.color};
     }
     PREVIEW[dd]=null;
     DRAW=null;
-    drawOne(dimById(dd)||DIMS[0]);
+    if(mk)addMark(dd,mk);
+    else drawOne(dimById(dd)||DIMS[0]);
   }
   DRAG=null;
 });
+/** 左侧「标记」列表：展示所有维度上的标记，可改名、改色、点击定位 */
+function renderMarkList(){
+  var box=$('markList');if(!box)return;
+  var order={};DIMS.forEach(function(d,i){order[d.id]=i});
+  var rows=[];
+  Object.keys(MARKS).forEach(function(dim){
+    (MARKS[dim]||[]).forEach(function(m){rows.push({dim:dim,m:m})});
+  });
+  rows.sort(function(a,b){
+    var oa=order[a.dim]==null?9:order[a.dim], ob=order[b.dim]==null?9:order[b.dim];
+    if(oa!==ob)return oa-ob;
+    return String(a.m.id).localeCompare(String(b.m.id));
+  });
+  if(!rows.length){
+    box.innerHTML='<span class="hint">还没有标记。选「标点 / 笔刷 / 画圆」在地图上画，橡皮擦逐条擦除。</span>';
+    return;
+  }
+  box.innerHTML=rows.map(function(r){
+    var m=r.m;
+    return '<div class="mk'+(m.id===SEL?' sel':'')+'" data-id="'+esc(m.id)+'" data-dim="'+esc(r.dim)+'">'
+      +'<input type="color" value="'+esc(markColor(m))+'" data-role="color" title="改颜色">'
+      +'<input type="text" value="'+esc(m.name||'')+'" data-role="name" maxlength="24" title="改名称">'
+      +'<span class="mkdim">'+esc(dimName(r.dim))+'</span></div>';
+  }).join('');
+  Array.prototype.forEach.call(box.querySelectorAll('.mk'),function(el){
+    var dim=el.dataset.dim, id=el.dataset.id;
+    el.onclick=function(ev){
+      if(ev.target&&ev.target.dataset&&ev.target.dataset.role)return;
+      SEL=id;
+      saveMarks();
+      var m=findMark(dim,id);
+      if(m&&isFinite(m.x)){
+        VIEW[dim]={cx:m.x,cz:m.z,span:Math.max(256,(m.r||0)*4)};
+        drawOne(dimById(dim)||DIMS[0]);
+      }
+      renderMarkList();
+    };
+  });
+  Array.prototype.forEach.call(box.querySelectorAll('[data-role=color]'),function(inp){
+    inp.onclick=function(ev){ev.stopPropagation()};
+    inp.oninput=function(){
+      var el=inp.parentNode, mk=findMark(el.dataset.dim,el.dataset.id);
+      if(!mk)return;
+      mk.color=inp.value;
+      saveMarks();
+      drawOne(dimById(el.dataset.dim)||DIMS[0]);
+    };
+  });
+  Array.prototype.forEach.call(box.querySelectorAll('[data-role=name]'),function(inp){
+    inp.onclick=function(ev){ev.stopPropagation()};
+    inp.oninput=function(){
+      var el=inp.parentNode, mk=findMark(el.dataset.dim,el.dataset.id);
+      if(!mk)return;
+      mk.name=inp.value;
+      saveMarks();
+    };
+  });
+}
 function setMode(m){
   MODE=m;
   document.body.classList.toggle('annotating',m!=='pan');
@@ -1310,12 +1483,15 @@ Array.prototype.forEach.call(document.querySelectorAll('#modeBar [data-mode]'),f
   b.onclick=function(){setMode(b.dataset.mode)};
 });
 $('clearMarks').onclick=function(){
-  if(!confirm('清空所有维度上的标点和圈画？'))return;
+  if(!confirm('清空所有维度上的标记？'))return;
   MARKS={};
+  SEL='';
   saveMarks();
   drawAll();
+  renderMarkList();
 };
 setMode('pan');
+renderMarkList();
 function drawAll(){DIMS.forEach(drawOne)}
 function relTime(t){
   var s=Math.max(0,Date.now()-Number(t||0))/1000;
