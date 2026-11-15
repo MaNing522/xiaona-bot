@@ -958,9 +958,17 @@ select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9
 .mapcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .maph{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-canvas{display:block;width:100%;cursor:grab;user-select:none}
-canvas:active{cursor:grabbing}
-body.annotating canvas,body.annotating canvas:active{cursor:crosshair}
+canvas{display:block;width:100%;cursor:crosshair;user-select:none}
+canvas:active{cursor:crosshair}
+/* 全屏：地图铺满浏览器窗口（不进系统全屏），Esc 或右上角按钮退出 */
+body.fs{padding:0;overflow:hidden}
+body.fs .wrap{max-width:none}
+body.fs .head,body.fs .filtercard,body.fs .foot{display:none}
+body.fs .layout{height:100vh;padding:8px;gap:8px}
+body.fs .sidecard{top:8px}
+body.fs .marklist,body.fs .legend{max-height:calc(100vh - 140px)}
+#fsExit{display:none;position:fixed;right:16px;top:12px;z-index:120}
+body.fs #fsExit{display:block}
 .tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
 .tools button{min-height:30px;padding:0 12px;font-size:12.5px;margin:0}
 .tools button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -996,9 +1004,9 @@ body.annotating canvas,body.annotating canvas:active{cursor:crosshair}
 a{color:var(--accent);text-decoration:none}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🗺️</div><div><h1>位置热力图</h1>
-  <div class="sub">玩家加载过的区块 · 每个玩家一种颜色 · 拖动移动 / 滚轮缩放</div></div></div>
+  <div class="sub">玩家走过的区块 · 颜色=玩家 / 深浅=走过次数 · 同一区块只画最后走的玩家 · 拖动移动 / 滚轮缩放</div></div></div>
 
-<div class="card">
+<div class="card filtercard">
   <div class="row">
     <label class="hint row" style="gap:4px">时间范围
       <select id="since">
@@ -1012,6 +1020,7 @@ a{color:var(--accent);text-decoration:none}
     <span style="flex:1"></span>
     <label class="hint row" style="gap:4px"><input type="checkbox" id="auto"> 自动刷新</label>
     <button id="refresh" class="ghost">刷新</button>
+    <button id="fsBtn" class="ghost">全屏</button>
   </div>
   <div class="meta" id="meta" style="margin-top:8px">加载中…</div>
   <div class="err" id="err"></div>
@@ -1059,10 +1068,11 @@ a{color:var(--accent);text-decoration:none}
   </div>
 </div>
 
-<div class="row" style="justify-content:space-between">
+<div class="row foot" style="justify-content:space-between">
   <a class="hint" href="/">← 返回控制面板</a>
   <span class="hint">小钠 · 位置热力图</span>
 </div>
+<button id="fsExit" class="ghost">退出全屏（Esc）</button>
 </div>
 <script>
 var $=function(i){return document.getElementById(i)};
@@ -1234,7 +1244,15 @@ function drawOne(d){
   if(!cv)return;
   var dpr=window.devicePixelRatio||1;
   var w=Math.max(300,wrap.clientWidth-2);
-  var h=Math.max(300,Math.min(470,Math.round(w*0.55)));
+  // 全屏时按浏览器窗口高度分配：主世界一行占一半多一点，下界/末地并排占剩下的
+  var h;
+  if(document.body.classList.contains('fs')){
+    var avail=Math.max(360,window.innerHeight-16);
+    var rowH=d.id==='minecraft:overworld'?Math.round(avail*0.53):Math.round(avail*0.47);
+    h=Math.max(180,rowH-52);
+  }else{
+    h=Math.max(300,Math.min(470,Math.round(w*0.55)));
+  }
   cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
   cv.style.height=h+'px';
   var ctx=cv.getContext('2d');
@@ -1273,15 +1291,27 @@ function drawOne(d){
   }
   ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
 
-  // 每个区块画一个小点：走多少画多少，不再做径向热力
-  var box=Math.max(1.6,Math.min(4,16*sx*0.55));
-  ctx.globalAlpha=0.85;
+  // 每个区块画成一个方块（留一点缝隙）：同一区块被多人走过时只画最后走的那个玩家，
+  // 颜色是那个玩家的颜色，深浅表示他走过的次数（1 次最浅，8 次以上最深）
+  var cellW=16*sx, cellH=16*sz;
+  var gap=Math.max(0.4,Math.min(2,Math.min(cellW,cellH)*0.12));
+  var cells={};
   list.forEach(function(p){
-    ctx.fillStyle=colorFor(p.name);
     (p.pts||[]).forEach(function(pt){
-      var X=px(pt[0]*16+8), Z=pz(pt[1]*16+8);
-      ctx.fillRect(X-box/2,Z-box/2,box,box);
+      var cx=pt[0], cz=pt[1];
+      var n=pt.length>2?Number(pt[2]||1):1;   // 旧版 mod 没有次数，按 1 次画
+      var t=pt.length>3?Number(pt[3]||0):0;   // 旧版 mod 没有最近时间
+      var k=cx+','+cz, old=cells[k];
+      if(!old||t>old.t)cells[k]={x:cx,z:cz,n:Math.max(1,n),t:t,name:p.name};
     });
+  });
+  Object.keys(cells).forEach(function(k){
+    var c=cells[k];
+    var a=0.18+0.77*Math.min(1,Math.log(c.n)/Math.log(8));
+    ctx.globalAlpha=Math.min(0.95,a);
+    ctx.fillStyle=colorFor(c.name);
+    ctx.fillRect(px(c.x*16)+gap/2,pz(c.z*16)+gap/2,
+      Math.max(1,cellW-gap),Math.max(1,cellH-gap));
   });
   ctx.globalAlpha=1;
 
@@ -1603,6 +1633,17 @@ $('auto').onchange=function(){
   if(timer){clearInterval(timer);timer=null}
   if($('auto').checked)timer=setInterval(load,30000);
 };
+// 全屏（浏览器窗口内）：隐藏页头和筛选卡，三张地图铺满窗口；Esc 或右上角按钮退出
+function setFull(on){
+  var was=document.body.classList.contains('fs');
+  document.body.classList.toggle('fs',!!on);
+  if(was!==!!on&&DATA)requestAnimationFrame(drawAll);
+}
+$('fsBtn').onclick=function(){setFull(true)};
+$('fsExit').onclick=function(){setFull(false)};
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&document.body.classList.contains('fs'))setFull(false);
+});
 Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'),function(b){
   b.onclick=function(){
     VIEW[b.dataset.reset]=null;
