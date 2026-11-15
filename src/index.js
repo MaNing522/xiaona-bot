@@ -585,7 +585,17 @@ const segAt = (qq) => ({ type: 'at', data: { qq: String(qq) } });
 // 本地文件用纯路径（NapCat 直接按本地文件解析，避免 file:// 方案解析歧义）
 const segFile = (f) => String(f).replace(/\\/g, '/');
 const segImage = (f) => ({ type: 'image', data: { file: segFile(f) } });
-const segRecord = (f) => ({ type: 'record', data: { file: segFile(f) } });
+// 语音必须内嵌 base64：SnowLuma 可能跑在 Docker 里，读不到宿主机的 voice_cache 路径
+// （EACCES/ENOENT 导致语音发不出去）；base64 由它自己落临时文件再转 silk，本机和容器都能用。
+const segRecord = (f) => {
+    const p = segFile(f);
+    try {
+        const buf = fs.readFileSync(p);
+        return { type: 'record', data: { file: 'base64://' + buf.toString('base64') } };
+    } catch {
+        return { type: 'record', data: { file: p } }; // 读不到就退回路径，让上游报真实错误
+    }
+};
 // 内存里的图片（验证码等）：走 OneBot 的 base64:// 形式，不用落地文件
 const segImageB64 = (buf) => ({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } });
 
