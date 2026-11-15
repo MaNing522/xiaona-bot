@@ -473,6 +473,8 @@ button:disabled{opacity:.6;cursor:default}
 .err:not(:empty){animation:xnUp .25s ease both}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
+<!-- 保持 Android 开放：倒计时横幅（脚本自带样式与 20 种语言，自动跟随浏览器语言） -->
+<script src="https://keepandroidopen.org/banner.js" defer></script>
 <form class="card" id="f">
   <div class="brand">
     <div class="logo">🤖</div>
