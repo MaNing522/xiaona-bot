@@ -137,6 +137,55 @@ describe('runAgentLoop（工具调用循环）', () => {
     setTimeout(() => ac.abort(), 20);
     await expect(p).rejects.toThrow(/取消/);
   });
+
+  it('引导：运行中用户新发的消息会在下一次请求模型前追加进对话', async () => {
+    let call = 0;
+    const seen = [];
+    const chat = async ({ messages }) => {
+      call += 1;
+      seen.push(messages.map((m) => m.content));
+      if (call === 1) {
+        return { content: '', tool_calls: [{ id: 's1', type: 'function', function: { name: 'mc_status', arguments: '{}' } }] };
+      }
+      return { content: '都看过了', tool_calls: null };
+    };
+    let pulls = 0;
+    const steer = async () => {
+      pulls += 1;
+      return pulls === 2 ? [{ role: 'user', content: '顺便看下在线' }] : [];
+    };
+    const messages = [{ role: 'user', content: '在吗' }];
+    const out = await runAgentReply({
+      messages,
+      tools: toolsForRole('guest'),
+      chat,
+      ctx: { mcStatus: async () => '在线 1 人' },
+      steer,
+    });
+    expect(out.reply).toBe('都看过了');
+    // 第二次请求模型时，用户中途发的话已经在对话里
+    expect(seen[1]).toContain('顺便看下在线');
+  });
+
+  it('引导：最终答复生成后又来新消息，会重答一轮而不是回旧答案', async () => {
+    let call = 0;
+    const chat = async () => {
+      call += 1;
+      return { content: call === 1 ? '旧答案' : '新答案', tool_calls: null };
+    };
+    let pulls = 0;
+    const steer = async () => {
+      pulls += 1;
+      // 第一次（请求前）没有；第二次（拿到最终答复后）来了新消息
+      return pulls === 2 ? [{ role: 'user', content: '再补一句' }] : [];
+    };
+    const messages = [{ role: 'user', content: '在吗' }];
+    const out = await runAgentLoop({ messages, chat, tools: [], steer });
+    expect(out).toBe('新答案');
+    // 旧答案作为 assistant 历史留在对话里，模型能看到自己刚说过什么
+    expect(messages.some((m) => m.role === 'assistant' && m.content === '旧答案')).toBe(true);
+    expect(messages.some((m) => m.role === 'user' && m.content === '再补一句')).toBe(true);
+  });
 });
 
 describe('decideSkip（是否跳过回复）', () => {

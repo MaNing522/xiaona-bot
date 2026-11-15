@@ -494,14 +494,43 @@ function raceAbort(promise, signal) {
  * @param {object} opts.ctx        工具执行上下文（供各工具 run 使用）
  * @param {number} [opts.maxSteps] 最多循环几步（防止死循环），默认 5
  * @param {Function} [opts.onTool] 每次调用工具时的回调（日志用）
+ * @param {Function} [opts.steer]  引导：每次请求模型前调用，返回期间用户新发的消息（[{role,content}]），
+ *                                 直接追加进当前对话——正常 agent 的 steering，而不是排队等下一轮。
  * @returns {Promise<string>} 模型最终的文字回复
  */
-export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, onTool, signal }) {
+export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, onTool, signal, steer }) {
+  // 引导：模型正在思考/跑工具时用户又发消息，不打断当前请求（模型调用无法中途插话），
+  // 而是赶在下一次请求模型前把它追加成新的 user 消息，让模型把最新输入一起考虑。
+  const pullSteer = async () => {
+    if (!steer) return 0;
+    throwIfAborted(signal);
+    const extra = await raceAbort(Promise.resolve(steer()), signal);
+    if (!Array.isArray(extra)) return 0;
+    let n = 0;
+    for (const m of extra) {
+      if (m && m.role && m.content) {
+        messages.push(m);
+        n += 1;
+      }
+    }
+    return n;
+  };
+
   for (let step = 0; step < maxSteps; step += 1) {
     throwIfAborted(signal);
+    await pullSteer();
     const msg = await raceAbort(chat({ messages, tools }), signal);
     const calls = msg && msg.tool_calls;
-    if (!calls || !calls.length) return (msg && msg.content) || '';
+    if (!calls || !calls.length) {
+      // 模型刚要给出最终答复，用户又发来了新消息：这份回答已经过时，
+      // 先把它记进对话，补上新消息后再让模型重答一轮（而不是回一句没看到新消息的话）。
+      const late = await pullSteer();
+      if (late) {
+        if (msg && msg.content) messages.push({ role: 'assistant', content: msg.content });
+        continue;
+      }
+      return (msg && msg.content) || '';
+    }
 
     // 助手这一轮只发起工具调用（可能同时多条），先原样记入，再逐条执行。
     // 注意：这里的 content 是模型的**内部旁白**，不发给用户——真正的 agent 应该
@@ -526,6 +555,7 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
   // 步数用完但工具结果还没被模型消化：禁用工具再来一轮，让它基于结果作答，而不是直接吞掉
   try {
     throwIfAborted(signal);
+    await pullSteer();
     const final = await raceAbort(chat({ messages, tools: [] }), signal);
     return (final && final.content) || '';
   } catch {
@@ -566,9 +596,10 @@ export function decideSkip(reply, allowSkip, usedTool) {
  * @param {number} [opts.maxSteps] 最多循环几步，默认 5
  * @param {boolean} [opts.allowSkip] 是否允许用【REPLY:是】判定"这条不接"
  * @param {Function} [opts.onTool] 工具调用回调（日志用）
+ * @param {Function} [opts.steer] 引导回调：每次请求模型前拉取用户新消息（见 runAgentLoop）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 5, allowSkip = false, onTool, signal }) {
+export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 5, allowSkip = false, onTool, signal, steer }) {
   let usedTool = false;
   const raw = await runAgentLoop({
     messages,
@@ -577,6 +608,7 @@ export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxS
     ctx,
     maxSteps,
     signal,
+    steer,
     // 调过工具 = 明确在办事，即使没写【REPLY:是】也不能被跳过（见 decideSkip）
     onTool: (name, args) => { usedTool = true; if (onTool) onTool(name, args); },
   });

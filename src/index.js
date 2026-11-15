@@ -329,8 +329,10 @@ function queueBy(map, key, task) {
 
 // 发送队列（按会话）：语音合成很慢，不能让后一条文字抢在语音前面
 const sendQueues = new Map();
-// AI 处理队列（按会话）：同一会话的消息按到达顺序依次交给 AI，回复顺序才稳定
-const aiQueues = new Map();
+// AI 会话（按会话）：同一时刻只跑一轮。运行期间同一个人新发的消息**不排队**，
+// 而是在下一次请求模型前作为「引导」追加进当前对话（正常 agent 的 steering）；
+// 别人的消息留在收件箱里，等这一轮结束后按到达顺序处理。
+const aiSessions = new Map();
 
 /**
  * 单轮 AI 的总超时（config.json 的 ai.runTimeoutSec，默认 120 秒）。
@@ -340,6 +342,120 @@ const aiQueues = new Map();
 function aiRunTimeoutMs() {
     const n = Number(cfg.ai && cfg.ai.runTimeoutSec);
     return (Number.isFinite(n) && n >= 30 ? Math.min(600, Math.round(n)) : 120) * 1000;
+}
+
+/** 从会话收件箱里取出同一个人的消息（保持到达顺序），其余留在队列里 */
+function takeSteerable(s, uid) {
+    if (!uid) return [];
+    const take = [];
+    const keep = [];
+    for (const j of s.inbox) (j.uid === uid ? take : keep).push(j);
+    if (take.length) s.inbox = keep;
+    return take;
+}
+
+/** 提交一条交给 AI 的消息（不阻塞调用方） */
+function submitAiJob(ckey, job) {
+    let s = aiSessions.get(ckey);
+    if (!s) {
+        s = { ckey, inbox: [], running: false, abort: null };
+        aiSessions.set(ckey, s);
+    }
+    s.inbox.push(job);
+    if (!s.running) {
+        s.running = true;
+        runAiSession(s).catch((e) => logger.error('❌ AI 会话异常:', briefApiErr(e)));
+    }
+}
+
+/** 会话级 agent 主循环：一轮一轮跑，一轮内部靠 steer 吸收新消息 */
+async function runAiSession(s) {
+    try {
+        while (s.inbox.length) {
+            const job = s.inbox.shift();
+            await runAiTurn(s, job);
+        }
+    } catch (e) {
+        logger.error('❌ AI 会话异常:', briefApiErr(e));
+        restartAfterUpdateIfNeeded();
+    } finally {
+        s.running = false;
+        s.abort = null;
+        if (!s.inbox.length && aiSessions.get(s.ckey) === s) aiSessions.delete(s.ckey);
+    }
+}
+
+/**
+ * 跑一轮：限速按「轮」申请一次（同一轮里被引导进来的消息不再单独排队，
+ * 否则会和 rateLimit 的同会话 inFlight 互锁），然后交给 runAI。
+ */
+async function runAiTurn(s, job) {
+    // 先建 AbortController：在等限速的空档里，对方一句「闭嘴」也能把这一轮停掉
+    const ac = new AbortController();
+    s.abort = ac;
+    let timer = null;
+    let ticket = null;
+    // 本轮消息 / 被引导进来的消息（既追加给模型，也留一份给 runAI 写记忆）
+    let jobs = [job];
+    const steered = [];
+    try {
+        ticket = await acquire({
+            userId: job.uid,
+            groupId: job.event.message_type === 'group' ? String(job.event.group_id || '') : '',
+            convKey: s.ckey,
+            limits: job.cset.rateLimit, // 会话级限速覆盖（未设置的项回退全局）
+        });
+        if (!ticket.ok) {
+            if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
+            if (ticket.reason === 'day') await sendReply(job.event, '📅 今天聊得够多啦，明天再来找我吧～');
+            else if (ticket.reason === 'hour') await sendReply(job.event, '⏳ 说得有点快啦，歇一会儿再来～');
+            else await sendReply(job.event, '⏳ 现在找我的人有点多，稍等一下再发～');
+            return;
+        }
+        if (ac.signal.aborted) return; // 排队期间已被「闭嘴」打断
+        if (ticket.waitMs > 3000) logger.info(`[限速] ${s.ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
+
+        // 首条 + 此刻已经在排队的同一个人的消息（一起看，统一回一次）
+        jobs = [job, ...takeSteerable(s, job.uid)];
+        const steer = async () => {
+            const batch = takeSteerable(s, job.uid);
+            if (!batch.length) return [];
+            const out = [];
+            for (const j of batch) {
+                const p = await prepareAiJob(j);
+                if (!p) continue;
+                steered.push(p);
+                out.push({ role: 'user', content: p.metaLine });
+            }
+            if (out.length) logger.info(`[AI] ${s.ckey} 引导：本轮运行中又收到 ${out.length} 条，已塞进当前对话`);
+            return out;
+        };
+
+        const timeoutMs = aiRunTimeoutMs();
+        timer = setTimeout(() => ac.abort(), timeoutMs);
+        const timedOut = new Promise((_, reject) => {
+            ac.signal.addEventListener('abort', () => reject(new Error('AI_RUN_TIMEOUT')), { once: true });
+        });
+        await Promise.race([runAI(jobs, steered, ac.signal, steer), timedOut]);
+    } catch (e) {
+        const why = ac.signal.reason && ac.signal.reason.message;
+        if (why === 'SHUTUP') {
+            logger.info(`[AI] ${s.ckey} 对方要求别说话，本轮已中止`);
+        } else if (ac.signal.aborted) {
+            logger.warn(`[AI] ${s.ckey} 处理超过 ${Math.round(aiRunTimeoutMs() / 1000)} 秒，已中止本轮，继续处理后面的消息`);
+            // 合并进来但还没处理的消息放回收件箱，下一轮继续；卡住提示只发一次
+            for (let i = steered.length - 1; i >= 0; i -= 1) s.inbox.unshift(steered[i]);
+            for (let i = jobs.length - 1; i >= 1; i -= 1) s.inbox.unshift(jobs[i]);
+            sendReply(job.event, '⏳ 刚刚那条我想太久卡住了，先跳过啦，你再发一次吧～').catch(() => {});
+        } else {
+            logger.error('❌ 处理异常:', briefApiErr(e));
+        }
+        restartAfterUpdateIfNeeded();
+    } finally {
+        if (timer) clearTimeout(timer);
+        if (s.abort === ac) s.abort = null;
+        if (ticket) ticket.release();
+    }
 }
 
 // 忽略的机器人 QQ（不响应）：内置常见官方机器人 + .env BOT_IGNORE_QQ 追加（逗号分隔）
@@ -496,11 +612,10 @@ function stripToolTags(text) {
 }
 
 /**
- * 拼本轮给模型的决策提示词（工具调用之外，还需它自己给出的格式标记）。
- * 搜索/查数据这类"做事"已交给工具（function calling），这里只管：
- *   是否接话（可选）、要不要发语音、怎么分条。
+ * 聊天层的系统提示：工具怎么选、输出格式标记、语音与分条规则。
+ * 这些是「怎么做事」的规则，属于系统提示；用户消息里只放用户说的话（正常 agent 的分工）。
  */
-function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '', allowImage = false) {
+function buildChatRules({ allowSkip = false, allowVoice = false, allowImage = false } = {}) {
     // 这些标记是"合法工具标签"，优先于提示词里的任何格式限制。
     // 提示词写着"不许输出括号""不要分析过程""最多三句话"，模型有时会顺手把标记也省掉，
     // 结果就是该发语音时不发 —— 这里必须显式豁免。
@@ -508,49 +623,57 @@ function buildDecisionPrompt(userInput, memory, allowSkip, sessionNote = '', all
         + '优先于提示词里的任何格式限制（不算方括号、不算分析过程、不占三句话额度）。该输出时必须原样输出，别省略、别解释；'
         + '标记必须写完整、带上结尾的“】”，且标记里只放取值，不要把正文写进标记里面。';
 
-    let p = `你是小钠，一个智能QQ机器人助手。
-
-【重要】你可以调用工具来"做事"（已按你的身份开放对应权限）。需要实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
-
-**工具是内部动作**：需要查就直接调用，不要在调用前先发一句"我查一下/让我看看"——工具结果回来后直接给最终答复。只有确实要花很久（比如进服务器、走远路）时，才在最终答复里顺带说明。
-
-**工具怎么选（别搞混，尤其别拿 web_search 乱搜）**：
+    let p = `【聊天规则】
+- 你能调用工具来"做事"（已按身份开放对应权限）。需要实时信息或查询数据时**直接调用工具**，不要凭空编造；不需要就别调。查到结果后，用你自己的口吻自然回话，别提"我调用了工具/搜索结果"。
+- **工具是内部动作**：需要查就直接调用，不要在调用前先发一句"我查一下/让我看看"——工具结果回来后直接给最终答复。只有确实要花很久（比如进服务器、走远路）时，才在最终答复里顺带说明。
 - **任何** Minecraft 服务器查询都用 \`mc_status\`：问"你自己连的服"→不填 address；问某个具体服务器（给了地址，比如 xxx.com、ip:端口）→填 address。**自己的服、别人的服，一律走 mc_status，绝不要用 web_search 去搜。**
-- 本服玩家的数据（时长/活跃度等）→ \`player_query\`。
-- 只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
-${allowImage ? '- 本条消息里带 [图片]、且需要知道图里是什么才用 `analyze_image` 识别（描述画面/读截图文字/看图回答）；不看图也能答的不要调。\n' : ''}- 账户余额 → \`ai_balance\`；让对方记住某事 → \`remember\`；回忆以前记的事 → \`recall_memory\`。
-- **只查本条消息要查的东西**：历史【最近对话】里提过的服务器/玩家不要顺手重复再查一遍，也别一条里塞多个查询。
+- 本服玩家的数据（时长/活跃度等）→ \`player_query\`。只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
+- **只查当前要查的东西**：历史记录里提过的服务器/玩家不要顺手重复再查，也别一条里塞多个查询。
+- 对方在你处理期间又发来消息时，系统会把它直接追加给你：**以最新消息为准**，把前后的意思合起来，统一回一次，不要分成两次回。
 
 ${tagRule}
 `;
-    let step = 1;
+    if (allowVoice) {
+        p += `- **语音发送判断**：回复简短、自然、口语化，且对方有语音意图时标记：【VOICE:YES】；否则：【VOICE:NO】。
+  【VOICE:YES】时正文必须是纯语音内容，不要加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
+  语音内容开头用一对括号写风格词，用来指定语气，例如 (温柔) (开心) (俏皮) (慵懒) (磁性) (怅然) (东北话) (粤语)。标签不会被读出来。
+  语音内容里**不要**出现 emoji、颜文字或表情符号，只写要被读出来的字。
+`;
+    } else {
+        p += `- 本会话只能发文字：不要输出【VOICE】标记（就算写了也会被转成文字）。
+`;
+    }
+    if (allowImage) {
+        p += `- 本条消息里带 [图片]，且需要知道图里是什么才用 \`analyze_image\` 识别（描述画面/读截图文字/看图回答）；不看图也能答的不要调。
+`;
+    }
     if (allowSkip) {
         p += `
-${step++}. **是否需要接话（默认不接，一律从严）**：小钠刚被人叫过，现在判断这条消息要不要接。
-   - 只有**明确是在跟小钠说话**才接：直接问它、让它做事、接着它的话追问或补充、明确 @ 它或叫它名字。
-   - 以下**一律不接**：说给别人听的、别人之间的对话、把小钠当话题聊、转述或复述别人的话、没有文字内容（纯表情/图片/符号）、另一个机器人的寒暄，以及**明确让它别说话的要求**（“别说了”“闭嘴”“不用回”“安静点”）。
-   - **判断标准从严**：只要需要靠猜、或者有半分犹豫，就算不接。
-   - 你必须先输出【REPLY:是】或【REPLY:否】：**只有写【REPLY:是】才会真的发出去**；写【REPLY:否】、写成别的、或者忘了写，都会当作不接。
-   - 判【REPLY:否】时不要再生成任何回复内容，也不要调用任何工具。
+【是否需要接话（默认不接，一律从严）】
+- 小钠刚被人叫过，现在判断这条消息要不要接。
+- 只有**明确是在跟小钠说话**才接：直接问它、让它做事、接着它的话追问或补充、明确 @ 它或叫它名字。
+- 以下**一律不接**：说给别人听的、别人之间的对话、把小钠当话题聊、转述或复述别人的话、没有文字内容（纯表情/图片/符号）、另一个机器人的寒暄，以及**明确让它别说话的要求**（“别说了”“闭嘴”“不用回”“安静点”）。
+- **判断标准从严**：只要需要靠猜、或者有半分犹豫，就算不接。
+- 你必须先输出【REPLY:是】或【REPLY:否】：**只有写【REPLY:是】才会真的发出去**；写【REPLY:否】、写成别的、或者忘了写，都会当作不接。
+- 判【REPLY:否】时不要再生成任何回复内容，也不要调用任何工具。
 `;
     }
     p += `
-${step++}. **语音发送判断**：
-   - 如果回复内容适合语音朗读（简短、自然、口语化），且用户有语音意图，标记：【VOICE:YES】
-   - **重要**：当【VOICE:YES】时，回复文本必须是纯语音内容，不要添加任何前缀说明（如“我现在发语音”），直接输出要朗读的话。
-   - **风格标签**：语音内容开头用一对括号写一个风格词，用来指定语气，例如 (温柔) (开心) (俏皮) (慵懒) (磁性) (怅然) (怅然 低沉) (东北话) (粤语)。标签只是给语音引擎的指令，不会被读出来；可以写多个风格词。
-   - 语音内容里**不要**出现 emoji、颜文字或表情符号，只写要被读出来的字。
-   - 否则标记：【VOICE:NO】
-
-${step}. **生成回复**：
-   - 用自然、友好的中文回复用户
-   - 想分几口气说就**换行**：每行会单独发成一条消息（别把多条挤在一行，也别在一条消息里留空行），最多 3 条；也可以用单独一行的 --- 分隔。
-
-${memory ? `\n【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。\n` : ''}
-${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
-
-现在请回复用户：${userInput}`;
+【回复格式】
+- 用自然、友好的中文回复用户。
+- 想分几口气说就**换行**：每行会单独发成一条消息（别把多条挤在一行，也别在一条消息里留空行），最多 3 条；也可以用单独一行的 --- 分隔。
+`;
     return p;
+}
+
+/** 本轮动态上下文（记忆 / 会话补充设定）：拼在系统提示末尾，不影响前面的稳定前缀 */
+function buildTurnContext({ memory = '', sessionNote = '' } = {}) {
+    const parts = [];
+    if (memory) {
+        parts.push(`【已知记忆】\n${memory}\n请结合以上记忆自然回复用户，不要直接复述记忆内容。`);
+    }
+    if (sessionNote) parts.push(`【本会话补充设定】\n${sessionNote}`);
+    return parts.join('\n\n');
 }
 
 /**
@@ -566,9 +689,11 @@ ${sessionNote ? `\n【本会话补充设定】\n${sessionNote}\n` : ''}
  * @param {boolean}[o.allowImage] 是否开放图片识别工具（仅当本条消息带图片时才开）
  * @param {string} [o.userId]    KV 缓存隔离
  * @param {object} [o.ctx]       工具执行上下文（search/mcStatus/playerQuery/balance/remember/recall）
+ * @param {Function}[o.steer]    引导回调：每步请求模型前拉取用户新消息（mid-run steering）
+ * @param {Array}  [o.extraUserMessages] 本轮已合并的其他用户消息（同一个人连发的几条）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {}, signal = null }) {
+async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = false, allowSearch = true, allowImage = false, allowVoice = false, userId = '', sessionNote = '', ctx = {}, signal = null, steer = null, extraUserMessages = [] }) {
     const caps = { plan: isPlanAvailable() };
     let tools = toolsForRole(role, caps);
     if (!allowSearch) tools = tools.filter((t) => t.function.name !== 'web_search');
@@ -577,10 +702,16 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
     // 唱歌工具只在会话允许语音时开放（关闭语音后模型看不到，免得唱了发不出去）
     if (!allowVoice) tools = tools.filter((t) => t.function.name !== 'sing');
 
-    const sys = getSystemPrompt({ role, caps });
+    // 正常 agent 的消息结构：system 放人设/规则/动态上下文，user 只放用户的话
+    const sys = [
+        getSystemPrompt({ role, caps }),
+        buildChatRules({ allowSkip, allowVoice, allowImage }),
+        buildTurnContext({ memory, sessionNote }),
+    ].filter(Boolean).join('\n\n');
     const messages = [
         ...(sys ? [{ role: 'system', content: sys }] : []),
-        { role: 'user', content: buildDecisionPrompt(metaLine, memory, allowSkip, sessionNote, allowImage) },
+        { role: 'user', content: metaLine },
+        ...(Array.isArray(extraUserMessages) ? extraUserMessages : []),
     ];
 
     const chat = (body) => chatCompletionRaw({
@@ -600,6 +731,7 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         chat,
         ctx,
         signal,
+        steer,
         onTool: (name, args) => { logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
     });
 
@@ -3059,7 +3191,14 @@ async function onMessage(event) {
     // 明确被要求"别说话"：直接不回复，也不烧 AI 额度；顺带结束这轮唤起会话
     // （都让人闭嘴了，就不该再接着盯后面几条消息）
     if (isShutUpDirective(userInput)) {
-        engageSessions.delete(convKey(event));
+        const ck = convKey(event);
+        engageSessions.delete(ck);
+        // 正在思考/跑工具的那一轮也要停：这本身就是最明确的「引导」
+        const s = aiSessions.get(ck);
+        if (s) {
+            s.inbox.length = 0;
+            if (s.abort) s.abort.abort(Object.assign(new Error('SHUTUP'), { name: 'ShutUp' }));
+        }
         logger.info('🤐 对方明确要求别说话，跳过回复');
         return;
     }
@@ -3067,109 +3206,105 @@ async function onMessage(event) {
     // AI 未启用：不用占限速额度，也不该因为"额度用满"去回复（那些话只有开 AI 时才该说）
     if (!AI_ENABLED) return;
 
-    // 同一会话的消息按到达顺序串行处理：限速等待 → AI 生成 → 发送。
-    // 以前两条消息会并发跑 AI，后生成的那条可能先发出去，看起来就是「发送顺序乱了」。
-    await queueBy(aiQueues, ckey, async () => {
-        // 限速：正常聊天几乎无感——冷却/分钟超限都是**静默排队**，等够了自动回；
-        // 只有小时/日额度用满、队列满或排太久才提示；惩罚期（刷屏）直接不吭声。
-        const ticket = await acquire({
-            userId: String(event.user_id),
-            groupId: event.message_type === 'group' ? String(event.group_id || '') : '',
-            convKey: ckey,
-            limits: cset.rateLimit, // 会话级限速覆盖（未设置的项回退全局）
-        });
-        if (!ticket.ok) {
-            if (ticket.reason === 'penalty') return; // 静默丢弃：不跟刷屏的人对话
-            if (ticket.reason === 'day') return sendReply(event, '📅 今天聊得够多啦，明天再来找我吧～');
-            if (ticket.reason === 'hour') return sendReply(event, '⏳ 说得有点快啦，歇一会儿再来～');
-            return sendReply(event, '⏳ 现在找我的人有点多，稍等一下再发～');
-        }
-        if (ticket.waitMs > 3000) logger.info(`[限速] ${ckey} 排队 ${Math.round(ticket.waitMs / 1000)}s 后放行`);
-        // 整轮去重超时：卡住就中止这一轮，队列继续往下走（同会话后面的消息不会被堵死）
-        const ac = new AbortController();
-        const timeoutMs = aiRunTimeoutMs();
-        const timer = setTimeout(() => ac.abort(), timeoutMs);
-        const timedOut = new Promise((_, reject) => {
-            ac.signal.addEventListener('abort', () => reject(new Error('AI_RUN_TIMEOUT')), { once: true });
-        });
-        try {
-            await Promise.race([runAI(event, userInput, allowSkip, cset, ac.signal), timedOut]);
-        } catch (e) {
-            if (ac.signal.aborted) {
-                logger.warn(`[AI] ${ckey} 处理超过 ${Math.round(timeoutMs / 1000)} 秒，已中止本轮，继续处理后面的消息`);
-                // 告诉对方一声，别让人干等；发不出去也不影响后续
-                sendReply(event, '⏳ 刚刚那条我想太久卡住了，先跳过啦，你再发一次吧～').catch(() => {});
-            } else {
-                logger.error('❌ 处理异常:', briefApiErr(e));
-            }
-            restartAfterUpdateIfNeeded();
-        } finally {
-            clearTimeout(timer);
-            ticket.release();
-        }
+    // 交给会话 agent：同一会话同一时刻只跑一轮；这个人随后发的消息不会排队等这一轮结束，
+    // 而是在下一次请求模型前「引导」进当前对话；别人的消息按到达顺序等下一轮。
+    submitAiJob(ckey, {
+        event,
+        uid: String(event.user_id),
+        userInput,
+        allowSkip,
+        cset,
     });
 }
 
+/**
+ * 把一条 QQ 消息整理成 AI 需要的上下文（昵称 / 元数据行 / 记忆键 / 图片）。
+ * 正常消息和运行中被「引导」进来的消息都走这里，保证模型看到的信息一致。
+ * @returns {Promise<object|null>} null = 这条不该参与 AI（如对方是机器人）
+ */
+async function prepareAiJob(job) {
+    const { event, userInput } = job;
+    const meta = await getMemberMeta(event);
+    // 对方是机器人：默认不接话（两个机器人互相刷屏没意义，也容易被判刷屏）。BOT_REPLY=true 可放开
+    if (meta.isRobot && !BOT_REPLY) {
+        logger.info(`🤖 对方是机器人（${meta.name}），跳过回复`);
+        return null;
+    }
+    // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
+    const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
+    const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
+    // 记忆按「人」存（QQ 号 / 游戏名），不按会话；聊天记录不再自动注入，AI 需要时自己用 read_history 拉
+    const memKey = memoryKeyOf(event, meta.name);
+    return {
+        ...job,
+        meta,
+        metaLine,
+        memKey,
+        memScene: memorySceneOf(event),
+        mem: memoryContext(memKey, undefined, { withHistory: false }),
+        // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别
+        imgs: imageSegmentsOf(event.message),
+    };
+}
+
 // AI 回复主流程（含搜索/语音/多条回复）
-// allowSkip：只在"群里仅命中关键词"这种模糊触发下为 true，交给 AI 判断是否真的在叫它
-async function runAI(event, userInput, allowSkip = false, cset = null, signal = null) {
+// jobs：本轮要处理的消息（首条 + 同一个人连发的几条）；steered：运行中被引导进来的消息
+async function runAI(jobs, steered = [], signal = null, steer = null) {
     // 没配 AI_API_KEY：AI 对话整体停用（启动时已提示，这里静默跳过，不在群里刷屏）
     if (!AI_ENABLED) return;
     if (signal && signal.aborted) return;
+    const first = jobs[0];
     // 会话设置（语音开关 / 补充提示词）；未传入时回退到该会话的生效值
-    const cs = cset || chatCfg.getEffective(convKey(event));
+    const cs = first.cset || chatCfg.getEffective(convKey(first.event));
     try {
-        // 注入会话元数据（对话类型/昵称/身份/好感度/群头衔/时间等），格式与参考项目一致
-        const meta = await getMemberMeta(event);
-        // 对方是机器人：默认不接话（两个机器人互相刷屏没意义，也容易被判刷屏）。BOT_REPLY=true 可放开
-        if (meta.isRobot && !BOT_REPLY) {
-            logger.info(`🤖 对方是机器人（${meta.name}），跳过回复`);
-            return;
-        }
         logger.info('🤖 AI 决策中...');
-        // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
-        const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
-        const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
-        // 记忆按「人」存（QQ 号 / 游戏名），不按会话；聊天记录不再自动注入，AI 需要时自己用 read_history 拉
-        const memKey = memoryKeyOf(event, meta.name);
-        const memScene = memorySceneOf(event);
-        const mem = memoryContext(memKey, undefined, { withHistory: false });
-        // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别（工具里会先告诉用户"稍等"）
-        const imgs = imageSegmentsOf(event.message);
+        const prepared = [];
+        for (const j of jobs) {
+            const p = await prepareAiJob(j);
+            if (p) prepared.push(p);
+        }
+        if (!prepared.length) return;
+
+        const imgs = prepared.flatMap((p) => p.imgs);
+        // 同一轮里只要有一条是明确在叫它，整轮就不能跳过
+        const allowSkip = prepared.every((p) => p.allowSkip);
         // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
         let voiceSent = false;
         const result = await aiReply({
-            metaLine,
-            memory: mem,
-            role: perm.role(String(event.user_id)),
+            metaLine: prepared[0].metaLine,
+            memory: prepared[0].mem,
+            role: perm.role(String(first.event.user_id)),
             allowSkip,
             allowSearch: searchEnabled(),
             allowImage: imgs.length > 0 && visionEnabled(),
             allowVoice: cs.voice,
-            userId: String(event.user_id),
+            userId: String(first.event.user_id),
             sessionNote: cs.extraPrompt, // 会话级补充提示词（未设置则空）
             signal,
-            ctx: buildAgentCtx(memKey, String(event.user_id), {
+            steer,
+            // 同一个人连发的其他几条本来就属于这一轮，直接作为追加的 user 消息给模型
+            extraUserMessages: prepared.slice(1).map((p) => ({ role: 'user', content: p.metaLine })),
+            ctx: buildAgentCtx(prepared[0].memKey, String(first.event.user_id), {
                 images: imgs,
                 // 更新完成等需要直接告知用户的话，走这里发到当前会话
-                reply: (text) => (signal && signal.aborted ? Promise.resolve() : sendReply(event, text)),
+                reply: (text) => (signal && signal.aborted ? Promise.resolve() : sendReply(first.event, text)),
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
                     if (signal && signal.aborted) return Promise.resolve();
                     const t = stripToolTags(String(text)).trim();
-                    return t ? sendReply(event, t) : Promise.resolve();
+                    return t ? sendReply(first.event, t) : Promise.resolve();
                 },
                 // sing 工具用：直接以语音发这条内容（失败时 sendReply 会降级成文字）
                 sendVoice: async (text) => {
                     if (signal && signal.aborted) return [];
-                    const ids = await sendReply(event, text, true, false);
+                    const ids = await sendReply(first.event, text, true, false);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
                 },
             }),
         });
         let { reply, wantVoice } = result;
-        // 本轮已被整轮超时取消：不要再发迟到的回复（避免和后面消息的回答串在一起）
+        // 本轮已被整轮超时/打断取消：不要再发迟到的回复（避免和后面消息的回答串在一起）
         if (signal && signal.aborted) {
             logger.info('[AI] 本轮已取消，丢弃迟到的生成结果');
             return;
@@ -3183,10 +3318,12 @@ async function runAI(event, userInput, allowSkip = false, cset = null, signal = 
         // 该会话关闭了语音：不发语音（AI 就算标记了 VOICE:YES 也降级成文字）
         if (!cs.voice) wantVoice = false;
 
-        // 真正触发回复的这条才进记忆（带上当时所在的群 / 私聊，AI 以后能分清人在哪说话）
-        recordMessage(memKey, 'user', userInput, {
-            name: meta.name, qq: String(event.user_id), isBot: meta.isRobot, scene: memScene,
-        });
+        // 真正触发回复的这几条才进记忆（含被引导进来的；带上当时所在的群 / 私聊）
+        for (const p of [...prepared, ...steered]) {
+            recordMessage(p.memKey, 'user', p.userInput, {
+                name: p.meta.name, qq: String(p.event.user_id), isBot: p.meta.isRobot, scene: p.memScene,
+            });
+        }
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
@@ -3204,17 +3341,17 @@ async function runAI(event, userInput, allowSkip = false, cset = null, signal = 
         // 不再自动 @ 提问的人（群里每条都 @ 太吵）；模型自己在正文里写 @某人 时，
         // sendReplyNow 里仍会转成真正的 at 段，需要点名时照样能用
         for (let i = 0; i < parts.length; i++) {
-            await sendReply(event, parts[i], i === 0 ? wantVoice : false, false);
+            await sendReply(first.event, parts[i], i === 0 ? wantVoice : false, false);
             if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 700));
         }
         // 写入记忆（同上，按人记；只留最近 N 条）
         const finalReply = parts.join('\n');
-        recordMessage(memKey, 'ai', finalReply, { scene: memScene });
+        recordMessage(prepared[0].memKey, 'ai', finalReply, { scene: prepared[0].memScene });
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
         // agent 在回复过程中拉过更新：等这条回完再重启，别把没发出去的话吞了
         restartAfterUpdateIfNeeded();
     } catch (err) {
-        // 整轮超时被取消：外层限速队列会提示"想太久卡住了"，这里不刷"技术问题"
+        // 整轮超时被取消：外层会提示"想太久卡住了"，这里不刷"技术问题"
         if (signal && signal.aborted) {
             logger.warn('[AI] 本轮已被取消（超时/打断），跳过错误回复');
             restartAfterUpdateIfNeeded();
@@ -3223,8 +3360,8 @@ async function runAI(event, userInput, allowSkip = false, cset = null, signal = 
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
         logger.error('❌ 处理异常:', briefApiErr(err));
         // 群消息发送失败多半是被禁言，这时「稍后再试」也发不出去，就别白试了
-        const muted = event.message_type === 'group' ? await botMutedUntil(event.group_id, 0) : 0;
-        if (!muted) await sendReply(event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
+        const muted = first.event.message_type === 'group' ? await botMutedUntil(first.event.group_id, 0) : 0;
+        if (!muted) await sendReply(first.event, '抱歉，我遇到技术问题，稍后再试。').catch(() => {});
         // 更新已经完成但回复失败：照样要重启，不然新代码一直不生效
         restartAfterUpdateIfNeeded();
     }
