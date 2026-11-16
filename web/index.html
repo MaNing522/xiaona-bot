@@ -23,6 +23,8 @@
   --ok:#52c41a; --warn:#faad14; --danger:#ff4d4f; --radius:10px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+button,a,.nav-item,.tb-auth,input,select,textarea,label{touch-action:manipulation}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);min-height:100vh;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 body{padding:16px;padding-bottom:calc(28px + env(safe-area-inset-bottom))}
@@ -187,6 +189,8 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
 }
+/* 触摸设备：输入框至少 16px，避免 iOS 聚焦时自动放大页面 */
+@media (max-width:720px){input,select,textarea{font-size:16px}}
 </style>
 </head>
 <body>

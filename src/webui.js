@@ -41,6 +41,12 @@ import {
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 const HOME_FILE = path.join(ROOT, 'web', 'home.html');
+// 所有网页共用的触摸兼容基线：去掉点击高亮、禁止双击缩放延迟、避免移动端自动放大文字
+const TOUCH_CSS = `
+*{-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+button,a,input,select,textarea,label{touch-action:manipulation}
+`;
 // 网页 QQ：照搬 Stapxs QQ Lite 官方网页版的静态资源（原样保留它的绝对路径前缀，不改编译产物）
 const SSQQ_DIR = path.join(ROOT, 'web', 'ssqq');
 const SSQQ_PREFIX = '/Stapxs-QQ-Lite-2.0/';
@@ -463,6 +469,7 @@ function loginPage(msg = '', needCaptcha = false) {
 <meta name="theme-color" content="#f0f2f5">
 <title>小钠控制面板 · 登录</title>
 <style>
+${TOUCH_CSS}
 :root{
   --bg:#f0f2f5; --card:#fff; --card2:#f5f7fa; --line:#e8ebf0;
   --txt:#1f2329; --sub:#8a919f; --accent:#1677ff; --danger:#ff4d4f; --radius:10px;
@@ -497,6 +504,7 @@ button:disabled{opacity:.6;cursor:default}
 .card{animation:xnUp .38s cubic-bezier(.2,.8,.25,1) both}
 .err:not(:empty){animation:xnUp .25s ease both}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:720px){input,select,textarea{font-size:16px}}
 </style></head><body>
 <form class="card" id="f">
   <div class="brand">
@@ -635,6 +643,7 @@ function mePage(sess) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我的账号 · 小钠</title>
 <style>
+${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
@@ -663,6 +672,7 @@ button:disabled{opacity:.55;cursor:default}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:8px;white-space:pre-wrap}
 .ok{color:#16a34a}
 #capimg{height:52px;border:1px solid #d9d9d9;border-radius:8px;background:#fff}
+@media (max-width:720px){input,select,textarea{font-size:16px}}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🤖</div><div><h1>我的账号</h1>
   <div class="sub">QQ ${qq}${isOwner ? ' · 所有者' : ''}</div></div></div>
@@ -797,6 +807,7 @@ function adminPage(sess) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>管理中心 · 小钠</title>
 <style>
+${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
@@ -828,6 +839,7 @@ button:disabled{opacity:.55;cursor:default}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
 .ok{color:#16a34a}
+@media (max-width:720px){input,select,textarea{font-size:16px}}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🛠️</div><div><h1>管理中心</h1>
   <div class="sub">${roleName} ${qq} · 管理所有人的账户与游戏绑定</div></div></div>
@@ -947,6 +959,7 @@ function heatmapPage(sess) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${pageTitle} · 小钠</title>
 <style>
+${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
@@ -973,7 +986,7 @@ select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9
 .mapcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .maph{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-canvas{display:block;width:100%;cursor:crosshair;user-select:none}
+canvas{display:block;width:100%;cursor:crosshair;user-select:none;-webkit-user-select:none;touch-action:none}
 canvas:active{cursor:crosshair}
 /* 全屏：只把这一张地图铺满浏览器窗口（不进系统全屏），Esc 或右上角按钮退出 */
 body.fsmode{overflow:hidden;padding:0}
@@ -1019,6 +1032,7 @@ body.fsmode #fsExit{display:block}
 .find{color:var(--accent);text-decoration:none;font-size:12px;border-left:1px solid var(--line);padding-left:8px;flex:0 0 auto}
 .meta{color:var(--sub);font-size:12px}
 a{color:var(--accent);text-decoration:none}
+@media (max-width:720px){input,select,textarea{font-size:16px}}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🗺️</div><div><h1>${pageTitle}</h1>
   <div class="sub">${subText}</div></div></div>
@@ -1100,7 +1114,7 @@ var DIMS=[
   {id:'minecraft:the_nether',cid:'the_nether',name:'下界'},
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
-var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null;
+var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null, TOUCH=null;
 // 地图标记（标点 / 笔刷 / 圆）：按维度存方块坐标，落 localStorage，缩放平移时跟着走。
 // 每条标记都有 id / name / color，可在左侧「标记」栏里改名改色。
 var MODE='pan', DRAW=null, ERASE=null, PREVIEW={}, MARKS={}, SEL='';
@@ -1402,20 +1416,92 @@ function drawOne(d){
     vv.span=ns;
     drawOne(d);
   };
+  // 触摸屏：单指按当前工具拖动/作画，双指捏合缩放（页面已设 touch-action:none）
+  cv.ontouchstart=function(e){
+    var t=TRANS[d.id], vv=VIEW[d.id];
+    if(!t||!vv)return;
+    e.preventDefault();
+    if(e.touches.length>=2){
+      DRAW=null;ERASE=null;DRAG=null;PREVIEW[d.id]=null;
+      var rect0=cv.getBoundingClientRect();
+      var a=e.touches[0],b=e.touches[1];
+      var mx=(a.clientX+b.clientX)/2-rect0.left, mz=(a.clientY+b.clientY)/2-rect0.top;
+      TOUCH={mode:'pinch',dist:Math.sqrt(Math.pow(a.clientX-b.clientX,2)+Math.pow(a.clientY-b.clientY,2))||1,
+        wx:t.minX+mx/t.sx,wz:t.minZ+mz/t.sz,cx:vv.cx,cz:vv.cz,span:vv.span};
+      drawOne(d);
+      return;
+    }
+    var p=e.touches[0], rect=cv.getBoundingClientRect();
+    var px=p.clientX-rect.left, pz=p.clientY-rect.top;
+    var wx=t.minX+px/t.sx, wz=t.minZ+pz/t.sz;
+    if(MODE==='pan'){
+      TOUCH={mode:'pan',x:p.clientX,y:p.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
+    }else if(MODE==='point'){
+      addMark(d.id,{t:'p',x:wx,z:wz});
+      TOUCH={mode:'done'};
+    }else if(MODE==='brush'){
+      DRAW={dim:d.id,mode:'brush',rect:rect,pts:[[wx,wz]],color:defaultColor()};
+      PREVIEW[d.id]={t:'b',pts:DRAW.pts.slice(),color:DRAW.color};
+      TOUCH={mode:'draw'};drawOne(d);
+    }else if(MODE==='circle'){
+      DRAW={dim:d.id,mode:'circle',rect:rect,wx:wx,wz:wz};
+      PREVIEW[d.id]={t:'c',x:wx,z:wz,r:0,color:'#faad14'};
+      TOUCH={mode:'draw'};drawOne(d);
+    }else if(MODE==='erase'){
+      ERASE={dim:d.id,rect:rect};eraseAt(d.id,wx,wz);TOUCH={mode:'erase'};
+    }
+  };
+  cv.ontouchmove=function(e){
+    var t=TRANS[d.id];if(!t||!TOUCH)return;
+    e.preventDefault();
+    if(TOUCH.mode==='pinch'){
+      if(e.touches.length>=2){
+        var a=e.touches[0],b=e.touches[1];
+        var dist=Math.sqrt(Math.pow(a.clientX-b.clientX,2)+Math.pow(a.clientY-b.clientY,2))||1;
+        var vv=VIEW[d.id];if(!vv)return;
+        var ns=Math.max(32,Math.min(2000000,TOUCH.span*(TOUCH.dist/dist)));
+        var ratio=ns/TOUCH.span;
+        vv.cx=TOUCH.wx+(TOUCH.cx-TOUCH.wx)*ratio;
+        vv.cz=TOUCH.wz+(TOUCH.cz-TOUCH.wz)*ratio;
+        vv.span=ns;drawOne(d);return;
+      }
+      // 松开一根手指 → 剩下的那根继续拖动地图
+      var p0=e.touches[0], vp=VIEW[d.id];
+      if(!p0||!vp){TOUCH=null;return}
+      TOUCH={mode:'pan',x:p0.clientX,y:p0.clientY,cx:vp.cx,cz:vp.cz,span:vp.span,w:t.w};
+    }
+    var p=e.touches[0];if(!p)return;
+    if(TOUCH.mode==='pan'){
+      var v=VIEW[d.id];if(!v)return;
+      var perPx=TOUCH.span/TOUCH.w;
+      v.cx=TOUCH.cx-(p.clientX-TOUCH.x)*perPx;
+      v.cz=TOUCH.cz-(p.clientY-TOUCH.y)*perPx;
+      drawOne(d);
+    }else if(TOUCH.mode==='draw'||TOUCH.mode==='erase'){
+      pointerMove(p.clientX,p.clientY);
+    }
+  };
+  cv.ontouchend=function(e){
+    if(e.touches&&e.touches.length)return; // 还有手指按着，等全部抬起再结束
+    e.preventDefault();
+    TOUCH=null;endPointer();
+  };
+  cv.ontouchcancel=function(){TOUCH=null;endPointer()};
 }
-window.addEventListener('mousemove',function(e){
+/** 鼠标/触摸共用的拖动与作画逻辑（cx/cy 是 client 坐标） */
+function pointerMove(cx,cy){
   // 橡皮擦：按住拖动连续擦
   if(ERASE){
     var et=TRANS[ERASE.dim];
     if(et){
-      var ex=e.clientX-ERASE.rect.left, ey=e.clientY-ERASE.rect.top;
+      var ex=cx-ERASE.rect.left, ey=cy-ERASE.rect.top;
       eraseAt(ERASE.dim,et.minX+ex/et.sx,et.minZ+ey/et.sz);
     }
     return;
   }
   if(DRAW){
     var t=TRANS[DRAW.dim];if(!t)return;
-    var mx=e.clientX-DRAW.rect.left, my=e.clientY-DRAW.rect.top;
+    var mx=cx-DRAW.rect.left, my=cy-DRAW.rect.top;
     var wx=t.minX+mx/t.sx, wz=t.minZ+my/t.sz;
     if(DRAW.mode==='circle'){
       // 画圆：以按下点为圆心，拖到哪半径就到哪
@@ -1439,11 +1525,13 @@ window.addEventListener('mousemove',function(e){
   if(!DRAG)return;
   var vv=VIEW[DRAG.dim];if(!vv)return;
   var perPx=DRAG.span/DRAG.w;
-  vv.cx=DRAG.cx-(e.clientX-DRAG.x)*perPx;
-  vv.cz=DRAG.cz-(e.clientY-DRAG.y)*perPx;
+  vv.cx=DRAG.cx-(cx-DRAG.x)*perPx;
+  vv.cz=DRAG.cz-(cy-DRAG.y)*perPx;
   drawOne(dimById(DRAG.dim));
-});
-window.addEventListener('mouseup',function(){
+}
+window.addEventListener('mousemove',function(e){pointerMove(e.clientX,e.clientY)});
+/** 结束一次拖动/作画（鼠标松开、触摸全部抬起时都走这里） */
+function endPointer(){
   ERASE=null;
   if(DRAW){
     var dd=DRAW.dim, pv=PREVIEW[dd], mk=null;
@@ -1458,7 +1546,8 @@ window.addEventListener('mouseup',function(){
     else drawOne(dimById(dd)||DIMS[0]);
   }
   DRAG=null;
-});
+}
+window.addEventListener('mouseup',endPointer);
 /** 左侧「标记」列表：展示所有维度上的标记，可改名、改色、点击定位 */
 function renderMarkList(){
   var box=$('markList');if(!box)return;

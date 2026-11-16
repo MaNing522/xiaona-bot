@@ -3,10 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#eef1f5">
 <title>小钠 · 网页 QQ</title>
 <style>
+/* 触摸兼容：去掉点击高亮与双击缩放延迟 */
+*{-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+button,a,.conv,.head-link,.tool,.icon-btn,input,textarea,label{touch-action:manipulation}
 :root{
   --blue:#12b7f5; --blue-deep:#0099ff; --blue-soft:#e8f6ff;
   --bg:#eef1f5; --side:#f7f8fa; --chat:#f2f4f7; --card:#fff;
@@ -40,6 +44,11 @@ body{
 .icon-btn{width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--sub);cursor:pointer;
   display:flex;align-items:center;justify-content:center}
 .icon-btn:hover{background:#eceff3;color:var(--txt)}
+.mobi-conv{display:none}
+.head-left{display:flex;align-items:center;min-width:0}
+.side-mask{display:none;position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.32);
+  opacity:0;pointer-events:none;transition:opacity .2s}
+.side-mask.show{opacity:1;pointer-events:auto}
 .search{margin:2px 14px 10px;display:flex;align-items:center;gap:8px;padding:0 10px;height:34px;
   background:#eef1f5;border-radius:8px;color:var(--sub)}
 .search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:13px;color:var(--txt);font-family:inherit}
@@ -121,13 +130,19 @@ body{
   color:#fff;font-size:12.5px;padding:9px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.22s}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 
-/* 窄屏：收起左侧会话栏 */
+/* 窄屏：会话栏改成抽屉，点左上角按钮展开 */
 @media (max-width:720px){
   .app{grid-template-columns:1fr;width:100vw;height:100vh;border-radius:0}
-  .side{display:none}
+  .side{display:flex;position:fixed;top:0;bottom:0;left:0;z-index:20;width:min(84vw,320px);
+    transform:translateX(-105%);transition:transform .22s ease;box-shadow:8px 0 24px rgba(0,0,0,.12)}
+  .side.show{transform:none}
+  .side-mask{display:block}
+  .mobi-conv{display:inline-flex;align-items:center;justify-content:center;margin-right:10px;
+    width:36px;height:36px}
   .chat-head{padding:0 16px}
   .msgs{padding:14px 14px 6px}
-  .composer{padding:8px 12px 12px}
+  .composer{padding:8px 12px calc(12px + env(safe-area-inset-bottom))}
+  input,textarea,select{font-size:16px}
 }
 </style>
 </head>
@@ -153,10 +168,16 @@ body{
   </aside>
 
   <main class="chat">
+    <div class="side-mask" id="sideMask"></div>
     <header class="chat-head">
-      <div class="chat-title">
-        <div class="chat-name" id="chatName">小钠</div>
-        <div class="chat-status"><i class="dot" id="connDot"></i><span id="chatStatus">在线 · 网页直聊</span></div>
+      <div class="head-left">
+        <button class="icon-btn mobi-conv" id="convToggle" title="会话列表" aria-label="会话列表">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
+        </button>
+        <div class="chat-title">
+          <div class="chat-name" id="chatName">小钠</div>
+          <div class="chat-status"><i class="dot" id="connDot"></i><span id="chatStatus">在线 · 网页直聊</span></div>
+        </div>
       </div>
       <div class="head-actions">
         <a class="head-link" href="/">控制面板</a>
@@ -201,6 +222,16 @@ body{
   var toastEl = document.getElementById('toast');
   var listEl = document.getElementById('convList');
   var searchEl = document.getElementById('search');
+  // 移动端会话抽屉
+  var sideEl = document.querySelector('.side');
+  var sideMask = document.getElementById('sideMask');
+  var convToggle = document.getElementById('convToggle');
+  function closeSide(){ sideEl.classList.remove('show'); sideMask.classList.remove('show'); }
+  if (convToggle) convToggle.addEventListener('click', function () {
+    sideEl.classList.toggle('show');
+    sideMask.classList.toggle('show');
+  });
+  if (sideMask) sideMask.addEventListener('click', closeSide);
   var aiBusy = false;
   var activeKey = AI_KEY;
   var convList = [];
@@ -426,6 +457,7 @@ body{
   /* ---------- 切换会话 ---------- */
   function openConv(key) {
     activeKey = key;
+    closeSide();
     setTyping(false);
     clearMsgs();
     renderConvs();
