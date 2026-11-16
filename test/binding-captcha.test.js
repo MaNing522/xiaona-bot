@@ -111,6 +111,35 @@ describe('answerCaptcha', () => {
   });
 });
 
+describe('一个游戏ID只能绑定一个QQ', () => {
+  it('已被别人绑定的ID 不能再发起绑定（大小写不敏感）', () => {
+    startBind('10001', 'Steve');
+    expect(answerCaptcha('10001', '1111').ok).toBe(true);
+    const r = startBind('20002', 'steve');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('已经被其他 QQ 绑定');
+  });
+
+  it('验证码期间被别的QQ抢先绑定 → 答对也不生效', () => {
+    expect(startBind('10001', 'Steve').ok).toBe(true);
+    expect(startBind('20002', 'Steve').ok).toBe(true);
+    expect(answerCaptcha('20002', '1111').ok).toBe(true);
+    const r = answerCaptcha('10001', '1111');
+    expect(r.handled).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.msg).toContain('已经被其他 QQ 绑定');
+    expect(getGameIdsOf('10001')).toEqual([]);
+  });
+
+  it('同一个QQ 仍然可以绑定多个不同ID', () => {
+    expect(startBind('10001', 'Steve').ok).toBe(true);
+    expect(answerCaptcha('10001', '1111').ok).toBe(true);
+    expect(startBind('10001', 'Alex').ok).toBe(true);
+    expect(answerCaptcha('10001', '1111').ok).toBe(true);
+    expect(getGameIdsOf('10001')).toEqual(['Steve', 'Alex']);
+  });
+});
+
 describe('每人绑定上限（全局默认 + 单QQ覆盖）', () => {
   it('默认用全局上限', () => {
     expect(limitOf('10001')).toBe(3);

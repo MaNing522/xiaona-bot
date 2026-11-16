@@ -153,7 +153,7 @@ export function getReceivers() {
 /**
  * 反查：某个游戏ID 绑在哪个 QQ 上（没有则返回 ''）。
  * 游戏内发 #命令 时用它还原身份——不还原的话 #我的绑定、主人权限这些全是错的。
- * 同一个ID 被多人绑定时取先遇到的那个（罕见，且彼此等价）。
+ * 所有绑定入口都保证「一个游戏ID 只能绑一个QQ」，所以这里最多命中一个。
  */
 export function getQqOf(gameId) {
   const want = String(gameId || '').trim().toLowerCase();
@@ -296,6 +296,11 @@ export function startBind(qq, gameId) {
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
     return { ok: false, error: `你已经绑定过 ${id} 了。查看： #我的绑定` };
   }
+  // 一个游戏ID 只能绑一个QQ：已被别人绑定的ID 不能再发起绑定
+  const owner = getQqOf(id);
+  if (owner && owner !== key) {
+    return { ok: false, error: `游戏ID ${id} 已经被其他 QQ 绑定了。一个游戏ID只能绑定一个QQ，请让对方先解绑。` };
+  }
   if (ids.length >= limitOf(key)) {
     return { ok: false, error: `每个QQ最多绑定 ${limitOf(key)} 个游戏ID，你已经绑满：${ids.join('、')}\n先 #解绑 <游戏ID>，再绑新的` };
   }
@@ -337,6 +342,15 @@ export function answerCaptcha(qq, text) {
   }
 
   pending.delete(key);
+  // 从发起到答对之间可能被别的 QQ 抢先绑定：这里再查一次，保证一个ID 只归一个QQ
+  const owner = getQqOf(p.gameId);
+  if (owner && owner !== key) {
+    return {
+      handled: true,
+      ok: false,
+      msg: `❌ 游戏ID ${p.gameId} 已经被其他 QQ 绑定了，本次绑定取消。`,
+    };
+  }
   const entry = data.qq[key] || (data.qq[key] = { ids: [], at: 0 });
   if (!Array.isArray(entry.ids)) entry.ids = [];
   entry.ids.push(p.gameId);
@@ -500,6 +514,8 @@ export function restoreUnbind(qq, gameId, at) {
   if (ban) return { ok: false, error: `QQ ${key} 正在封禁中，不能恢复绑定：${bannedMsg(ban)}` };
   const ids = getGameIdsOf(key);
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) return { ok: false, error: `QQ ${key} 已绑定 ${id}` };
+  const owner = getQqOf(id);
+  if (owner && owner !== key) return { ok: false, error: `游戏ID ${id} 已绑定在 QQ ${owner} 上，不能再恢复给别人` };
   if (ids.length >= limitOf(key)) return { ok: false, error: `QQ ${key} 的绑定已满（${limitOf(key)} 个）` };
   const entry = data.qq[key] || (data.qq[key] = { ids: [], at: 0 });
   if (!Array.isArray(entry.ids)) entry.ids = [];

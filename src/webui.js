@@ -687,6 +687,14 @@ button:disabled{opacity:.55;cursor:default}
 </div>
 
 <div class="card">
+  <h2>我的位置热力图</h2>
+  <div class="hint">只显示你绑定游戏ID 走过的区块（颜色深浅=走过次数），别的玩家看不到你的，你也看不到别人的。</div>
+  <div class="row" style="margin-top:12px">
+    <a href="/heatmap" style="text-decoration:none"><button type="button">查看我的热力图 →</button></a>
+  </div>
+</div>
+
+<div class="card">
   <h2>登录密码</h2>
   <div class="hint" id="pwdHint">设置后可用 QQ 号 + 密码登录；支持中文密码，忘记密码就用验证码登录后重设。</div>
   <div id="oldWrap" style="display:none"><label>原密码</label><input id="oldPass" type="password"></div>
@@ -836,7 +844,7 @@ button:disabled{opacity:.55;cursor:default}
 <div id="list"><div class="hint">加载中…</div></div>
 
 <div class="row" style="justify-content:space-between">
-  <a class="hint" href="/me">← 我的账号</a>
+  <span class="hint"><a class="hint" href="/me">← 我的账号</a> · <a class="hint" href="/heatmap">我的位置热力图</a></span>
   <button id="logout" class="ghost">退出登录</button>
 </div>
 </div>
@@ -925,12 +933,19 @@ load();
 </script></body></html>`;
 }
 
-/** 位置热力图页（仅所有者）：玩家加载过的区块，小点显示；可拖动/缩放/按时间筛选 */
-function heatmapPage(_sess) {
+/** 位置热力图页：所有者看全服，其他登录用户只看自己绑定游戏ID */
+function heatmapPage(sess) {
+  const isOwner = sess && sess.role === 'owner';
+  const pageTitle = isOwner ? '位置热力图' : '我的位置热力图';
+  const subText = isOwner
+    ? '玩家走过的区块 · 颜色=玩家 / 深浅=走过次数 · 多人走过时颜色叠加（最后走的在上层）· 拖动移动 / 滚轮缩放'
+    : '你绑定游戏账号走过的区块 · 颜色=账号 / 深浅=走过次数 · 拖动移动 / 滚轮缩放';
+  const backHref = isOwner ? '/' : '/me';
+  const backText = isOwner ? '← 返回控制面板' : '← 我的账号';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>位置热力图 · 小钠</title>
+<title>${pageTitle} · 小钠</title>
 <style>
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
 *{box-sizing:border-box}
@@ -1005,8 +1020,8 @@ body.fsmode #fsExit{display:block}
 .meta{color:var(--sub);font-size:12px}
 a{color:var(--accent);text-decoration:none}
 </style></head><body><div class="wrap">
-<div class="head"><div class="logo">🗺️</div><div><h1>位置热力图</h1>
-  <div class="sub">玩家走过的区块 · 颜色=玩家 / 深浅=走过次数 · 多人走过时颜色叠加（最后走的在上层）· 拖动移动 / 滚轮缩放</div></div></div>
+<div class="head"><div class="logo">🗺️</div><div><h1>${pageTitle}</h1>
+  <div class="sub">${subText}</div></div></div>
 
 <div class="card filtercard">
   <div class="row">
@@ -1066,15 +1081,15 @@ a{color:var(--accent);text-decoration:none}
   </div>
 
   <div class="card sidecard">
-    <h2>玩家图例</h2>
+    <h2>${isOwner ? '玩家图例' : '我的账号'}</h2>
     <div class="hint" style="margin:0 0 8px">点整块可隐藏/显示；点「定位」把对应维度缩放到他当前位置。</div>
     <div class="legend" id="legend"></div>
   </div>
 </div>
 
 <div class="row foot" style="justify-content:space-between">
-  <a class="hint" href="/">← 返回控制面板</a>
-  <span class="hint">小钠 · 位置热力图</span>
+  <a class="hint" href="${backHref}">${backText}</a>
+  <span class="hint">小钠 · ${pageTitle}</span>
 </div>
 <button id="fsExit" class="ghost">退出全屏（Esc）</button>
 </div>
@@ -1605,9 +1620,11 @@ function load(){
   var since=SINCE>0?Date.now()-SINCE:0;
   get('/api/heatmap'+(since?'?since='+since:''),function(st,j){
     if(st===401){location.href='/login';return}
-    if(st===403){$('err').textContent='只有所有者能看位置热力图';return}
     if(!j.ok){$('err').textContent=j.error||'加载失败';return}
     DATA=j;
+    if(j.mine&&!(j.boundIds||[]).length){
+      $('err').textContent='你还没有绑定游戏ID，绑定后就能看到自己账号走过的区块';
+    }
     var d=new Date();
     var total=(j.players||[]).reduce(function(n,p){return n+(p.pts||[]).length},0);
     $('meta').textContent='共 '+(j.players||[]).length+' 条记录 / '+total+' 个区块 · 时间：'+$('since').options[$('since').selectedIndex].text
@@ -1830,15 +1847,11 @@ async function route(req, res, url) {
     return sendHtml(res, 200, adminPage(s));
   }
 
-  // 位置热力图：全服玩家加载过的区块（仅所有者）
+  // 位置热力图：所有者看全服；其他登录用户只能看自己绑定游戏ID 的区块
   if (url.pathname === '/heatmap' || url.pathname === '/heatmap.html') {
     const s = sessionOf(req);
     if (!s) {
       res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
-      return res.end();
-    }
-    if (s.role !== 'owner') {
-      res.writeHead(302, { Location: canAdmin(s.role) ? '/admin' : '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, heatmapPage(s));
@@ -2118,6 +2131,7 @@ async function route(req, res, url) {
   const heatApi = url.pathname === '/api/heatmap';
   if (sess.role !== 'owner'
     && !url.pathname.startsWith('/api/me')
+    && !heatApi
     && !(adminApi && canAdmin(sess.role))) {
     return sendJSON(res, 403, { ok: false, error: '没有管理权限' });
   }
@@ -2172,9 +2186,15 @@ async function route(req, res, url) {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // ---------- 位置热力图数据（仅所有者） ----------
+  // ---------- 位置热力图数据：所有者看全服，其他人只看自己绑定的游戏ID ----------
   if (heatApi && req.method === 'GET') {
-    if (sess.role !== 'owner') return sendJSON(res, 403, { ok: false, error: '只有所有者能看位置热力图' });
+    const isOwner = sess.role === 'owner';
+    // 非所有者只允许看自己名下账号的数据（大小写不敏感）
+    const mineIds = isOwner ? null : getGameIdsOf(sess.qq);
+    const mineSet = mineIds ? new Set(mineIds.map((x) => String(x).toLowerCase())) : null;
+    if (mineSet && !mineSet.size) {
+      return sendJSON(res, 200, { ok: true, since: 0, players: [], online: [], mine: true, boundIds: [] });
+    }
     if (!isMcConnected()) return sendJSON(res, 200, { ok: false, error: 'MC 服务器还没连上桥' });
     try {
       const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0;
@@ -2187,7 +2207,14 @@ async function route(req, res, url) {
       try {
         online = (await getPlayers()).map((p) => ({ name: p.name, dim: p.dim || '' }));
       } catch { /* 忽略 */ }
-      return sendJSON(res, 200, { ok: true, since, players: d.players, online });
+      let players = Array.isArray(d.players) ? d.players : [];
+      if (mineSet) {
+        players = players.filter((p) => mineSet.has(String(p.name || '').toLowerCase()));
+        online = online.filter((p) => mineSet.has(String(p.name || '').toLowerCase()));
+      }
+      return sendJSON(res, 200, {
+        ok: true, since, players, online, mine: !isOwner, boundIds: mineIds || [],
+      });
     } catch (e) {
       const msg = String((e && e.message) || e);
       const old = /404|not\s*found/i.test(msg);
