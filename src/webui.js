@@ -41,12 +41,56 @@ import {
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 const HOME_FILE = path.join(ROOT, 'web', 'home.html');
+const HEAT_MARKS_FILE = path.join(ROOT, 'data', 'heatmap-marks.json');
 // 所有网页共用的触摸兼容基线：去掉点击高亮、禁止双击缩放延迟、避免移动端自动放大文字
 const TOUCH_CSS = `
 *{-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 button,a,input,select,textarea,label{touch-action:manipulation}
 `;
+
+// ---------- 热力图标记：按登录 QQ 分开存，互不可见 ----------
+function loadHeatMarks() {
+  const all = readJsonSafe(HEAT_MARKS_FILE, {});
+  return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+}
+/** 只保留必要字段，防止网页传奇怪的超大对象把数据文件写坏 */
+function sanitizeHeatMarks(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  let total = 0;
+  for (const [dim, arr] of Object.entries(input)) {
+    if (typeof dim !== 'string' || dim.length > 64 || !Array.isArray(arr)) continue;
+    const list = [];
+    for (const m of arr) {
+      if (total >= 2000) break;
+      if (!m || typeof m !== 'object') continue;
+      const x = Number(m.x);
+      const z = Number(m.z);
+      if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+      const item = {
+        t: m.t === 'c' ? 'c' : (m.t === 'b' ? 'b' : 'p'),
+        x,
+        z,
+        id: typeof m.id === 'string' ? m.id.slice(0, 40) : '',
+        name: typeof m.name === 'string' ? m.name.slice(0, 60) : '',
+        color: /^#[0-9a-fA-F]{6}$/.test(String(m.color || '')) ? m.color : '#ff7a45',
+      };
+      if (item.t === 'c') item.r = Math.max(0, Number(m.r) || 0);
+      if (item.t === 'b' && Array.isArray(m.pts)) {
+        item.pts = m.pts
+          .filter((p) => Array.isArray(p) && p.length >= 2
+            && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])))
+          .slice(0, 5000)
+          .map((p) => [Number(p[0]), Number(p[1])]);
+      }
+      list.push(item);
+      total += 1;
+    }
+    if (list.length) out[dim] = list;
+  }
+  return out;
+}
 // 网页 QQ：照搬 Stapxs QQ Lite 官方网页版的静态资源（原样保留它的绝对路径前缀，不改编译产物）
 const SSQQ_DIR = path.join(ROOT, 'web', 'ssqq');
 const SSQQ_PREFIX = '/Stapxs-QQ-Lite-2.0/';
@@ -1114,20 +1158,35 @@ var DIMS=[
   {id:'minecraft:the_nether',cid:'the_nether',name:'下界'},
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
-var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null, TOUCH=null;
-// 地图标记（标点 / 笔刷 / 圆）：按维度存方块坐标，落 localStorage，缩放平移时跟着走。
-// 每条标记都有 id / name / color，可在左侧「标记」栏里改名改色。
-var MODE='pan', DRAW=null, ERASE=null, PREVIEW={}, MARKS={}, SEL='';
+var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null, TOUCH=null, POINTERS={};
+// 地图标记（标点 / 笔刷 / 圆）：按维度存方块坐标，持久化到 bot 服务器的 data/heatmap-marks.json，
+// 按登录 QQ 分开存（不同人互不可见）；每条标记都有 id / name / color，可在左侧「标记」栏里改名改色。
+var MODE='pan', DRAW=null, ERASE=null, PREVIEW={}, MARKS={}, SEL='', MARKS_SAVE=null, MARKS_READY=false;
 var PALETTE=['#ff7a45','#1677ff','#52c41a','#722ed1','#eb2f96','#faad14','#13c2c2'];
-try{MARKS=JSON.parse(localStorage.getItem('xnHeatMarks')||'{}')||{}}catch(e){MARKS={}}
-function saveMarks(){try{localStorage.setItem('xnHeatMarks',JSON.stringify(MARKS))}catch(e){}}
+var LEGACY_MARKS=null;
+try{LEGACY_MARKS=JSON.parse(localStorage.getItem('xnHeatMarks')||'null')}catch(e){LEGACY_MARKS=null}
+/** 存到服务器（防抖 350ms）；服务器确认成功后才清掉浏览器里的旧 localStorage 标记 */
+function saveMarks(){
+  if(!MARKS_READY)return;
+  if(MARKS_SAVE)clearTimeout(MARKS_SAVE);
+  MARKS_SAVE=setTimeout(function(){
+    MARKS_SAVE=null;
+    var xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/heatmap/marks',true);
+    xhr.setRequestHeader('Content-Type','application/json');
+    xhr.onreadystatechange=function(){
+      if(xhr.readyState===4&&xhr.status===200){try{localStorage.removeItem('xnHeatMarks')}catch(e){}}
+    };
+    xhr.send(JSON.stringify({marks:MARKS}));
+  },350);
+}
 function newMarkId(){return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function markCount(){var n=0;Object.keys(MARKS).forEach(function(k){n+=(MARKS[k]||[]).length});return n}
 function defaultColor(){return PALETTE[markCount()%PALETTE.length]}
 function nextMarkName(t){return (t==='c'?'圆 ':t==='b'?'笔刷 ':'标记 ')+(markCount()+1)}
 function markColor(m){return /^#[0-9a-fA-F]{6}$/.test(String(m&&m.color||''))?m.color:'#ff7a45'}
 // 兼容旧数据：补齐 id / name / color
-(function normalizeMarks(){
+function normalizeMarks(){
   Object.keys(MARKS).forEach(function(dim){
     if(!Array.isArray(MARKS[dim])){delete MARKS[dim];return}
     MARKS[dim]=MARKS[dim].filter(function(m){return m&&isFinite(m.x)&&isFinite(m.z)}).map(function(m,i){
@@ -1137,7 +1196,27 @@ function markColor(m){return /^#[0-9a-fA-F]{6}$/.test(String(m&&m.color||''))?m.
       return m;
     });
   });
-})();
+}
+/** 从服务器读当前登录用户的标记；首次上线时把浏览器旧标记迁过去 */
+function loadMarks(){
+  var xhr=new XMLHttpRequest();
+  xhr.open('GET','/api/heatmap/marks',true);
+  xhr.onreadystatechange=function(){
+    if(xhr.readyState!==4)return;
+    if(xhr.status===401){location.href='/login';return}
+    var j={};try{j=JSON.parse(xhr.responseText||'{}')}catch(e){}
+    var server=(j&&j.ok&&j.marks&&typeof j.marks==='object')?j.marks:{};
+    var hasServer=Object.keys(server).some(function(k){return Array.isArray(server[k])&&server[k].length});
+    var migrate=!hasServer&&LEGACY_MARKS&&typeof LEGACY_MARKS==='object'&&Object.keys(LEGACY_MARKS).length;
+    MARKS=migrate?LEGACY_MARKS:server;
+    normalizeMarks();
+    MARKS_READY=true;
+    if(hasServer){try{localStorage.removeItem('xnHeatMarks')}catch(e){}}
+    else if(migrate)saveMarks();
+    drawAll();renderMarkList();
+  };
+  xhr.send();
+}
 function findMark(dim,id){
   var ms=MARKS[dim]||[];
   for(var i=0;i<ms.length;i+=1)if(ms[i].id===id)return ms[i];
@@ -1372,18 +1451,31 @@ function drawOne(d){
     tip.style.left=left+'px';tip.style.top=top+'px';
   };
   cv.onmouseleave=function(){tip.style.display='none'};
-  // 左键：按工具；右键：任何工具下都直接拖动地图
-  cv.onmousedown=function(e){
+  // 指针事件（鼠标 / 触摸 / 触控笔统一）：左键按工具，右键或平移模式拖动地图
+  cv.onpointerdown=function(e){
     var vv=VIEW[d.id], t=TRANS[d.id];
     if(!vv||!t)return;
+    var rect=cv.getBoundingClientRect();
+    POINTERS[e.pointerId]={x:e.clientX,y:e.clientY};
+    // 第二根手指按下 → 双指捏合缩放（Windows 触摸屏、平板、手机通用）
+    if(Object.keys(POINTERS).length>=2){
+      DRAW=null;ERASE=null;DRAG=null;PREVIEW[d.id]=null;
+      var ids=Object.keys(POINTERS), a=POINTERS[ids[0]], b=POINTERS[ids[1]];
+      var mx=(a.x+b.x)/2-rect.left, mz=(a.y+b.y)/2-rect.top;
+      TOUCH={mode:'pinch',dim:d.id,
+        dist:Math.hypot(a.x-b.x,a.y-b.y)||1,
+        wx:t.minX+mx/t.sx,wz:t.minZ+mz/t.sz,cx:vv.cx,cz:vv.cz,span:vv.span};
+      e.preventDefault();
+      drawOne(d);
+      return;
+    }
     if(e.button===2||MODE==='pan'){
       DRAG={dim:d.id,x:e.clientX,y:e.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
       e.preventDefault();
       return;
     }
     if(e.button!==0)return;
-    var rect=cv.getBoundingClientRect();
-    var wx=t.minX+e.offsetX/t.sx, wz=t.minZ+e.offsetY/t.sz;
+    var wx=t.minX+(e.clientX-rect.left)/t.sx, wz=t.minZ+(e.clientY-rect.top)/t.sz;
     if(MODE==='point'){
       addMark(d.id,{t:'p',x:wx,z:wz});
     }else if(MODE==='brush'){
@@ -1416,77 +1508,6 @@ function drawOne(d){
     vv.span=ns;
     drawOne(d);
   };
-  // 触摸屏：单指按当前工具拖动/作画，双指捏合缩放（页面已设 touch-action:none）
-  cv.ontouchstart=function(e){
-    var t=TRANS[d.id], vv=VIEW[d.id];
-    if(!t||!vv)return;
-    e.preventDefault();
-    if(e.touches.length>=2){
-      DRAW=null;ERASE=null;DRAG=null;PREVIEW[d.id]=null;
-      var rect0=cv.getBoundingClientRect();
-      var a=e.touches[0],b=e.touches[1];
-      var mx=(a.clientX+b.clientX)/2-rect0.left, mz=(a.clientY+b.clientY)/2-rect0.top;
-      TOUCH={mode:'pinch',dist:Math.sqrt(Math.pow(a.clientX-b.clientX,2)+Math.pow(a.clientY-b.clientY,2))||1,
-        wx:t.minX+mx/t.sx,wz:t.minZ+mz/t.sz,cx:vv.cx,cz:vv.cz,span:vv.span};
-      drawOne(d);
-      return;
-    }
-    var p=e.touches[0], rect=cv.getBoundingClientRect();
-    var px=p.clientX-rect.left, pz=p.clientY-rect.top;
-    var wx=t.minX+px/t.sx, wz=t.minZ+pz/t.sz;
-    if(MODE==='pan'){
-      TOUCH={mode:'pan',x:p.clientX,y:p.clientY,cx:vv.cx,cz:vv.cz,span:vv.span,w:t.w};
-    }else if(MODE==='point'){
-      addMark(d.id,{t:'p',x:wx,z:wz});
-      TOUCH={mode:'done'};
-    }else if(MODE==='brush'){
-      DRAW={dim:d.id,mode:'brush',rect:rect,pts:[[wx,wz]],color:defaultColor()};
-      PREVIEW[d.id]={t:'b',pts:DRAW.pts.slice(),color:DRAW.color};
-      TOUCH={mode:'draw'};drawOne(d);
-    }else if(MODE==='circle'){
-      DRAW={dim:d.id,mode:'circle',rect:rect,wx:wx,wz:wz};
-      PREVIEW[d.id]={t:'c',x:wx,z:wz,r:0,color:'#faad14'};
-      TOUCH={mode:'draw'};drawOne(d);
-    }else if(MODE==='erase'){
-      ERASE={dim:d.id,rect:rect};eraseAt(d.id,wx,wz);TOUCH={mode:'erase'};
-    }
-  };
-  cv.ontouchmove=function(e){
-    var t=TRANS[d.id];if(!t||!TOUCH)return;
-    e.preventDefault();
-    if(TOUCH.mode==='pinch'){
-      if(e.touches.length>=2){
-        var a=e.touches[0],b=e.touches[1];
-        var dist=Math.sqrt(Math.pow(a.clientX-b.clientX,2)+Math.pow(a.clientY-b.clientY,2))||1;
-        var vv=VIEW[d.id];if(!vv)return;
-        var ns=Math.max(32,Math.min(2000000,TOUCH.span*(TOUCH.dist/dist)));
-        var ratio=ns/TOUCH.span;
-        vv.cx=TOUCH.wx+(TOUCH.cx-TOUCH.wx)*ratio;
-        vv.cz=TOUCH.wz+(TOUCH.cz-TOUCH.wz)*ratio;
-        vv.span=ns;drawOne(d);return;
-      }
-      // 松开一根手指 → 剩下的那根继续拖动地图
-      var p0=e.touches[0], vp=VIEW[d.id];
-      if(!p0||!vp){TOUCH=null;return}
-      TOUCH={mode:'pan',x:p0.clientX,y:p0.clientY,cx:vp.cx,cz:vp.cz,span:vp.span,w:t.w};
-    }
-    var p=e.touches[0];if(!p)return;
-    if(TOUCH.mode==='pan'){
-      var v=VIEW[d.id];if(!v)return;
-      var perPx=TOUCH.span/TOUCH.w;
-      v.cx=TOUCH.cx-(p.clientX-TOUCH.x)*perPx;
-      v.cz=TOUCH.cz-(p.clientY-TOUCH.y)*perPx;
-      drawOne(d);
-    }else if(TOUCH.mode==='draw'||TOUCH.mode==='erase'){
-      pointerMove(p.clientX,p.clientY);
-    }
-  };
-  cv.ontouchend=function(e){
-    if(e.touches&&e.touches.length)return; // 还有手指按着，等全部抬起再结束
-    e.preventDefault();
-    TOUCH=null;endPointer();
-  };
-  cv.ontouchcancel=function(){TOUCH=null;endPointer()};
 }
 /** 鼠标/触摸共用的拖动与作画逻辑（cx/cy 是 client 坐标） */
 function pointerMove(cx,cy){
@@ -1529,8 +1550,46 @@ function pointerMove(cx,cy){
   vv.cz=DRAG.cz-(cy-DRAG.y)*perPx;
   drawOne(dimById(DRAG.dim));
 }
-window.addEventListener('mousemove',function(e){pointerMove(e.clientX,e.clientY)});
-/** 结束一次拖动/作画（鼠标松开、触摸全部抬起时都走这里） */
+window.addEventListener('pointermove',function(e){
+  if(!POINTERS[e.pointerId])return;
+  POINTERS[e.pointerId]={x:e.clientX,y:e.clientY};
+  // 双指捏合：以两指中点为锚点缩放（Windows 触摸屏同样走 Pointer Events）
+  if(TOUCH&&TOUCH.mode==='pinch'){
+    var ids=Object.keys(POINTERS);
+    if(ids.length>=2){
+      var a=POINTERS[ids[0]], b=POINTERS[ids[1]];
+      var dist=Math.hypot(a.x-b.x,a.y-b.y)||1;
+      var vv=VIEW[TOUCH.dim];if(!vv)return;
+      var ns=Math.max(32,Math.min(2000000,TOUCH.span*(TOUCH.dist/dist)));
+      var ratio=ns/TOUCH.span;
+      vv.cx=TOUCH.wx+(TOUCH.cx-TOUCH.wx)*ratio;
+      vv.cz=TOUCH.wz+(TOUCH.cz-TOUCH.wz)*ratio;
+      vv.span=ns;
+      e.preventDefault();
+      drawOne(dimById(TOUCH.dim)||DIMS[0]);
+      return;
+    }
+  }
+  if(DRAW||ERASE||DRAG){
+    pointerMove(e.clientX,e.clientY);
+    e.preventDefault();
+  }
+});
+/** 抬起/取消一根指针：全部抬起才结束；捏合中松开一根则转为单指平移 */
+function releasePointer(e){
+  var wasPinch=TOUCH&&TOUCH.mode==='pinch';
+  delete POINTERS[e.pointerId];
+  var ids=Object.keys(POINTERS);
+  if(!ids.length){TOUCH=null;endPointer();return;}
+  if(wasPinch){
+    var vv=VIEW[TOUCH.dim], tr=TRANS[TOUCH.dim], p=POINTERS[ids[0]];
+    if(vv&&tr&&p)DRAG={dim:TOUCH.dim,x:p.x,y:p.y,cx:vv.cx,cz:vv.cz,span:vv.span,w:tr.w};
+    TOUCH=null;
+  }
+}
+window.addEventListener('pointerup',releasePointer);
+window.addEventListener('pointercancel',releasePointer);
+/** 结束一次拖动/作画（指针全部抬起时走这里） */
 function endPointer(){
   ERASE=null;
   if(DRAW){
@@ -1547,7 +1606,6 @@ function endPointer(){
   }
   DRAG=null;
 }
-window.addEventListener('mouseup',endPointer);
 /** 左侧「标记」列表：展示所有维度上的标记，可改名、改色、点击定位 */
 function renderMarkList(){
   var box=$('markList');if(!box)return;
@@ -1626,6 +1684,7 @@ $('clearMarks').onclick=function(){
 };
 setMode('pan');
 renderMarkList();
+loadMarks();
 function drawAll(){DIMS.forEach(drawOne)}
 function relTime(t){
   var s=Math.max(0,Date.now()-Number(t||0))/1000;
@@ -2217,7 +2276,8 @@ async function route(req, res, url) {
   if (!sess) return sendJSON(res, 401, { ok: false, error: '未登录', login: true });
   // 权限隔离：只有所有者能碰全部管理接口；主人/管理员额外可用 /api/admin/*，其他人只能用自己的 /api/me/*
   const adminApi = url.pathname === '/api/admin' || url.pathname.startsWith('/api/admin/');
-  const heatApi = url.pathname === '/api/heatmap';
+  const marksApi = url.pathname === '/api/heatmap/marks';
+  const heatApi = marksApi || url.pathname === '/api/heatmap';
   if (sess.role !== 'owner'
     && !url.pathname.startsWith('/api/me')
     && !heatApi
@@ -2273,6 +2333,28 @@ async function route(req, res, url) {
     if (!setPassword(sess.qq, newPass)) return sendJSON(res, 500, { ok: false, error: '保存失败' });
     logger.info(`[面板] QQ ${sess.qq} 已修改网页密码`);
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // ---------- 热力图标记：按登录 QQ 分开存，只能读写自己的 ----------
+  if (marksApi) {
+    const key = `u:${sess.qq}`;
+    if (req.method === 'GET') {
+      const all = loadHeatMarks();
+      const marks = all[key] && typeof all[key] === 'object' ? all[key] : {};
+      return sendJSON(res, 200, { ok: true, marks });
+    }
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      const clean = sanitizeHeatMarks(body && body.marks);
+      const all = loadHeatMarks();
+      if (Object.keys(clean).length) all[key] = clean;
+      else delete all[key];
+      if (!writeJsonAtomic(HEAT_MARKS_FILE, all)) {
+        return sendJSON(res, 500, { ok: false, error: '保存失败' });
+      }
+      return sendJSON(res, 200, { ok: true });
+    }
+    return sendJSON(res, 405, { ok: false, error: '方法不支持' });
   }
 
   // ---------- 位置热力图数据：所有者看全服，其他人只看自己绑定的游戏ID ----------
