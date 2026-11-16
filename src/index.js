@@ -76,6 +76,7 @@ function cacheSet(map, key, max, val) {
 const WS_URL = process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1:3001';
 const WS_TOKEN = process.env.ONEBOT_TOKEN || process.env.NAPCAT_TOKEN || '';
 const SAVE_DIR = process.env.SAVE_DIR || path.join(ROOT, 'data');
+const RESTART_NOTICE_FILE = path.join(SAVE_DIR, 'restart-notice.json');
 // MC 桥（服务器侧 mod）：桥接群号，以及是否把群消息转发进游戏
 const MC_BRIDGE_GROUP = String(process.env.MC_BRIDGE_GROUP || '');
 // 图片/表情转发进游戏：只发文字占位（游戏里要显示真图得靠客户端模组，已决定不做）
@@ -922,6 +923,8 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             const res = await fetchAndApplyUpdate();
             if (res.ok && res.updated) {
                 pendingSelfRestart = true;
+                // 记下发起更新的会话，重启上线后回去报个平安
+                rememberRestartNotice(key);
                 // 不依赖模型转述：更新完立刻在「发起更新」的这个会话里说一声
                 // （进程马上要重启，先把这句话发出去，免得模型还没回就被切掉）
                 const say = reply || notify;
@@ -1427,6 +1430,32 @@ function updateSources() {
 /** 更新成功后重启自己：PM2 环境用 pm2 restart（detached，免得被一起杀掉） */
 let pendingSelfRestart = false; // agent 调 bot_update 后，等回复发完再重启
 
+/** 记下「谁发起的更新」：重启上线后往这个会话回一条“我回来了” */
+function rememberRestartNotice(key) {
+    const m = /^(g|p):(\d{5,14})$/.exec(String(key || ''));
+    if (!m) return; // 游戏内伪会话 / 试用会话不记
+    writeJsonAtomic(RESTART_NOTICE_FILE, {
+        type: m[1] === 'g' ? 'group' : 'private',
+        id: Number(m[2]),
+        at: Date.now(),
+    });
+}
+
+/** 启动并连上 OneBot 后调用：把重启前记下的会话通知发出去（超过 1 小时视为过期） */
+function sendRestartNotice() {
+    const n = readJsonSafe(RESTART_NOTICE_FILE, null, 'restart-notice.json');
+    if (!n || !n.id || (n.type !== 'group' && n.type !== 'private')) return;
+    const clear = () => { try { fs.unlinkSync(RESTART_NOTICE_FILE); } catch { /* 已删或没权限都不影响 */ } };
+    if (Date.now() - Number(n.at || 0) > 3600 * 1000) return clear();
+    const text = '♻️ 重启完成，我已经带着新版本回来啦～';
+    const params = n.type === 'group'
+        ? { group_id: Number(n.id), message: [segText(text)] }
+        : { user_id: Number(n.id), message: [segText(text)] };
+    callApi(n.type === 'group' ? 'send_group_msg' : 'send_private_msg', params)
+        .then(clear)
+        .catch((e) => logger.warn('[重启] 上线通知发送失败，下次连接再试:', e.message));
+}
+
 function scheduleSelfRestart() {
     if (process.env.pm_id === undefined) return false;
     const name = process.env.name || 'xiaona-bot';
@@ -1560,6 +1589,7 @@ async function doSelfUpdate(event, r) {
     const res = await fetchAndApplyUpdate();
     if (!res.ok || !res.updated) return sendReply(event, res.message);
 
+    rememberRestartNotice(convKey(event));
     const willRestart = scheduleSelfRestart();
     await sendReply(event, res.message + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
 }
@@ -4157,7 +4187,11 @@ function connect() {
     const headers = WS_TOKEN ? { Authorization: `Bearer ${WS_TOKEN}` } : {};
     ws = new WebSocket(WS_URL, { headers });
 
-    ws.on('open', () => { setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 SnowLuma: ${WS_URL}`); });
+    ws.on('open', () => {
+        setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 SnowLuma: ${WS_URL}`);
+        // 刚重启过的话，回发起更新的会话说一声（稍等 OneBot 就绪）
+        setTimeout(sendRestartNotice, 1500);
+    });
 
     ws.on('message', (raw) => {
         let data;
