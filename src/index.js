@@ -1594,6 +1594,45 @@ async function doSelfUpdate(event, r) {
     await sendReply(event, res.message + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
 }
 
+/** #退群 的二次确认：群号 -> { uid, exp }，60 秒内有效 */
+const leaveGroupPending = new Map();
+
+/** #退群：先问一次，确认后才真正退群（避免手滑把机器人踢出群） */
+async function requestLeaveGroup(event, r) {
+    if (r !== 'owner' && r !== 'master' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以让小钠退群');
+    if (event.__replySink || String(convKey(event)).startsWith('mc:') || event.message_type !== 'group' || !event.group_id) {
+        return sendReply(event, '❌ #退群 只能在 QQ 群里用');
+    }
+    const gid = String(event.group_id);
+    leaveGroupPending.set(gid, { uid: String(event.user_id), exp: Date.now() + 60 * 1000 });
+    return sendReply(event, `⚠️ 确认要让小钠退出本群（${gid}）吗？\n`
+        + '回复 #确认退群 执行（60 秒内有效），其他消息不会执行。');
+}
+
+/** #确认退群：只有发起人（或所有者）能确认，确认后发告别语再退出 */
+async function confirmLeaveGroup(event, r) {
+    if (r !== 'owner' && r !== 'master' && r !== 'admin') return sendReply(event, '❌ 只有主人/管理员可以让小钠退群');
+    if (event.__replySink || String(convKey(event)).startsWith('mc:') || event.message_type !== 'group' || !event.group_id) {
+        return sendReply(event, '❌ #退群 只能在 QQ 群里用');
+    }
+    const gid = String(event.group_id);
+    const p = leaveGroupPending.get(gid);
+    if (!p || p.exp < Date.now()) {
+        leaveGroupPending.delete(gid);
+        return sendReply(event, '⌛ 没有待确认的退群操作（或已超时），请重新发 #退群');
+    }
+    if (p.uid !== String(event.user_id) && r !== 'owner') {
+        return sendReply(event, '❌ 只有发起 #退群 的人（或所有者）可以确认');
+    }
+    leaveGroupPending.delete(gid);
+    try {
+        await sendReply(event, '👋 收到，小钠这就退群，有缘再见～');
+        await callApi('set_group_leave', { group_id: Number(gid), is_dismiss: false });
+    } catch (e) {
+        return sendReply(event, `❌ 退群失败：${e.message}`.slice(0, 200));
+    }
+}
+
 async function handleCommand(event, text) {
     const [rawCmd, ...rest] = text.split(/\s+/);
     // 命令前缀：支持 "#"（推荐）与 "/"（兼容），内部统一按 "/" 处理
@@ -1627,6 +1666,13 @@ async function handleCommand(event, text) {
         case '/解除全体禁言':
         case '/群公告':
             return handleGroupAdmin(event, cmd, arg, r);
+
+        // 让机器人退出当前群：先发 #退群，再发 #确认退群
+        case '/退群':
+            return requestLeaveGroup(event, r);
+
+        case '/确认退群':
+            return confirmLeaveGroup(event, r);
 
         // 撤回我自己发的消息（引用那条 + #撤回，或 #撤回 <条数>）
         case '/撤回':
