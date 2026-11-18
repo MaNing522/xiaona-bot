@@ -142,6 +142,13 @@ export const DEFAULTS = {
         lanHost: '',           // lan 模式用：服务器局域网地址（IP 或主机名）
         publicUrl: '',         // public 模式用：完整公网地址（含 http:// 与端口）
     },
+    // QQ 群消息转发进游戏 / 合并转发前的敏感词过滤（网页保存配置时会原样保留）。
+    // words 用逗号 / 顿号 / 分号 / 空白分隔；命中后整段替换成 replace（英文不区分大小写）。
+    filter: {
+        enabled: true,
+        words: '',
+        replace: '***',
+    },
     // QQ 空间自动说说（网页「全局设置」可改，热加载生效）：
     // 每隔 minDays~maxDays 天随机发一条；每发 commentEvery 条自评一条；
     // replyComments=true 时，自己的说说新增评论会在动态下回复（SL 不提供评论内容，按原说说内容回应）。

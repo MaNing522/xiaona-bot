@@ -2748,12 +2748,13 @@ async function route(req, res, url) {
       search: { ...base.search },
       vision: { ...base.vision },
       bridge: { ...base.bridge },
+      filter: { ...base.filter },
       qzone: { ...base.qzone },
       ai: { ...base.ai },
       memory: { ...base.memory },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
-    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'tts', 'bind', 'search', 'vision', 'bridge', 'qzone', 'ai', 'memory']) {
+    for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'tts', 'bind', 'search', 'vision', 'bridge', 'filter', 'qzone', 'ai', 'memory']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
       for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];

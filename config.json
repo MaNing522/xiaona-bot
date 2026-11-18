@@ -71,6 +71,11 @@
     "lanHost": "",
     "publicUrl": ""
   },
+  "filter": {
+    "enabled": true,
+    "words": "",
+    "replace": "***"
+  },
   "qzone": {
     "enabled": true,
     "minDays": 1,
