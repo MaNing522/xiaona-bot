@@ -643,6 +643,7 @@ function buildChatRules({ allowSkip = false, allowVoice = false, allowImage = fa
 - 本服玩家的数据（时长/活跃度等）→ \`player_query\`。只有**外部公开的实时信息**（天气、新闻、比分、汇率…）才用 \`web_search\`。
 - **只查当前要查的东西**：历史记录里提过的服务器/玩家不要顺手重复再查，也别一条里塞多个查询。
 - 对方在你处理期间又发来消息时，系统会把它直接追加给你：**以最新消息为准**，把前后的意思合起来，统一回一次，不要分成两次回。
+- **更新 / 重启结果只用一两句话带过**：不要罗列提交标题、哈希、镜像源、依赖安装过程；对方没追问就别汇报"更新了什么"。
 
 ${tagRule}
 `;
@@ -887,7 +888,7 @@ function expectedHistoryCount() {
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, reply = null } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
@@ -925,16 +926,12 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             const res = await fetchAndApplyUpdate();
             if (res.ok && res.updated) {
                 pendingSelfRestart = true;
+                pendingUpdateMeta = { oldHead: res.oldHead, newHead: res.newHead };
                 // 记下发起更新的会话，重启上线后回去报个平安
                 rememberRestartNotice(key);
-                // 不依赖模型转述：更新完立刻在「发起更新」的这个会话里说一声
-                // （进程马上要重启，先把这句话发出去，免得模型还没回就被切掉）
-                const say = reply || notify;
-                if (say) {
-                    try { await say(res.message + '\n♻️ 更新完成，正在重启我，稍等…'); } catch { /* 发不出去也不影响更新/重启 */ }
-                }
             }
-            return res.message + (res.ok && res.updated ? '\n（已直接在这个会话里告知用户，回复时不用再重复更新细节）' : '');
+            // 不再由工具直接发一大段状态；结果交给 AI，用一两句话自然带过
+            return res.message;
         },
         // 只看不拉：查有没有新提交、更新了什么（不动代码、不重启）
         checkUpdate: () => checkForUpdates(),
@@ -1431,6 +1428,7 @@ function updateSources() {
 
 /** 更新成功后重启自己：PM2 环境用 pm2 restart（detached，免得被一起杀掉） */
 let pendingSelfRestart = false; // agent 调 bot_update 后，等回复发完再重启
+let pendingUpdateMeta = null;   // { oldHead, newHead }，给回滚看门狗用
 
 /** 记下「谁发起的更新」：重启上线后往这个会话回一条“我回来了” */
 function rememberRestartNotice(key) {
@@ -1449,7 +1447,10 @@ function sendRestartNotice() {
     if (!n || !n.id || (n.type !== 'group' && n.type !== 'private')) return;
     const clear = () => { try { fs.unlinkSync(RESTART_NOTICE_FILE); } catch { /* 已删或没权限都不影响 */ } };
     if (Date.now() - Number(n.at || 0) > 3600 * 1000) return clear();
-    const text = '♻️ 重启完成，我已经带着新版本回来啦～';
+    const text = n.failed
+        ? '刚才更新没成功，我已经退回上一个版本了，现在能正常说话。'
+        : '我回来啦～';
+    if (n.failed) logger.warn('[重启] 上次更新失败已回滚:', n.error || '未知原因');
     const params = n.type === 'group'
         ? { group_id: Number(n.id), message: [segText(text)] }
         : { user_id: Number(n.id), message: [segText(text)] };
@@ -1460,6 +1461,7 @@ function sendRestartNotice() {
 
 function scheduleSelfRestart() {
     if (process.env.pm_id === undefined) return false;
+    armUpdateWatchdog();
     const name = process.env.name || 'xiaona-bot';
     setTimeout(() => {
         try {
@@ -1470,6 +1472,26 @@ function scheduleSelfRestart() {
         }
     }, 1500);
     return true;
+}
+
+/** 重启前拉一个独立看门狗：新版本 90 秒内起不来就 git 回退并重启旧版 */
+function armUpdateWatchdog() {
+    const meta = pendingUpdateMeta;
+    if (!meta || !meta.oldHead || !meta.newHead) return false;
+    try {
+        const child = spawn(process.execPath, [
+            path.join(ROOT, 'src', 'updateWatchdog.js'),
+            meta.oldHead,
+            meta.newHead,
+            process.env.name || 'xiaona-bot',
+        ], { cwd: ROOT, detached: true, stdio: 'ignore' });
+        child.unref();
+        pendingUpdateMeta = null;
+        return true;
+    } catch (e) {
+        logger.warn('[更新] 回滚看门狗启动失败:', e.message);
+        return false;
+    }
 }
 
 /** agent 拉完更新后真正执行重启（回复发完/没发成都要走到，别把重启吞了） */
@@ -1560,7 +1582,6 @@ async function fetchAndApplyUpdate() {
 
     // package.json 变了就补装依赖，否则新代码可能起不来
     const changed = await runGit(['diff', '--name-only', oldHead, newHead]);
-    let npmMsg = '';
     if (/(^|\n)package(-lock)?\.json(\n|$)/.test(changed.out)) {
         const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         const npm = await new Promise((resolve) => {
@@ -1571,15 +1592,17 @@ async function fetchAndApplyUpdate() {
         if (!npm.ok) {
             return { ok: false, updated: true, message: `⚠️ 代码已更新到 ${newHead}，但依赖安装失败（先别重启）：\n` + npm.err.slice(0, 300) };
         }
-        npmMsg = '\n📦 依赖已装好';
     }
 
     const log = await runGit(['log', '--oneline', `${oldHead}..${newHead}`]);
-    const changes = log.out.split('\n').filter(Boolean).slice(0, 6).join('\n');
+    logger.info(`[更新] ${oldHead} → ${newHead}\n${log.out.split('\n').filter(Boolean).slice(0, 6).join('\n')}`);
     return {
         ok: true,
         updated: true,
-        message: `✅ 已更新 ${oldHead} → ${newHead}（源：${used}）${npmMsg}\n${changes}`,
+        oldHead,
+        newHead,
+        // 给 AI 的结果只说结论，提交明细写日志，别一股脑倒给用户
+        message: '✅ 更新完成，马上重启生效。',
     };
 }
 
@@ -1587,13 +1610,15 @@ async function fetchAndApplyUpdate() {
 async function doSelfUpdate(event, r) {
     if (r !== 'owner' && r !== 'master') return sendReply(event, '❌ 只有所有者/主人可以拉取更新');
 
-    await sendReply(event, '🔄 正在从 GitHub 拉取更新…');
+    await sendReply(event, '好，我去更新一下，稍等～');
     const res = await fetchAndApplyUpdate();
     if (!res.ok || !res.updated) return sendReply(event, res.message);
 
     rememberRestartNotice(convKey(event));
-    const willRestart = scheduleSelfRestart();
-    await sendReply(event, res.message + (willRestart ? '\n♻️ 正在重启…' : '\n⚠️ 当前不是 PM2 托管，请手动重启生效'));
+    pendingUpdateMeta = { oldHead: res.oldHead, newHead: res.newHead };
+    const pm2 = process.env.pm_id !== undefined;
+    await sendReply(event, pm2 ? '更新好了，正在重启，马上回来～' : '更新好了；当前不是 PM2 托管，需要手动重启才生效。');
+    if (pm2) scheduleSelfRestart();
 }
 
 /** #退群 的二次确认：群号 -> { uid, exp }，60 秒内有效 */
@@ -3379,8 +3404,6 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
             extraUserMessages: prepared.slice(1).map((p) => ({ role: 'user', content: p.metaLine })),
             ctx: buildAgentCtx(prepared[0].memKey, String(first.event.user_id), {
                 images: imgs,
-                // 更新完成等需要直接告知用户的话，走这里发到当前会话
-                reply: (text) => (signal && signal.aborted ? Promise.resolve() : sendReply(first.event, text)),
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
                     if (signal && signal.aborted) return Promise.resolve();

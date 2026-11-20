@@ -3082,6 +3082,11 @@ export async function startWebUI() {
       });
       const actual = server.address().port;
       webuiPort = actual;
+      // 记下实际端口，供更新看门狗判断新版本是否真的起来了（端口被占用时会顺延）
+      try {
+        fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
+        fs.writeFileSync(path.join(ROOT, 'data', 'webui-port.json'), JSON.stringify({ port: actual, https: httpsOn }));
+      } catch { /* 写不了不影响面板 */ }
       if (p !== port) {
         logger.warn(`⚠️  ${httpsOn ? 'HTTPS' : 'HTTP'} 端口 ${port} 被占用（${p === 0 ? '已改用系统分配的端口' : ''}），WebUI 实际监听 ${actual}。`
           + ' 想固定端口请改 .env 的 WEBUI_PORT。');
