@@ -28,7 +28,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, banEachPlayer, unbanEachPlayer, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { maskSensitive } from './filter.js';
+import { maskForwardText } from './tencentWords.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
@@ -1934,7 +1934,7 @@ async function handleCommand(event, text) {
             // 卡片左边显示的名字：查不到就退回号码，别留空；文案同样过敏感词
             for (const e of entries) {
                 e.name = await atDisplayName(gid, e.uin, '');
-                if (e.text) e.text = maskSensitive(e.text, cfg.filter);
+                if (e.text) e.text = maskForwardText(e.text, cfg.filter);
             }
 
             // 防封 + 不阻塞事件循环：await 等一会儿再发（别用 sleep 阻塞线程）
@@ -3911,7 +3911,7 @@ function forwardGroupToMc(event, who) {
         .then((text) => {
             if (!text) return;
             // 转发进游戏前先过敏感词（config.json 的 filter，热加载生效）
-            const safe = maskSensitive(text, cfg.filter);
+            const safe = maskForwardText(text, cfg.filter);
             if (!sendToBoundPlayers(`：${safe}`, event.user_id, who)) hintNobodyBound();
         })
         .catch((e) => logger.error('[MC桥] 转发内容渲染失败:', e.message));

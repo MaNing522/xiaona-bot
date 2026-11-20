@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseSensitiveWords, maskSensitive } from '../src/filter.js';
+import { maskByWords } from '../src/tencentWords.js';
 
 describe('敏感词过滤', () => {
   it('词表支持多种分隔符并去重', () => {
@@ -19,5 +20,17 @@ describe('敏感词过滤', () => {
 
   it('词里的正则元字符按普通字符匹配', () => {
     expect(maskSensitive('a.b axb', { words: 'a.b', replace: '#' })).toBe('# axb');
+  });
+});
+
+describe('腾讯词库匹配', () => {
+  it('取最长匹配并跳过单字词', () => {
+    const words = ['妈', '六四', '六四事件', '台独'];
+    expect(maskByWords('我妈说六四事件和台独都不该聊', words, '***'))
+      .toBe('我妈说***和***都不该聊');
+  });
+
+  it('英文不区分大小写', () => {
+    expect(maskByWords('Fuck this', ['fuck'], '#')).toBe('# this');
   });
 });

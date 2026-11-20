@@ -143,7 +143,8 @@ export const DEFAULTS = {
         publicUrl: '',         // public 模式用：完整公网地址（含 http:// 与端口）
     },
     // QQ 群消息转发进游戏 / 合并转发前的敏感词过滤（网页保存配置时会原样保留）。
-    // words 用逗号 / 顿号 / 分号 / 空白分隔；命中后整段替换成 replace（英文不区分大小写）。
+    // 内置 tencent-sensitive-words 词库（src/tencent-sensitive-words.txt）；
+    // words 是额外补充的词，逗号 / 顿号 / 分号 / 空白分隔；命中后替换成 replace（英文不区分大小写）。
     filter: {
         enabled: true,
         words: '',

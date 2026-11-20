@@ -1093,7 +1093,12 @@ a{color:var(--accent);text-decoration:none}
       </select>
     </label>
     <span style="flex:1"></span>
-    <label class="hint row" style="gap:4px"><input type="checkbox" id="auto"> 自动刷新</label>
+    <label class="hint row" style="gap:4px"><input type="checkbox" id="auto" checked> 自动刷新</label>
+    <select id="autoSpeed" title="自动刷新间隔">
+      <option value="500">快 0.5s</option>
+      <option value="1000" selected>中 1s</option>
+      <option value="5000">慢 5s</option>
+    </select>
     <button id="refresh" class="ghost">刷新</button>
   </div>
   <div class="meta" id="meta" style="margin-top:8px">加载中…</div>
@@ -1268,6 +1273,11 @@ function eraseAt(dim,wx,wz){
   return true;
 }
 var SINCE=Number(localStorage.getItem('xnHeatSince'));
+// 自动刷新：默认开启、默认中速 1 秒；可选快 0.5s / 慢 5s
+var AUTO_ON=localStorage.getItem('xnHeatAuto')!=='0';
+var AUTO_MS=Number(localStorage.getItem('xnHeatSpeed'))||1000;
+if(AUTO_MS!==500&&AUTO_MS!==1000&&AUTO_MS!==5000)AUTO_MS=1000;
+var LOADING=false;
 if(!isFinite(SINCE)||SINCE<0)SINCE=86400000;
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function get(url,cb){
@@ -1764,9 +1774,12 @@ function dimName(d){
   return ({'minecraft:overworld':'主世界','minecraft:the_nether':'下界','minecraft:the_end':'末地'})[d]||d||'未知维度';
 }
 function load(){
+  if(LOADING)return; // 0.5 秒档刷新很快，别让请求叠在一起
+  LOADING=true;
   $('err').textContent='';
   var since=SINCE>0?Date.now()-SINCE:0;
   get('/api/heatmap'+(since?'?since='+since:''),function(st,j){
+    LOADING=false;
     if(st===401){location.href='/login';return}
     if(!j.ok){$('err').textContent=j.error||'加载失败';return}
     DATA=j;
@@ -1794,9 +1807,21 @@ $('since').onchange=function(){
   VIEW={};TRANS={};
   load();
 };
-$('auto').onchange=function(){
+$('auto').checked=AUTO_ON;
+$('autoSpeed').value=String(AUTO_MS);
+function startAuto(){
   if(timer){clearInterval(timer);timer=null}
-  if($('auto').checked)timer=setInterval(load,30000);
+  if(AUTO_ON)timer=setInterval(load,AUTO_MS);
+}
+$('auto').onchange=function(){
+  AUTO_ON=$('auto').checked;
+  localStorage.setItem('xnHeatAuto',AUTO_ON?'1':'0');
+  startAuto();
+};
+$('autoSpeed').onchange=function(){
+  AUTO_MS=Number($('autoSpeed').value)||1000;
+  localStorage.setItem('xnHeatSpeed',String(AUTO_MS));
+  startAuto();
 };
 // 单张地图全屏（浏览器窗口内）：只把这一张铺满窗口，别的都藏起来；Esc 或右上角按钮退出
 var FS_CID='';
@@ -1822,8 +1847,7 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'),function(
   };
 });
 window.addEventListener('resize',function(){if(DATA)drawAll()});
-syncSelect();load();
-if($('auto').checked)timer=setInterval(load,30000);
+syncSelect();load();startAuto();
 </script></body></html>`;
 }
 
