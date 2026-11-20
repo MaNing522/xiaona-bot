@@ -542,6 +542,8 @@ button:hover{filter:brightness(1.06)}
 button:active{transform:scale(.98)}
 button:disabled{opacity:.6;cursor:default}
 .err{margin-top:12px;color:var(--danger);font-size:12px;min-height:16px}
+.chk{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:13px;color:var(--sub);cursor:pointer;user-select:none}
+.chk input{width:16px;height:16px;min-height:0;margin:0;padding:0;accent-color:var(--accent);cursor:pointer}
 .alt{display:block;margin-top:14px;text-align:center;color:var(--accent);font-size:13px;text-decoration:none}
 .alt:hover{text-decoration:underline}
 @keyframes xnUp{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
@@ -569,6 +571,7 @@ button:disabled{opacity:.6;cursor:default}
       <img id="cap" alt="验证码" title="点一下换一张">
     </div>
   </div>
+  <label class="chk" id="saveBox"><input type="checkbox" id="save"> 保存账号密码</label>
   <button id="b">登录</button>
   <div id="codeBox" style="display:none">
     <label>QQ 验证码</label>
@@ -594,6 +597,41 @@ function showCaptcha(show) {
 }
 if (${needCaptcha ? 'true' : 'false'}) fresh();
 
+// 「保存账号密码」：勾选后把 QQ 号 + 密码存本地（base64 混淆，不是加密），下次打开自动填好
+var SAVE_KEY = 'xnLoginSaved';
+function encPass(v) {
+  try {
+    var bytes = new TextEncoder().encode(String(v)), s = '';
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  } catch (e) { return String(v); }
+}
+function decPass(v) {
+  try {
+    var s = atob(String(v)), bytes = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch (e) { return String(v); }
+}
+(function restoreSaved() {
+  try {
+    var s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    if (!s || !s.qq) return;
+    $('u').value = String(s.qq);
+    if (s.pass) $('p').value = decPass(s.pass);
+    $('save').checked = true;
+  } catch (e) {}
+})();
+function saveCred(qq, pass) {
+  try {
+    if ($('save').checked) localStorage.setItem(SAVE_KEY, JSON.stringify({ qq: qq, pass: encPass(pass) }));
+    else localStorage.removeItem(SAVE_KEY);
+  } catch (e) {}
+}
+$('save').onchange = function () {
+  if (!this.checked) { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
+};
+
 $('toggle').onclick = function (ev) {
   ev.preventDefault();
   var box = $('codeBox');
@@ -601,6 +639,7 @@ $('toggle').onclick = function (ev) {
   box.style.display = show ? 'block' : 'none';
   // 验证码登录模式下不需要密码框和「登录」按钮，避免两套表单混在一起
   $('pwBox').style.display = show ? 'none' : 'block';
+  $('saveBox').style.display = show ? 'none' : 'flex';
   $('b').style.display = show ? 'none' : 'block';
   if (show) {
     $('capBox').setAttribute('data-prev', $('capBox').style.display || 'none');
@@ -634,8 +673,9 @@ function done(j) {
 $('f').onsubmit = function (ev) {
   ev.preventDefault();
   $('b').disabled = true; $('e').textContent = '';
-  post('/api/login', { qq: $('u').value.trim(), pass: $('p').value, captcha: $('c').value }, function (st, j) {
-    if (st >= 200 && st < 300 && j.ok) { done(j); return; }
+  var qq = $('u').value.trim(), pass = $('p').value;
+  post('/api/login', { qq: qq, pass: pass, captcha: $('c').value }, function (st, j) {
+    if (st >= 200 && st < 300 && j.ok) { saveCred(qq, pass); done(j); return; }
     $('e').textContent = j.error || ('登录失败（HTTP ' + st + '）');
     if (j.captchaRequired) showCaptcha(true);
     $('b').disabled = false; $('c').value = ''; $('p').value = '';
