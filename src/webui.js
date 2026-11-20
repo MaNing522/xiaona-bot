@@ -283,6 +283,68 @@ function normalizeAsr(raw) {
   };
 }
 
+// ---------- 网页设置与 .env 的对应关系 ----------
+// 这些配置项如果已经在 .env 里写了（键存在），网页就显示 .env 的值、保存时写回 .env；
+// .env 里没有对应键的，仍然按原方案存 config.json。
+const ENV_BACKED = {
+  tts: {
+    provider: 'TTS_PROVIDER',
+    xiaomiVoice: 'TTS_XIAOMI_VOICE',
+    voice: 'TTS_VOICE',
+    rate: 'TTS_RATE',
+    volume: 'TTS_VOLUME',
+  },
+  asr: {
+    customUrl: 'ASR_CUSTOM_URL',
+    customModel: 'ASR_CUSTOM_MODEL',
+  },
+};
+
+/** 读 .env 里确实存在的键值（不存在的不返回） */
+function readEnvValues() {
+  const out = {};
+  let raw;
+  try { raw = fs.readFileSync(path.join(ROOT, '.env'), 'utf8'); } catch (e) { return out; }
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+    if (!m) continue;
+    let v = m[2].trim();
+    if (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === '\'' && v.endsWith('\'')))) {
+      v = v.slice(1, -1);
+    } else {
+      v = v.replace(/\s+#.*$/, ''); // 去掉未加引号值后面的行内注释
+    }
+    out[m[1]] = v;
+  }
+  return out;
+}
+
+/** 只改 .env 里已经存在的键，保留文件其它内容与换行风格 */
+function writeEnvValues(updates) {
+  const keys = Object.keys(updates);
+  if (!keys.length) return true;
+  const file = path.join(ROOT, '.env');
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { return false; }
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  const lines = raw.split(/\r?\n/);
+  const left = new Set(keys);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(lines[i]);
+    if (!m || !left.has(m[1])) continue;
+    const key = m[1];
+    let v = String(updates[key] ?? '');
+    // 含空格 / # 的值加双引号，避免 dotenv 把后半段当注释
+    if (/[\s#]/.test(v)) v = '"' + v.replace(/"/g, '\\"') + '"';
+    lines[i] = key + '=' + v;
+    left.delete(key);
+  }
+  if (left.size) return false; // 有键没找到就不写，避免“以为改了”
+  try { fs.writeFileSync(file, lines.join(eol)); } catch (e) { return false; }
+  for (const k of keys) process.env[k] = String(updates[k] ?? '');
+  return true;
+}
+
 // ---------- 面板认证：QQ 号 + 密码 / QQ 验证码 + 图形人机验证 + 会话 Cookie ----------
 // 面板能以机器人身份发消息、管理授权，公开到局域网后必须挡一层。
 // 所有者（.env BOT_OWNER）登录后是完整管理面板；其他人（已绑定玩家/管理员）只能进 /me 管自己的绑定。
@@ -2714,6 +2776,7 @@ async function route(req, res, url) {
     }
     return sendJSON(res, 200, {
       global: config(),                       // 全局设置（config.json）
+      env: readEnvValues(),                   // .env 里已写了的同名配置项
       conversations: chatCfg.allOverrides(),   // 各会话的覆盖项
       keys,
     });
@@ -2794,7 +2857,7 @@ async function route(req, res, url) {
 
   // 全局设置 = config.json：查看 / 编辑（写入后热加载生效）
   if (url.pathname === '/api/global-config' && req.method === 'GET') {
-    return sendJSON(res, 200, { ok: true, config: config() });
+    return sendJSON(res, 200, { ok: true, config: config(), env: readEnvValues() });
   }
   if (url.pathname === '/api/global-config' && req.method === 'POST') {
     const body = await readBody(req);
@@ -2818,10 +2881,11 @@ async function route(req, res, url) {
       memory: { ...base.memory },
     };
     // 只接受已知段下的已知键，避免往 config.json 里塞入无关字段
+    const submitted = new Set();
     for (const seg of ['rateLimit', 'cooldown', 'engage', 'chat', 'notice', 'asr', 'tts', 'bind', 'search', 'vision', 'bridge', 'filter', 'qzone', 'ai', 'memory']) {
       const b = body && body[seg];
       if (!b || typeof b !== 'object') continue;
-      for (const k of Object.keys(next[seg])) if (k in b) next[seg][k] = b[k];
+      for (const k of Object.keys(next[seg])) if (k in b) { next[seg][k] = b[k]; submitted.add(seg + '.' + k); }
     }
     // 空间动态参数做边界校正：间隔 1~7 天、评论频率 0~10、查看权限只允许支持的值
     next.qzone = normalizeQzone(next.qzone);
@@ -2831,9 +2895,23 @@ async function route(req, res, url) {
     // 语音：TTS 后端只认 xiaomi / edge（空=自动），ASR 只认 mimo / local / custom
     next.tts = normalizeTts(next.tts);
     next.asr = normalizeAsr(next.asr);
+    // .env 里已经写了的项：值写回 .env，config.json 对应字段清空，让 .env 成为唯一来源
+    const envNow = readEnvValues();
+    const envUpdates = {};
+    for (const seg of Object.keys(ENV_BACKED)) {
+      for (const field of Object.keys(ENV_BACKED[seg])) {
+        const key = ENV_BACKED[seg][field];
+        if (!Object.prototype.hasOwnProperty.call(envNow, key)) continue; // .env 没写 → 仍存 config.json
+        if (submitted.has(seg + '.' + field)) {
+          envUpdates[key] = String(next[seg][field] ?? '').trim();
+        }
+        next[seg][field] = '';
+      }
+    }
+    if (!writeEnvValues(envUpdates)) return sendJSON(res, 500, { ok: false, error: '写入 .env 失败' });
     if (!writeJsonAtomic(CONFIG_PATH, next)) return sendJSON(res, 500, { ok: false, error: '写入 config.json 失败' });
     reloadConfig(); // 立即热加载生效（MC 桥换地址/开关由 index.js 的配置监听在 1 秒内重连）
-    return sendJSON(res, 200, { ok: true, config: config() });
+    return sendJSON(res, 200, { ok: true, config: config(), env: readEnvValues() });
   }
 
   // ---------- AI 接口管理：增删自定义接口 / 切换当前用哪个 ----------
