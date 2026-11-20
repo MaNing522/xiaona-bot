@@ -21,6 +21,7 @@ import { isMcConnected, getGameBans, banPlayers, banEachPlayer, unbanEachPlayer,
 import { listProviders, getActiveId, saveProvider, deleteProvider, setActive } from './aiProviders.js';
 import { isSearchEnabled, searchSettings } from './search.js';
 import * as chatCfg from './chatSettings.js';
+import * as convStats from './convStats.js';
 import { qzoneStatus, postQzoneNow, normalizeQzone } from './qzone.js';
 import { HELP_CMDS, TIERS } from './help.js';
 import { config, reloadConfig, CONFIG_PATH } from './config.js';
@@ -165,18 +166,33 @@ async function probeSnowLuma() {
   return slUp;
 }
 
-// QQ.exe 是否在跑（5 秒缓存；tasklist 查询不贵，但面板轮询很频繁）
+// QQ 客户端是否在跑（5 秒缓存）
+// · Windows：tasklist 查 QQ.exe
+// · Linux：QQ 跑在 SnowLuma 的 Docker 容器里，先看容器名，再退回 pgrep（兼容本机直跑）
 let qqUp = false;
 let qqProbeAt = 0;
+function probeQQLinux(done) {
+  execFile('docker', ['ps', '--filter', 'name=snowluma', '--format', '{{.Names}}'],
+    { windowsHide: true, timeout: 4000 }, (err, stdout) => {
+      if (!err && String(stdout || '').trim()) return done(true);
+      execFile('pgrep', ['-f', '([/ ]|^)[Qq][Qq]([ /]|$)'], { timeout: 3000 }, (e2, out2) => {
+        done(!e2 && !!String(out2 || '').trim());
+      });
+    });
+}
 function probeQQ() {
   const now = Date.now();
   if (now - qqProbeAt < 5000) return Promise.resolve(qqUp);
   qqProbeAt = now;
   return new Promise((resolve) => {
-    execFile('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/NH'], { windowsHide: true }, (err, stdout) => {
-      qqUp = !err && /QQ\.exe/i.test(String(stdout || ''));
-      resolve(qqUp);
-    });
+    if (process.platform === 'win32') {
+      execFile('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/NH'], { windowsHide: true }, (err, stdout) => {
+        qqUp = !err && /QQ\.exe/i.test(String(stdout || ''));
+        resolve(qqUp);
+      });
+      return;
+    }
+    probeQQLinux((up) => { qqUp = up; resolve(qqUp); });
   });
 }
 
@@ -2777,6 +2793,7 @@ async function route(req, res, url) {
     return sendJSON(res, 200, {
       global: config(),                       // 全局设置（config.json）
       env: readEnvValues(),                   // .env 里已写了的同名配置项
+      stats: convStats.all(),                 // 每个会话累计的唤起 / 回复次数
       conversations: chatCfg.allOverrides(),   // 各会话的覆盖项
       keys,
     });

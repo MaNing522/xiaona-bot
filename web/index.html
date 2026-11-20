@@ -204,7 +204,6 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       </div>
     </div>
     <nav class="nav">
-      <button class="nav-item active" data-tab="login"><span class="ico">📊</span>连接状态</button>
       <button class="nav-item" data-tab="perms"><span class="ico">👑</span>授权</button>
       <button class="nav-item" data-tab="bind"><span class="ico">🔗</span>绑定管理</button>
       <button class="nav-item" data-tab="accounts"><span class="ico">👥</span>账户管理</button>
@@ -213,7 +212,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       <button class="nav-item" data-tab="conv"><span class="ico">🗂️</span>会话设置</button>
       <button class="nav-item" data-tab="gcfg"><span class="ico">🌐</span>全局设置</button>
       <button class="nav-item" data-tab="trial"><span class="ico">🧪</span>私聊试用</button>
-      <button class="nav-item" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
+      <button class="nav-item active" data-tab="status"><span class="ico">⚙️</span>状态 / 帮助</button>
     </nav>
     <div class="side-foot">
       <div class="live">
@@ -227,7 +226,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
 
   <main class="main">
     <header class="topbar">
-      <div class="tb-title" id="tbTitle">连接状态</div>
+      <div class="tb-title" id="tbTitle">状态 / 帮助</div>
       <div class="tb-right">
         <span class="tb-sub" id="tbSub">小钠控制面板</span>
         <a class="tb-auth" href="/ssqq">网页 QQ</a>
@@ -235,31 +234,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
       </div>
     </header>
     <div class="grid" id="main">
-      <!-- 连接状态 -->
-  <div class="panel active" data-panel="login">
-    <div class="card">
-      <h2>📊 连接状态</h2>
-      <div class="stat"><span>SnowLuma 在线</span><span id="stSlUp" class="pill warn">…</span></div>
-      <div class="stat"><span>QQ 客户端</span><span id="stQq" class="pill warn">…</span></div>
-      <div class="stat"><span>登录状态</span><span id="stLoginState" class="pill warn">…</span></div>
-      <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stSlBot" class="pill warn">…</span></div>
-      <div class="stat"><span>SnowLuma 控制台</span><b id="stSlWebui">—</b></div>
-      <a class="btn ghost" id="slJump" href="http://127.0.0.1:5099" target="_blank" rel="noopener"
-         style="width:auto;margin-top:10px;padding:0 18px;text-decoration:none">🔗 打开 SL WebUI</a>
-    </div>
-    <div class="card">
-      <h2>🔐 QQ 登录</h2>
-      <div class="hint" style="margin-top:0">SnowLuma 通过注入真实 QQ 进程工作，<b>只能扫码登录</b>：首次使用请在服务器桌面上打开 QQ 扫码，登录后自动注入，无需其它操作。</div>
-      <div class="hint">启动器会自动拉起 QQ 与 SnowLuma；QQ 未登录时 OneBot 端口不会就绪，机器人会持续自动重连。</div>
-      <div class="hint">SnowLuma 自带控制台只监听服务器本机（默认 127.0.0.1:5099），需要时在服务器上打开。</div>
-    </div>
-    <div class="card span2">
-      <h2>📄 SnowLuma 日志</h2>
-      <div class="log" id="lgSlLog"></div>
-    </div>
-  </div>
-
-  <!-- 授权 -->
+      <!-- 授权 -->
   <div class="panel" data-panel="perms">
     <div class="card">
       <h2>👑 所有者 / 主人 / 管理员</h2>
@@ -435,20 +410,33 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
     </div>
   </div>
 
-  <!-- 状态 -->
-  <div class="panel" data-panel="status">
+  <!-- 状态 / 帮助（连接状态与运行状态合并） -->
+  <div class="panel active" data-panel="status">
+    <div class="card">
+      <h2>📊 连接状态</h2>
+      <div class="stat"><span>SnowLuma 在线</span><span id="stSlUp" class="pill warn">…</span></div>
+      <div class="stat"><span>QQ 客户端</span><span id="stQq" class="pill warn">…</span></div>
+      <div class="stat"><span>登录状态</span><span id="stLoginState" class="pill warn">…</span></div>
+      <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stSlBot" class="pill warn">…</span></div>
+      <div class="stat"><span>SnowLuma 控制台</span><b id="stSlWebui">—</b></div>
+      <a class="btn ghost" id="slJump" href="http://127.0.0.1:5099" target="_blank" rel="noopener"
+         style="width:auto;margin-top:10px;padding:0 18px;text-decoration:none">🔗 打开 SL WebUI</a>
+    </div>
     <div class="card">
       <h2>⚙️ 运行状态</h2>
       <div class="stat"><span>控制面板服务</span><span id="stUp" class="pill warn">…</span></div>
-      <div class="stat"><span>机器人 ↔ SnowLuma</span><span id="stBot" class="pill warn">…</span></div>
-      <div class="stat"><span>SnowLuma 在线</span><span id="stSnowluma" class="pill warn">…</span></div>
       <div class="stat"><span>AI 模型</span><b id="stModel">—</b></div>
       <div class="stat"><span>联网搜索</span><b id="stSearch">—</b></div>
       <div class="stat"><span>图像识别</span><b id="stVision">—</b></div>
       <div class="stat"><span>MC 服务器桥</span><b id="stBridge">—</b></div>
       <div class="stat"><span>OneBot 地址</span><b id="stWs">—</b></div>
       <div class="stat"><span>WebUI 端口（HTTPS）</span><b id="stWebuiPort">—</b></div>
-      <div class="stat"><span>QQ 客户端</span><b id="stQqClient">—</b></div>
+    </div>
+    <div class="card">
+      <h2>🔐 QQ 登录</h2>
+      <div class="hint" style="margin-top:0">SnowLuma 通过注入真实 QQ 进程工作，<b>只能扫码登录</b>：首次使用请在服务器桌面上打开 QQ 扫码，登录后自动注入，无需其它操作。</div>
+      <div class="hint">启动器会自动拉起 QQ 与 SnowLuma；QQ 未登录时 OneBot 端口不会就绪，机器人会持续自动重连。</div>
+      <div class="hint">SnowLuma 自带控制台只监听服务器本机（默认 127.0.0.1:5099），需要时在服务器上打开。</div>
     </div>
     <div class="card span2">
       <h2>📄 终端实时日志（与终端同步）</h2>
@@ -556,7 +544,7 @@ function showTab(name){
   if(name==='accounts')acLoad();
 }
 document.querySelectorAll('.nav-item[data-tab]').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
-showTab((location.hash||'').replace('#','')||'login');
+showTab((location.hash||'').replace('#','')||'status');
 
 
 
@@ -566,8 +554,7 @@ $('pmReq').onclick=async()=>{const qq=$('pmApply').value.trim();if(!qq)return;
     $('pmApplyMsg').textContent=d.msg||'';$('pmApply').value='';perms();}catch(e){$('pmApplyMsg').textContent='失败: '+e.message;}};
 
 async function load(){if(xnLoggedIn===false)return;try{const s=await api('/api/status');
-  set('stUp','正常','ok');set('stBot',s.botConnected?'已连接':'未连接',s.botConnected?'ok':'warn');
-  set('stSnowluma',s.snowlumaUp?'在线':'离线',s.snowlumaUp?'ok':'warn');
+  set('stUp','正常','ok');
   $('stModel').textContent=s.model;$('stWs').textContent=s.wsUrl;
   // 搜索 / 图像识别 / MC 桥：显示当前切在哪个后端
   const se=s.search||{}, vi=s.vision||{}, mc=s.mcBridge||{};
@@ -575,7 +562,6 @@ async function load(){if(xnLoggedIn===false)return;try{const s=await api('/api/s
   $('stVision').textContent=(VISION_NAMES[vi.provider]||vi.provider||'AI 主模型');
   $('stBridge').textContent=(mc.base?(mc.connected?'已连接 · ':'未连接 · ')+(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'):(BRIDGE_NAMES[mc.mode]||mc.mode||'.env 地址'));
   if($('stWebuiPort'))$('stWebuiPort').textContent=s.webuiPort||'—';
-  $('stQqClient').textContent=s.qqRunning?'运行中':'未运行';
   $('sub').textContent=s.wsUrl+' · 授权由所有者 / 主人管理'+(s.botError?' · '+s.botError:'');
   set('lvUp','服务在线','ok');set('lvBot',s.botConnected?'机器人已连接':'机器人未连接',s.botConnected?'ok':'warn');
   set('lvAuth','授权由所有者 / 主人管理','warn');
@@ -603,9 +589,6 @@ async function refresh(){if(xnLoggedIn===false)return;try{const s=await api('/ap
   // 跳转按钮：把 127.0.0.1 换成当前面板的地址，远程打开也能用
   const slBase=s.snowlumaWebui||('http://127.0.0.1:'+(s.snowlumaWebuiPort||5099));
   $('slJump').href=slBase.replace('127.0.0.1',location.hostname||'127.0.0.1');
-  try{const d=await api('/api/snowluma/logs');
-    renderLog('lgSlLog', (d.logs&&d.logs.length)?d.logs:['(暂无日志)']);
-  }catch(e){}
 }catch(e){}}
 
 // 终端实时日志（与终端输出一致）
@@ -647,7 +630,7 @@ $('ftRole').onchange=ftRender;
 $('ftCats').onclick=(e)=>{ const t=e.target.closest('.ftcat'); if(!t) return; ftCat=t.dataset.cat; ftLoad(); };
 
 // ---------- 会话管理（群聊/单聊各自覆盖全局设置） ----------
-let cvSel='', cvGlobal=null, cvEnv={}, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true, cvErr='';
+let cvSel='', cvGlobal=null, cvEnv={}, cvStats={}, cvOver={}, cvGroups=[], cvFriends=[], cvOwner='', cvListOk=true, cvErr='';
 const SEGNAME={rateLimit:'限速',cooldown:'冷却',engage:'唤起',bind:'绑定'};
 // 数值项中文名（用于全局设置与会话覆盖表单）
 const NUM_LABELS={
@@ -815,11 +798,14 @@ function cvItem(c){
   const n=c.overrides||0;
   const tip=c.pinned?'📌 ':'';
   const own=c.key===cvOwner?' <span class="hint" style="margin:0">(所有者)</span>':'';
+  const st=cvStats[c.key]||{};
+  const wake=Number(st.wake)||0, reply=Number(st.reply)||0;
   return '<div class="cmd" style="display:flex;align-items:center;gap:8px'+(c.key===cvSel?';border-color:var(--accent)':'')+'">'+
     '<div data-sel="'+esc(c.key)+'" style="cursor:pointer;flex:1;min-width:0;display:flex;align-items:center;gap:8px">'+
       '<b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+tip+esc(c.name)+own+'</b>'+
       '<span class="hint" style="margin:0;flex:0 0 auto">'+esc(c.key)+'</span>'+
       '<span class="hint" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0">'+(n?('已覆盖 '+n+' 项'):'使用全局')+'</span>'+
+      '<span class="hint" style="flex:0 0 auto;margin:0" title="累计唤起 / 回复">💬 '+wake+' / '+reply+'</span>'+
     '</div>'+
     '<button class="btn '+(c.pinned?'green':'ghost')+'" data-pin="'+esc(c.key)+'" title="'+(c.pinned?'取消置顶':'置顶')+'" style="min-height:30px;width:auto;padding:0 10px;font-size:12px;margin:0">'+(c.pinned?'📌 已置顶':'置顶')+'</button>'+
     '</div>';
@@ -874,6 +860,14 @@ function cvRenderForm(){
       '<label>退群文案</label><input id="cvLeave" type="text" value="'+esc(ono.leaveText||'')+'" placeholder="留空则用全局（'+esc(gno.leaveText||'')+'）">'+
       '<div class="hint">可用占位符：{name} 昵称、{kind} 进/退群描述、{note} 附加说明。进群消息会自动 @ 新人。</div>';
   }
+  // 本会话累计统计（唤起 / 回复）
+  const st=cvStats[cvSel]||{};
+  html+='<h2 style="font-size:14px;margin:18px 0 4px">📈 本会话统计</h2>'+
+    '<div class="row" style="grid-template-columns:1fr 1fr">'+
+    '<div><label>累计唤起</label><b id="cvStatWake" style="font-size:20px">'+(Number(st.wake)||0)+' 次</b></div>'+
+    '<div><label>累计回复</label><b id="cvStatReply" style="font-size:20px">'+(Number(st.reply)||0)+' 次</b></div>'+
+    '</div>'+
+    '<div class="hint">唤起 = 消息真正交给 AI 处理的轮数（包含最终没回复的轮次）；回复 = 成功发出的 AI 回复轮数。统计从本功能上线后开始累计。</div>';
   $('convForm').innerHTML=html;
 }
 
@@ -881,7 +875,11 @@ async function convLoad(full){
   if(xnLoggedIn===false)return;
   try{
     const d=await api('/api/chat-settings');
-    cvGlobal=d.global||{}; cvEnv=d.env||{}; cvOver=d.conversations||{};
+    cvGlobal=d.global||{}; cvEnv=d.env||{}; cvStats=d.stats||{}; cvOver=d.conversations||{};
+    // 表单里的统计数字单独更新，避免每 3 秒重绘把正在填的内容冲掉
+    const cur=cvStats[cvSel]||{};
+    if($('cvStatWake'))$('cvStatWake').textContent=(Number(cur.wake)||0)+' 次';
+    if($('cvStatReply'))$('cvStatReply').textContent=(Number(cur.reply)||0)+' 次';
     if(full){
       let cv=null;
       try{ cv=await api('/api/conversations'); }catch(e){ cvErr=(e&&e.message)||'请求失败'; }

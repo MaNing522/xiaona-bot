@@ -37,6 +37,7 @@ import { initNotes, writeNote, readNote } from './notes.js';
 import { initQzone } from './qzone.js';
 import { recordIncoming, recordOutgoing } from './qqInbox.js';
 import * as mcBot from './mcbot.js';
+import { bump as bumpConvStat } from './convStats.js';
 import { ROOT } from './paths.js';
 
 // 显式指定 .env 路径，避免受启动目录影响
@@ -3356,6 +3357,8 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         if (!prepared.length) return;
 
         const imgs = prepared.flatMap((p) => p.imgs);
+        // 统计：这一轮确实把消息交给了 AI，记一次「唤起」
+        bumpConvStat(convKey(first.event), 'wake');
         // 同一轮里只要有一条是明确在叫它，整轮就不能跳过
         const allowSkip = prepared.every((p) => p.allowSkip);
         // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
@@ -3421,7 +3424,12 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
             .filter(Boolean);
         if (!parts.length) {
             // 歌已经用语音发出去了，模型没再补文字就别再发"没听懂"
-            if (voiceSent) { logger.info('✅ 语音已通过工具发送，无补充文字'); restartAfterUpdateIfNeeded(); return; }
+            if (voiceSent) {
+                logger.info('✅ 语音已通过工具发送，无补充文字');
+                bumpConvStat(convKey(first.event), 'reply');
+                restartAfterUpdateIfNeeded();
+                return;
+            }
             // 模型没给正文（自己写了【REPLY:否】、或工具调完没补话）：静默，不再刷"没听懂"的兜底
             logger.info('🤐 AI 没有给出正文，本条不回复');
             restartAfterUpdateIfNeeded();
@@ -3437,6 +3445,7 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         // 写入记忆（同上，按人记；只留最近 N 条）
         const finalReply = parts.join('\n');
         recordMessage(prepared[0].memKey, 'ai', finalReply, { scene: prepared[0].memScene });
+        bumpConvStat(convKey(first.event), 'reply');
         logger.info(`✅ 回复已发送 (${parts.length} 条，语音:${wantVoice})`);
         // agent 在回复过程中拉过更新：等这条回完再重启，别把没发出去的话吞了
         restartAfterUpdateIfNeeded();
