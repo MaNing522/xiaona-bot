@@ -638,7 +638,7 @@ function dupBlocked(name, text) {
     if (!e.warned) {
         e.warned = true;
         logger.warn(`[MC桥] ${name} 反复刷同一句话（第 ${e.count} 次），已屏蔽重复内容。`);
-        toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 重复刷同一句话，已暂时屏蔽`).catch(() => {});
+        toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 重复刷同一句话，已暂时屏蔽`, { system: true }).catch(() => {});
     }
     return true;
 }
@@ -665,7 +665,7 @@ function rateBlocked(name) {
         e.warned = true;
         const sec = Math.round(cfg.chatRateWindowMs / 1000);
         logger.warn(`[MC桥] ${name} 公聊触发限速（每 ${sec} 秒最多 ${cfg.chatRateMax} 条），本窗口内不再转发到 QQ。`);
-        toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 发言过快，其游戏消息已暂时屏蔽`).catch(() => {});
+        toBridgeGroup(`${cfg.prefixMc} ⚠️ ${name} 发言过快，其游戏消息已暂时屏蔽`, { system: true }).catch(() => {});
     }
     return true;
 }
@@ -710,7 +710,7 @@ async function onEvent(ev) {
 
     if (ev.type === 'join' || ev.type === 'leave') {
         // 先把上下线消息发到群里——这是用户最需要看到的结果。
-        await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`);
+        await toBridgeGroup(`${cfg.prefixMc} ${who} ${ev.type === 'join' ? '加入了服务器' : '离开了服务器'}`, { system: true });
         // 上线才查一次绑定，把答案单独回给 mod（mod 只为这名玩家渲染计分板）
         if (ev.type === 'join' && ev.player) await bindCheck(ev.player);
         return;
@@ -719,7 +719,7 @@ async function onEvent(ev) {
     // 死亡消息 / 成就播报：文本已是完整句子（含玩家名），直接整条转发
     if (ev.type === 'death' || ev.type === 'advancement') {
         const tag = ev.type === 'death' ? '💀' : '🏆';
-        await toBridgeGroup(`${cfg.prefixMc} ${tag} ${ev.text}`);
+        await toBridgeGroup(`${cfg.prefixMc} ${tag} ${ev.text}`, { system: true });
         return;
     }
 
@@ -849,10 +849,11 @@ async function toBridgeGroupImage(src) {
     }
 }
 
-async function toBridgeGroup(text) {
+async function toBridgeGroup(text, opt) {
     if (!cfg.mcToQq || !cfg.groupId) return;
-    // 游戏 → QQ 也要过滤：玩家在游戏里说的话、名字一样会带脏话，别只过滤 QQ → 游戏那一边
-    const safe = maskForwardText(String(text ?? ''), (config() || {}).filter);
+    // 玩家在游戏里说的话要过滤；上下线 / 死亡 / 成就这类服务端播报按原文发（opt.system）
+    const raw = String(text ?? '');
+    const safe = (opt && opt.system) ? raw : maskForwardText(raw, (config() || {}).filter);
     try {
         await deps.callApi('send_group_msg', { group_id: cfg.groupId, message: [deps.segText(safe)] });
     } catch (e) {
