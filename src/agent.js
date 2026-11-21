@@ -471,6 +471,8 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
     return n;
   };
 
+  let toolFailed = false
+
   for (let step = 0; step < maxSteps; step += 1) {
     throwIfAborted(signal);
     await pullSteer();
@@ -484,7 +486,18 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
         if (msg && msg.content) messages.push({ role: 'assistant', content: msg.content });
         continue;
       }
-      return (msg && msg.content) || '';
+      const text = (msg && msg.content) || '';
+      // 工具失败后模型什么都没说：不能让它悄悄吞掉，逼它用一句话把失败告诉用户
+      if (!String(text).trim() && toolFailed) {
+        if (msg && msg.content) messages.push({ role: 'assistant', content: msg.content });
+        messages.push({
+          role: 'user',
+          content: '（系统提示）刚才的工具调用失败了。请用你自己的话，用一句自然的话告诉对方这次没办成、原因是什么、接下来你打算怎么办；不要假装成功，也不要沉默。',
+        });
+        const retry = await raceAbort(chat({ messages, tools: [] }), signal).catch(() => null);
+        return (retry && retry.content) || '';
+      }
+      return text;
     }
 
     // 助手这一轮只发起工具调用（可能同时多条），先原样记入，再逐条执行。
@@ -499,11 +512,15 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 5, o
         out = await raceAbort(execTool(name, call.function && call.function.arguments, ctx, tools, onTool), signal);
       } catch (e) {
         // 兜底：execTool 自己已经会兜住异常，这里再保险一层，绝不让工具问题中断循环
-        out = `工具 ${name} 执行失败：${e && e.message ? e.message : e}`;
+        out = {
+          ok: false,
+          text: `工具 ${name} 执行失败：${e && e.message ? e.message : e}。请把这次失败用一句自然的话告诉对方，别装作成功。`,
+        };
       }
+      if (!out || out.ok === false) toolFailed = true;
       // 工具结果必须始终回灌给模型（成功/失败都要），哪怕空字符串也补一句，
       // 否则有的服务商会对空的 tool 消息报错，整轮回复就断了
-      const content = String(out ?? '').trim() || '（工具执行完成，但没有返回内容）';
+      const content = String((out && out.text) ?? '').trim() || '（工具执行完成，但没有返回内容）';
       messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
@@ -585,7 +602,7 @@ async function execTool(name, rawArgs, ctx, allowedTools, onTool) {
   const def = AGENT_TOOLS.find((t) => t.function.name === name);
   // 双保险：不在"该身份可用列表"里的工具一律拒绝（模型理论上看不到，但也防它硬编名字）
   if (!def || !allowedTools.some((t) => t.function.name === name)) {
-    return `拒绝：你没有权限调用工具 ${name}。`;
+    return { ok: false, text: `拒绝：你没有权限调用工具 ${name}。把这件事用一句自然的话告诉对方，别装作已经做了。` };
   }
   let args;
   try {
@@ -597,8 +614,12 @@ async function execTool(name, rawArgs, ctx, allowedTools, onTool) {
   try {
     if (onTool) onTool(name, args);
     const out = await def.run(args || {}, ctx);
-    return String(out ?? '').slice(0, 4000);
+    return { ok: true, text: String(out ?? '').slice(0, 4000) };
   } catch (e) {
-    return `工具 ${name} 执行失败：${e.message}`;
+    // 失败原因照实回灌给模型，由它组织成人话发给用户（不要在这里直接甩给用户）
+    return {
+      ok: false,
+      text: `工具 ${name} 执行失败：${e && e.message ? e.message : e}。请把这次失败用一句自然的话告诉对方，并说明接下来怎么办；不要假装成功。`,
+    };
   }
 }
