@@ -1526,7 +1526,7 @@ function drawOne(d){
   }
   ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
 
-  // 每个区块画成一个方块（留一点缝隙）；颜色=玩家，透明度=走过的次数（1 次最浅，8 次以上最深）。
+  // 每个区块画成一个方块（留一点缝隙）；颜色=玩家，透明度=走过的次数（1 次最淡，32 次以上最深）。
   // 多人走过同一区块时颜色叠在一起：按"最近走过的时间"排序，越晚走的画在越上层
   var cellW=16*sx, cellH=16*sz;
   var gap=Math.max(0.4,Math.min(2,Math.min(cellW,cellH)*0.12));
@@ -1543,8 +1543,9 @@ function drawOne(d){
   });
   seq.sort(function(a,b){return a.t-b.t});
   seq.forEach(function(c){
-    var a=0.18+0.77*Math.min(1,Math.log(c.n)/Math.log(8));
-    ctx.globalAlpha=Math.min(0.95,a);
+    // 深浅范围拉大到 0.10~1.0，并让次数到 32 才见底，常走的路也能分出层次
+    var a=0.10+0.90*Math.min(1,Math.log(c.n)/Math.log(32));
+    ctx.globalAlpha=Math.min(1,a);
     ctx.fillStyle=colorFor(c.name);
     ctx.fillRect(px(c.x*16)+gap/2,pz(c.z*16)+gap/2,
       Math.max(1,cellW-gap),Math.max(1,cellH-gap));
