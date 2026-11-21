@@ -50,6 +50,18 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 button,a,input,select,textarea,label{touch-action:manipulation}
 `;
 
+// 各页共用的主题引导脚本：读 localStorage / 系统偏好，尽早写入 <html data-theme>，避免首屏闪白
+const THEME_BOOT = `<script>
+(function(){
+  var t='';
+  try{t=localStorage.getItem('xiaona-theme')||''}catch(e){}
+  if(t!=='light'&&t!=='dark'){
+    t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+  }
+  document.documentElement.setAttribute('data-theme',t);
+})();
+</script>`;
+
 // ---------- 热力图标记：按登录 QQ 分开存，互不可见 ----------
 function loadHeatMarks() {
   const all = readJsonSafe(HEAT_MARKS_FILE, {});
@@ -586,6 +598,7 @@ function captchaNeeded(ip) {
 function loginPage(msg = '', needCaptcha = false) {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+${THEME_BOOT}
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#f0f2f5">
@@ -595,25 +608,32 @@ ${TOUCH_CSS}
 :root{
   --bg:#f0f2f5; --card:#fff; --card2:#f5f7fa; --line:#e8ebf0;
   --txt:#1f2329; --sub:#8a919f; --accent:#1677ff; --danger:#ff4d4f; --radius:10px;
+  --line-strong:#d9d9d9; color-scheme:light;
+}
+/* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
+html[data-theme="dark"]{
+  --bg:#141619; --card:#1c1f24; --card2:#23272e; --line:#2c313a;
+  --txt:#e6e8eb; --sub:#98a0ac; --accent:#4096ff; --danger:#ff6b6b;
+  --line-strong:#3a404b; color-scheme:dark;
 }
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
   background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 .card{width:360px;max-width:100%;padding:28px 26px;border-radius:var(--radius);
-  background:var(--card);border:1px solid #f0f0f0;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+  background:var(--card);border:1px solid var(--line);box-shadow:0 2px 12px rgba(0,0,0,.06)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;flex:0 0 auto;
   background:linear-gradient(135deg,#1677ff,#4096ff);box-shadow:0 2px 8px rgba(22,119,255,.28)}
 h1{margin:0;font-size:17px}
 .sub{color:var(--sub);font-size:12px;line-height:1.5}
 label{display:block;font-size:13px;color:var(--sub);margin:12px 0 5px}
-input{width:100%;min-height:44px;padding:0 14px;border-radius:8px;border:1px solid #d9d9d9;
+input{width:100%;min-height:44px;padding:0 14px;border-radius:8px;border:1px solid var(--line-strong);
   background:var(--card);color:var(--txt);font-size:15px}
 input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(22,119,255,.12)}
 .row{display:flex;gap:10px;align-items:center;margin-top:8px}
 .row input{flex:1}
-.row img{height:44px;border-radius:8px;border:1px solid #d9d9d9;background:#fff;cursor:pointer}
+.row img{height:44px;border-radius:8px;border:1px solid var(--line-strong);background:var(--card);cursor:pointer}
 button{width:100%;margin-top:18px;min-height:46px;border:1px solid var(--accent);border-radius:8px;
   background:var(--accent);color:#fff;font-family:inherit;font-size:15px;font-weight:500;cursor:pointer;transition:.15s}
 button:hover{filter:brightness(1.06)}
@@ -802,11 +822,16 @@ function mePage(sess) {
   const isOwner = sess.role === 'owner';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+${THEME_BOOT}
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我的账号 · 小钠</title>
 <style>
 ${TOUCH_CSS}
-:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
+  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+/* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
+html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -819,11 +844,11 @@ h1{margin:0;font-size:17px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px}
 h2{margin:0 0 12px;font-size:15px}
 label{display:block;font-size:13px;color:var(--sub);margin:10px 0 5px}
-input{width:100%;min-height:42px;padding:0 12px;border-radius:8px;border:1px solid #d9d9d9;font-size:15px;background:#fff}
+input{width:100%;min-height:42px;padding:0 12px;border-radius:8px;border:1px solid var(--line-strong);font-size:15px;background:var(--card)}
 input:focus{outline:none;border-color:var(--accent)}
 button{min-height:42px;padding:0 18px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
   color:#fff;font-size:14px;font-family:inherit;cursor:pointer}
-button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button.ghost{background:var(--card);color:var(--txt);border-color:var(--line-strong)}
 button:disabled{opacity:.55;cursor:default}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .list{margin-top:10px}
@@ -833,7 +858,7 @@ button:disabled{opacity:.55;cursor:default}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:8px;white-space:pre-wrap}
 .ok{color:#16a34a}
-#capimg{height:52px;border:1px solid #d9d9d9;border-radius:8px;background:#fff}
+#capimg{height:52px;border:1px solid var(--line-strong);border-radius:8px;background:var(--card)}
 @media (max-width:720px){input,select,textarea{font-size:16px}}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🤖</div><div><h1>我的账号</h1>
@@ -966,11 +991,16 @@ function adminPage(sess) {
   const roleName = { owner: '所有者', master: '主人', admin: '管理员' }[sess.role] || '管理员';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+${THEME_BOOT}
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>管理中心 · 小钠</title>
 <style>
 ${TOUCH_CSS}
-:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
+  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+/* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
+html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -984,19 +1014,19 @@ h1{margin:0;font-size:17px}
 .user{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
 .uhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .uhead b{font-size:15px}
-.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#eef4ff;color:var(--accent)}
-.tag.bad{background:#fff1f0;color:var(--danger)}
-.tag.off{background:#f2f3f5;color:var(--sub)}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(22,119,255,.12);color:var(--accent)}
+.tag.bad{background:rgba(255,77,79,.12);color:var(--danger)}
+.tag.off{background:var(--card2);color:var(--sub)}
 .ids{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
-.chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:4px 10px;border-radius:999px;background:#f5f7fa;border:1px solid var(--line)}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:4px 10px;border-radius:999px;background:var(--card2);border:1px solid var(--line)}
 .chip button{border:0;background:transparent;color:var(--danger);cursor:pointer;font-size:14px;padding:0;line-height:1}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
-input{min-height:38px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9;font-size:14px;background:#fff}
+input{min-height:38px;padding:0 10px;border-radius:8px;border:1px solid var(--line-strong);font-size:14px;background:var(--card)}
 input:focus{outline:none;border-color:var(--accent)}
 input[type=text]{flex:1;min-width:150px}
 button{min-height:38px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
   color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
-button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button.ghost{background:var(--card);color:var(--txt);border-color:var(--line-strong)}
 button:disabled{opacity:.55;cursor:default}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
@@ -1118,11 +1148,16 @@ function heatmapPage(sess) {
   const backText = isOwner ? '← 返回控制面板' : '← 我的账号';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+${THEME_BOOT}
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${pageTitle} · 小钠</title>
 <style>
 ${TOUCH_CSS}
-:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f}
+:root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
+  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+/* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
+html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -1137,9 +1172,9 @@ h2{margin:0 0 8px;font-size:15px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 button{min-height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);
   color:#fff;font-size:13px;font-family:inherit;cursor:pointer}
-button.ghost{background:#fff;color:var(--txt);border-color:#d9d9d9}
+button.ghost{background:var(--card);color:var(--txt);border-color:var(--line-strong)}
 button.mini{min-height:26px;padding:0 10px;font-size:12px;margin-left:auto}
-select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #d9d9d9;background:#fff;font-size:13px;font-family:inherit}
+select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid var(--line-strong);background:var(--card);font-size:13px;font-family:inherit}
 .hint{color:var(--sub);font-size:12px;line-height:1.6}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
 .maps{display:grid;grid-template-columns:1fr;gap:12px}
@@ -1172,15 +1207,15 @@ body.fsmode #fsExit{display:block}
 .sidecard{position:sticky;top:16px}
 .marklist{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 220px);overflow-y:auto}
 .mk{display:flex;align-items:center;gap:6px;padding:5px 6px;border:1px solid var(--line);border-radius:8px;
-  background:#fff;cursor:pointer}
+  background:var(--card);cursor:pointer}
 .mk.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(22,119,255,.12)}
 .mk input[type=color]{width:22px;height:22px;min-height:0;padding:0;margin:0;border:0;background:none;flex:0 0 auto;cursor:pointer}
 .mk input[type=text]{flex:1;min-width:0;min-height:26px;padding:0 6px;margin:0;font-size:12px;border:1px solid transparent;background:transparent}
-.mk input[type=text]:focus{border-color:var(--accent);background:#fff}
+.mk input[type=text]:focus{border-color:var(--accent);background:var(--card)}
 .mk .mkdim{font-size:10.5px;color:var(--sub);flex:0 0 auto}
 .legend{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 220px);overflow-y:auto}
 .chip{display:block;font-size:12.5px;padding:7px 10px;border-radius:8px;
-  background:#fff;border:1px solid var(--line);cursor:pointer;user-select:none}
+  background:var(--card);border:1px solid var(--line);cursor:pointer;user-select:none}
 .chip:hover{border-color:var(--accent)}
 .chip.off{opacity:.4;text-decoration:line-through}
 .ln1{display:flex;align-items:center;gap:7px;min-width:0}
@@ -1493,11 +1528,17 @@ function drawOne(d){
   var ctx=cv.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,w,h);
+  // 网格/坐标文字/玩家名字跟随亮暗主题（canvas 不继承 CSS 颜色）
+  var _cs=getComputedStyle(document.documentElement);
+  function _cv(n,fb){var v=(_cs.getPropertyValue(n)||'').trim();return v||fb}
+  var C_SUB=_cv('--sub','#8a919f'),C_LINE=_cv('--line','#e8ecf2'),C_TXT=_cv('--txt','#1f2329');
+  var _dark=document.documentElement.getAttribute('data-theme')==='dark';
+  var C_HALO=_dark?'rgba(20,22,25,.85)':'rgba(255,255,255,.85)';
   var list=seriesOf(d.id);
   $('mt-'+d.cid).textContent=list.length?('· '+list.length+' 条记录'):'· 暂无数据';
   if(!list.length){
     TRANS[d.id]=null;
-    ctx.fillStyle='#8a919f';ctx.font='14px sans-serif';ctx.textAlign='center';
+    ctx.fillStyle=C_SUB;ctx.font='14px sans-serif';ctx.textAlign='center';
     ctx.fillText(DATA?'这个维度暂时没有区块记录':'还没有数据',w/2,h/2);
     return;
   }
@@ -1513,7 +1554,7 @@ function drawOne(d){
   var steps=[16,32,64,128,256,512,1024,2048,4096,8192,16384,32768];
   var step=steps[steps.length-1];
   for(var i=0;i<steps.length;i++){if((maxX-minX)/steps[i]<=14){step=steps[i];break}}
-  ctx.strokeStyle='#e8ecf2';ctx.fillStyle='#a8b0bd';ctx.lineWidth=1;ctx.font='10px sans-serif';
+  ctx.strokeStyle=C_LINE;ctx.fillStyle=C_SUB;ctx.lineWidth=1;ctx.font='10px sans-serif';
   ctx.textAlign='center';ctx.textBaseline='top';
   for(var gx=Math.ceil(minX/step)*step;gx<=maxX;gx+=step){
     var X=px(gx);ctx.beginPath();ctx.moveTo(X,0);ctx.lineTo(X,h);ctx.stroke();
@@ -1524,7 +1565,7 @@ function drawOne(d){
     var Z=pz(gz);ctx.beginPath();ctx.moveTo(0,Z);ctx.lineTo(w,Z);ctx.stroke();
     ctx.fillText(String(Math.round(gz)),4,Z);
   }
-  ctx.strokeStyle='#d9dee8';ctx.strokeRect(0.5,0.5,w-1,h-1);
+  ctx.strokeStyle=C_LINE;ctx.strokeRect(0.5,0.5,w-1,h-1);
 
   // 每个区块画成一个方块（留一点缝隙）；颜色=玩家，透明度=走过的次数（1 次最淡，32 次以上最深）。
   // 多人走过同一区块时颜色叠在一起：按"最近走过的时间"排序，越晚走的画在越上层
@@ -1559,9 +1600,9 @@ function drawOne(d){
     var color=colorFor(p.name), X=px(p.last.x), Z=pz(p.last.z);
     ctx.beginPath();ctx.arc(X,Z,5.5,0,Math.PI*2);
     ctx.fillStyle=color;ctx.fill();
-    ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();
-    ctx.lineWidth=3;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.strokeText(p.name,X+9,Z);
-    ctx.fillStyle='#1f2329';ctx.fillText(p.name,X+9,Z);
+    ctx.lineWidth=2;ctx.strokeStyle=_dark?'#141619':'#fff';ctx.stroke();
+    ctx.lineWidth=3;ctx.strokeStyle=C_HALO;ctx.strokeText(p.name,X+9,Z);
+    ctx.fillStyle=C_TXT;ctx.fillText(p.name,X+9,Z);
   });
 
   // 标点 / 圈画（跟着缩放平移走）
