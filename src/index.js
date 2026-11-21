@@ -30,7 +30,7 @@ import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
 import { maskForwardText, librarySize } from './tencentWords.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
-import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
+import { transcribe, voiceDuration, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
 import * as chatCfg from './chatSettings.js';
 import { initNotes, writeNote, readNote } from './notes.js';
@@ -2574,18 +2574,39 @@ const SEG_PLACEHOLDER = {
 };
 
 /**
- * 把消息里所有语音段识别成文字（按顺序拼接）。
- * 不管这条消息最后会不会交给 AI，收到的语音都要先转出来——日志、记忆、关键词触发都用得上。
- * 没配 ASR / 识别失败时返回空串，语音仍按 [语音] 占位。
+ * 语音不再"一股脑"转写：只有人明确要求、且时长小于 30 秒才转。
+ * 认可的说法例如「转文字」「转成文字」「语音转文字」「识别一下这段语音」「说了什么」；
+ * 只有被问到的那条（以及被引用的那条）才会转，其余语音仍是 [语音] 占位。
  */
-async function transcribeVoiceOf(segments) {
+const ASK_TRANSCRIBE_RE = /转(?:成|为)?文字|语音转文字|文字转(?:换|成)|识别(?:一下|下)?(?:这段|这条|这条|语音|音频)|(?:说|念|讲)了(?:什么|啥)|听(?:一下|下|听)/;
+const VOICE_MAX_SEC = 30;
+
+/**
+ * 按"人让转"的规则转写本条消息里的语音（没有就试试它引用的那条）。
+ * 转过的段会打上标记，后续给 AI 的文本里也只对这些段显示识别结果。
+ * @returns {Promise<string>} 所有转出的文字（空格拼接）；没让转/超时/超长都返回空串
+ */
+async function transcribeVoiceIfAsked(segments, plainText) {
     if (!Array.isArray(segments) || !asrEnabled()) return '';
-    const out = [];
-    for (const seg of segments) {
-        if (seg && seg.type === 'record') {
-            const t = await transcribe(seg.data);
-            if (t) out.push(t);
+    if (!ASK_TRANSCRIBE_RE.test(String(plainText || ''))) return '';
+    let recs = segments.filter((s) => s && s.type === 'record');
+    if (!recs.length) {
+        // 引用了一条语音、本条只有"转文字"：把那条第消息里的语音取出来转
+        const reply = segments.find((s) => s && s.type === 'reply');
+        const qid = reply && reply.data && (reply.data.id || reply.data.message_id);
+        if (qid) {
+            const q = await callApi('get_msg', { message_id: qid }).catch(() => null);
+            if (q && Array.isArray(q.message)) recs = q.message.filter((s) => s && s.type === 'record');
         }
+    }
+    const out = [];
+    for (const seg of recs) {
+        const d = await voiceDuration(seg.data).catch(() => null);
+        if (d == null) { logger.info('[ASR] 语音时长未知，按规则不转写'); continue; }
+        if (d >= VOICE_MAX_SEC) { logger.info(`[ASR] 语音 ${d.toFixed(1)} 秒，超过 ${VOICE_MAX_SEC} 秒不转写`); continue; }
+        seg.__xnVoiceOk = true;
+        const t = await transcribe(seg.data);
+        if (t) out.push(t);
     }
     return out.join(' ').trim();
 }
@@ -2725,8 +2746,8 @@ async function inlineTextOfForAi(segments, groupId) {
             const nodes = await forwardNodesOf(seg.data);
             out += nodes.length ? `[聊天记录]\n${forwardNodesToText(nodes)}` : SEG_PLACEHOLDER.forward;
         } else if (seg.type === 'record') {
-            // 语音消息：配了 ASR 就转成文字给模型看（转不出/没配置则保留 [语音] 占位）
-            const t = await transcribe(seg.data);
+            // 语音默认只显示 [语音]；只有人明确要求转写（且 ≤30 秒）时那条段才带识别结果
+            const t = seg.__xnVoiceOk ? await transcribe(seg.data) : '';
             out += t ? `[语音]${t}` : SEG_PLACEHOLDER.record;
         }
         // 表情：给出具体表情名（[微笑]/[doge]），比笼统的 [动画表情] 有用
@@ -3263,11 +3284,10 @@ async function onMessage(event) {
     }
 
     const segments = event.message;
-    // 语音消息一律先识别成文字：日志、记忆、转发标签、关键词触发都要用，
-    // 不能等"确定要交给 AI"时才识别（那样语音永远叫不醒机器人）。
-    const voiceText = await transcribeVoiceOf(segments);
     // 媒体段显示成 [图片]/[文件] 这类占位、@ 还原成 @昵称（同步，只读缓存，绝不等 NapCat —— 转发就在后面）
     const plainText = inlineTextOf(segments, event.group_id);
+    // 语音只转"人让转"的那条，且时长必须小于 30 秒（见 transcribeVoiceIfAsked）
+    const voiceText = await transcribeVoiceIfAsked(segments, plainText);
     // 把识别结果并进正文：纯语音 → "[语音]识别内容"，文字+语音 → "文字 [语音]识别内容"
     const raw = !voiceText ? plainText
         : (plainText === SEG_PLACEHOLDER.record
@@ -3452,6 +3472,7 @@ async function onMessage(event) {
         event,
         uid: String(event.user_id),
         userInput,
+        voiceText,
         allowSkip,
         cset,
     });
@@ -3471,7 +3492,9 @@ async function prepareAiJob(job) {
         return null;
     }
     // 给模型看的那份文本：@ 后面用真昵称（这里可以等，反正接着就要等模型）
-    const aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
+    let aiInput = await inlineTextOfForAi(event.message, event.group_id) || userInput;
+    // 引用别人语音后要求转写：识别结果补在正文后面（被引用的那条不在 event.message 里）
+    if (job.voiceText && !aiInput.includes(job.voiceText)) aiInput = `${aiInput}\n[语音转写]${job.voiceText}`;
     const metaLine = buildMetaLine(event, meta, wasAtBot(event.message), aiInput, await chatSourceForAi(event));
     // 记忆按「人」存（QQ 号 / 游戏名），不按会话；聊天记录不再自动注入，AI 需要时自己用 read_history 拉
     const memKey = memoryKeyOf(event, meta.name);
