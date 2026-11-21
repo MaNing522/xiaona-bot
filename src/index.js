@@ -28,7 +28,7 @@ import crypto from 'crypto';
 import { startMcBridge, sendToMc, getBridgeStatus, getPlayers, isMcConnected, getPlanPlayer, isPlanAvailable, bindCheck, pushWhitelist, runMcCommand as runMcCommandBridge, banPlayers as banPlayersOnMc, banEachPlayer, unbanEachPlayer, applyBridgeConfig, isMcConfigured, getBridgeTarget } from './mcbridge.js';
 import { nextShakeLine } from './shake.js';
 import { parseForwardInput, buildForwardNodes, rawArgAfter } from './forward.js';
-import { maskForwardText } from './tencentWords.js';
+import { maskForwardText, librarySize } from './tencentWords.js';
 import { initBindings, startBind, answerCaptcha, unbind as unbindGame, listOf as listBindings, getReceivers, limitOf, setLimit, setGlobalMaxPerQQ, setGlobalUnbindRetainDays, forceUnbind, getQqOf, getGameIdsOf, banUser, unbanUser, parseBanTime, humanDuration } from './binding.js';
 import { transcribe, asrEnabled, setAudioConverter } from './asr.js';
 import { config, reloadConfig, watchConfig } from './config.js';
@@ -132,6 +132,8 @@ function logFeatureStates() {
     const bt = getBridgeTarget();
     logger.info(`   MC 服务器桥    ${on(isMcConfigured())}${isMcConfigured() ? `  ${bt.base}（模式 ${bt.mode || 'env'}）` : `  模式 ${bt.mode || 'env'} 未配置`}`);
     logger.info(`   主人专属功能   ${on(OWNER_ENABLED)}${OWNER_ENABLED ? '' : '  缺 BOT_OWNER / BOT_OWNER_BACKUP，授权/审批等不可用'}`);
+    const wordCount = librarySize();
+    logger.info(`   敏感词过滤     ${on(cfg.filter.enabled !== false && wordCount > 0)}  内置 ${wordCount} 条${wordCount ? '' : '（词库缺失，转发不会过滤）'}`);
 }
 
 /**
@@ -1959,7 +1961,7 @@ async function handleCommand(event, text) {
 
             // 卡片左边显示的名字：查不到就退回号码，别留空；文案同样过敏感词
             for (const e of entries) {
-                e.name = await atDisplayName(gid, e.uin, '');
+                e.name = maskForwardText(await atDisplayName(gid, e.uin, ''), cfg.filter);
                 if (e.text) e.text = maskForwardText(e.text, cfg.filter);
             }
 
@@ -3905,8 +3907,8 @@ function sendToBoundPlayers(text, qq, name) {
         logger.info('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
         return false;
     }
-    // 昵称里的方括号会破坏标签解析，去掉
-    const safeName = name ? String(name).replace(/[[\]]/g, '') : '';
+    // 昵称里的方括号会破坏标签解析，去掉；昵称同样过敏感词，避免换个名字绕过过滤
+    const safeName = name ? maskForwardText(String(name).replace(/[[\]]/g, ''), cfg.filter) : '';
     let prefix = '[QQ]';
     if (safeName) prefix += `[${safeName}]`;
     if (qq) prefix += `[${qq}]`;

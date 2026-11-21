@@ -33,4 +33,10 @@ describe('腾讯词库匹配', () => {
   it('英文不区分大小写', () => {
     expect(maskByWords('Fuck this', ['fuck'], '#')).toBe('# this');
   });
+
+  it('单字词只在独立出现时屏蔽，不误伤正常词', () => {
+    expect(maskByWords('操作和体操', ['操'], '***')).toBe('操作和体操');
+    expect(maskByWords('操', ['操'], '***')).toBe('***');
+    expect(maskByWords('小明：操！', ['操'], '***')).toBe('小明：***！');
+  });
 });
