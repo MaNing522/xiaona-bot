@@ -143,6 +143,21 @@ export const AGENT_TOOLS = [
   {
     minRole: 'admin',
     function: {
+      name: 'mcbot_map',
+      description: '画一张小钠附近地形的俯视地图：自动保存成 PNG 并发到当前 QQ 会话，同时返回地形摘要（方块分布/海拔/水域），并让视觉模型看一眼画面（水、岩浆、建筑、道路、玩家位置）。用户想看地形/周围环境时用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          radius: { type: 'number', description: '半径（格），8~64，默认 32；越大越慢' },
+          look: { type: 'boolean', description: '是否让视觉模型描述画面，默认 true' },
+        },
+      },
+    },
+    run: async (args, ctx) => ctx.mcbotMap(Number(args.radius) || 32, args.look !== false),
+  },
+  {
+    minRole: 'admin',
+    function: {
       name: 'mcbot_chat',
       description: '让小钠在游戏公屏发言。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command**。',
       parameters: {
