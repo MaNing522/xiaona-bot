@@ -608,6 +608,30 @@ function formatGroupNotices(list) {
     }).join('\n');
 }
 
+/** 日志用的单行预览：折叠换行，超长截断并注明总长 */
+function clipLog(text, max = 300) {
+    const s = String(text ?? '').replace(/\s*\n+\s*/g, ' / ').trim();
+    if (!s) return '（空）';
+    return s.length > max ? `${s.slice(0, max)}…（共 ${s.length} 字）` : s;
+}
+
+/** 即将发出去的消息 → 日志预览（图片/语音用占位符，避免刷屏） */
+function sentPreview(message) {
+    const parts = [];
+    if (typeof message === 'string') parts.push(message);
+    else if (Array.isArray(message)) {
+        for (const seg of message) {
+            if (!seg || typeof seg !== 'object') continue;
+            if (seg.type === 'text') parts.push((seg.data && seg.data.text) || '');
+            else if (seg.type === 'at') parts.push(`@${(seg.data && seg.data.qq) || ''}`);
+            else if (seg.type === 'image') parts.push('[图片]');
+            else if (seg.type === 'record') parts.push('[语音]');
+            else parts.push(`[${seg.type}]`);
+        }
+    }
+    return clipLog(parts.join(' '), 200);
+}
+
 /**
  * 把 OneBot 返回的错误 JSON 精简成一行，便于日志阅读。
  * NapCat 的失败信息里 message 常常是带换行的一长串（EventChecker / NTEvent …），
@@ -790,6 +814,10 @@ async function aiReply({ metaLine, memory = '', role = 'guest', allowSkip = fals
         signal,
         steer,
         onTool: (name, args) => { logger.info(`🛠️ 工具调用 ${name} ${JSON.stringify(args)}`); },
+        // 工具回给模型的内容也打进日志（截断，避免一屏几十行）
+        onToolResult: (name, text, ok) => {
+            logger.info(`🛠️ 工具结果 ${name}${ok ? '' : '（失败）'}：${clipLog(text)}`);
+        },
     });
 
     // 兜底：清掉漏写结尾、以及元数据/上下文标题被回吐等所有畸形片段
@@ -1277,7 +1305,10 @@ async function sendReply(event, message, wantVoice = false, withAt = false) {
     // 游戏内触发的指令（见 runGameCommand）：回复收集起来注入游戏，不走 QQ
     if (Array.isArray(event.__replySink)) {
         const t = typeof message === 'string' ? sanitizeOutgoing(message) : String(message ?? '');
-        if (t) event.__replySink.push(t);
+        if (t) {
+            event.__replySink.push(t);
+            logger.info(`📤 游戏内回复：${clipLog(t, 200)}`);
+        }
         return [];
     }
     return queueBy(sendQueues, convKey(event), () => sendReplyNow(event, message, wantVoice, withAt));
@@ -1307,6 +1338,8 @@ async function sendReplyNow(event, message, wantVoice = false, withAt = false) {
             const mid = res && res.message_id;
             // 记下这条是我自己发的，供 #撤回 定位（只撤自己的，不碰别人的消息）
             recordBotMsg(convKey(event), mid);
+            // 发出去了什么也写进日志（图片/语音用占位符）
+            logger.info(`📤 发送${gidKey ? `群${gidKey}` : `私聊${event.user_id}`}：${sentPreview(segments)}`);
             // 发送成功说明未被禁言，解除标记
             if (gidKey) mutedGroups.delete(gidKey);
             return mid === undefined || mid === null ? '' : mid;
@@ -1328,7 +1361,7 @@ async function sendReplyNow(event, message, wantVoice = false, withAt = false) {
             const voicePath = await textToSpeech(message);
             const vid = await doSend([segRecord(voicePath)]);
             cleanVoiceCache(50);
-            logger.info('🎵 语音已发送');
+            logger.info(`🎵 语音已发送：${sentPreview(message)}`);
             return vid ? [vid] : [];
         } catch (err) {
             logger.error('语音发送失败，降级为文本:', err.message);
