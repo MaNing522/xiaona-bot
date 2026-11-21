@@ -283,23 +283,40 @@ function itemMapColor (id) {
   return [Math.round(base[0] * f), Math.round(base[1] * f), Math.round(base[2] * f), 255]
 }
 
+// 常见地图基色的中文名（用于没接视觉模型时的文字“画面描述”）
+const MAP_BASE_NAMES = {
+  1: '草地', 2: '沙地', 3: '浅灰建筑', 4: '岩浆/红色', 5: '冰', 6: '金属', 7: '植物',
+  8: '雪', 9: '黏土', 10: '泥土', 11: '石头', 12: '水域', 13: '木头', 14: '白色建筑',
+  15: '橙色', 16: '品红', 17: '浅蓝', 18: '黄色', 19: '浅绿', 20: '粉色', 21: '深灰',
+  22: '浅灰', 23: '青色', 24: '紫色', 25: '蓝色', 26: '棕色', 27: '绿色', 28: '红色',
+  29: '黑色', 30: '金色', 31: '钻石色', 32: '青金石色', 33: '绿宝石色', 34: '灰化土',
+  35: '下界岩', 52: '绯红菌岩', 53: '绯红木', 55: '诡异菌岩', 59: '深板岩',
+}
+
 /**
  * 把服务端下发的地图数据（128×128 颜色 id）画成 PNG。
- * @param {{id:number, scale:number, pixels:Uint8Array}} map
+ * @param {{id:number, scale:number, pixels:Uint8Array, icons?:Array}} map
  * @param {{upscale?:number}} [opt]
  */
 function renderItemMap (map, { upscale = 2 } = {}) {
   const id = Number(map && map.id) || 0
   const scale = Number(map && map.scale) || 0
   const pixels = (map && map.pixels) || new Uint8Array(128 * 128)
+  const icons = Array.isArray(map && map.icons) ? map.icons : []
   const s = Math.max(1, Math.min(Math.round(Number(upscale) || 2), 4))
   const size = 128 * s
   const rgba = Buffer.alloc(size * size * 4)
+  const counts = new Map()
   let explored = 0
   for (let y = 0; y < 128; y++) {
     for (let x = 0; x < 128; x++) {
-      const c = itemMapColor(pixels[y * 128 + x])
-      if (c[3]) explored++
+      const raw = pixels[y * 128 + x]
+      const c = itemMapColor(raw)
+      if (c[3]) {
+        explored++
+        const base = raw >> 2
+        counts.set(base, (counts.get(base) || 0) + 1)
+      }
       // 未探索区域用浅灰底，避免手机上看起来是一片透明
       const px = c[3] ? c : [242, 242, 242, 255]
       for (let dy = 0; dy < s; dy++) {
@@ -318,8 +335,17 @@ function renderItemMap (map, { upscale = 2 } = {}) {
   fs.writeFileSync(file, encodePng(size, size, rgba))
   prune(dir)
   const ratio = 2 ** scale
-  const summary = `游戏内地图 #${id}：比例尺 1:${ratio}（每像素 ${ratio} 格），已探索约 ${Math.round((explored / 16384) * 100)}% 的区域。`
-  return { file, summary, id, scale, explored, at: Date.now() }
+  const total = 128 * 128
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([base, n]) => `${MAP_BASE_NAMES[base] || `基色${base}`} ${Math.round((n / total) * 100)}%`)
+  const unexplored = Math.round(((total - explored) / total) * 100)
+  const analysis = [
+    `地图画面：${top.length ? top.join('、') : '几乎全是未探索区域'}`,
+    unexplored ? `未探索 ${unexplored}%` : '',
+    icons.length ? `图上 ${icons.length} 个标记` : '',
+  ].filter(Boolean).join('，') + '。'
+  const summary = `游戏内地图 #${id}：比例尺 1:${ratio}（每像素 ${ratio} 格），已探索约 ${100 - unexplored}% 的区域。${analysis}`
+  return { file, summary, analysis, id, scale, explored, at: Date.now() }
 }
 
 module.exports = { renderMap, renderItemMap, itemMapColor, encodePng }

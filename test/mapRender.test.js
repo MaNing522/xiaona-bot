@@ -76,5 +76,15 @@ describe('游戏内地图物品渲染', () => {
     expect(r.summary).toContain('游戏内地图 #7');
     expect(r.summary).toContain('1:2');
     expect(r.explored).toBe(16384);
+    // 全草地：文字画面里应出现草地
+    expect(r.analysis).toContain('草地');
+  });
+
+  it('未探索区域不计入地形占比', () => {
+    process.env.MC_MAP_DIR = tmp;
+    const pixels = new Uint8Array(128 * 128); // 全 0 = 未探索
+    const r = renderItemMap({ id: 8, scale: 0, pixels });
+    expect(r.explored).toBe(0);
+    expect(r.analysis).toContain('未探索 100%');
   });
 });

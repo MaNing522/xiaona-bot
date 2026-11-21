@@ -951,6 +951,8 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             }
         }
         const parts = [String((m && m.summary) || '地图已生成。').trim()];
+        // 物品地图自带一份按占比算出来的文字画面（没接视觉模型时也能让 AI“看见”）
+        if (m && m.analysis) parts.push(String(m.analysis));
         if (look !== false && m && m.path) {
             const seen = await describeGeneratedImage(m.path);
             if (seen) parts.push(`地图画面：${seen}`);

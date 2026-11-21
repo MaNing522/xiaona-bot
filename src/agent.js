@@ -159,7 +159,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_mapitem',
-      description: '把小钠物品栏里的地图物品（filled_map）导出成图片并发到当前 QQ 会话，同时给你地图摘要和画面描述。要求小钠身上有地图、且这张图已经探索过。',
+      description: '把小钠物品栏里的地图物品（filled_map）导出成图片并发到当前 QQ 会话，同时把画面内容交给你：占比最大的地形/水域、未探索比例、图上标记数，接了视觉模型时还有画面描述。要求小钠身上有地图、且这张图已经探索过。',
       parameters: {
         type: 'object',
         properties: {
