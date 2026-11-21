@@ -167,12 +167,14 @@ function createAltoClef (getBot, hooks = {}) {
     setGoal (goal, dynamic = false) {
       const b = getBot()
       if (!b || !b.pathfinder) return
+      this.stopWalk()
       try { b.pathfinder.setGoal(goal, dynamic) } catch (e) { log(`setGoal 失败：${e.message}`) }
     },
     stopPath () {
       const b = getBot()
       if (!b || !b.pathfinder) return
       try { b.pathfinder.setGoal(null) } catch {}
+      this.stopWalk()
     },
     inGoal (goal) {
       const b = getBot()
@@ -224,7 +226,7 @@ function createAltoClef (getBot, hooks = {}) {
       }
       return best
     },
-    findClosestItemEntity (names, radius = 24) {
+    findClosestItemEntity (names, radius = 24, excludeIds = null) {
       const b = getBot()
       if (!b || !b.entity) return null
       const p = b.entity.position
@@ -232,6 +234,7 @@ function createAltoClef (getBot, hooks = {}) {
       let bestDist = radius
       for (const e of Object.values(b.entities)) {
         if (!e || !e.position || e === b.entity) continue
+        if (excludeIds && excludeIds.has(e.id)) continue
         if (e.name !== 'item' && e.name !== 'Item' && e.name !== 'item_stack') continue
         let dropped = null
         try { dropped = e.getDroppedItem() } catch {}
@@ -340,6 +343,20 @@ function createAltoClef (getBot, hooks = {}) {
     },
 
     // ---------- 动作 ----------
+    // 手动朝目标走（捡脚边掉落物用；寻路在 1~3 格这种短距离上经常“到了但没捡到”）
+    walkToward (pos) {
+      const b = getBot()
+      if (!b || !b.entity) return
+      const d = b.entity.position.distanceTo(pos)
+      if (d < 1.1) { this.stopWalk(); return }
+      try { b.lookAt(pos, true).catch(() => {}) } catch {}
+      this.setControl('forward', true)
+    },
+    stopWalk () {
+      this.setControl('forward', false)
+      this.setControl('jump', false)
+      this.setControl('sprint', false)
+    },
     isDigging () {
       const b = getBot()
       return Boolean(b && b.targetDigBlock)

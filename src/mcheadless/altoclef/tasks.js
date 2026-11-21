@@ -411,13 +411,21 @@ class PickupDroppedItemTask extends Task {
       this._lastDropKey = key
       this._checker.reset()
     }
-    // 走不过去的掉落物（被墙/领地挡住）别死追：超过 10 秒没靠近就放弃，回去挖
+    // 走不过去的掉落物（被墙/领地挡住）别死追：超过 15 秒没靠近就放弃，回去挖
     if (!this._checker.check(mod) || Date.now() - this._startedAt > 15000) {
       this._done = true
+      this._gaveUpDropId = drop.id
       this.setDebugState('捡不到，放弃')
       return null
     }
-    mod.setGoal(new goals.GoalFollow(drop, 1.2), true)
+    const dist = mod.getPos().distanceTo(drop.position)
+    if (dist > 3.2) {
+      mod.setGoal(new goals.GoalFollow(drop, 1.0), true)
+    } else {
+      // 短距离别用寻路：直接朝掉落物走两步就能捡起来
+      if (mod.isPathing()) mod.stopPath()
+      mod.walkToward(drop.position)
+    }
     this.setDebugState('捡掉落物')
     return null
   }
@@ -427,7 +435,10 @@ class PickupDroppedItemTask extends Task {
   }
 
   onStop (mod, _interruptTask) {
-    if (mod.inGame()) mod.stopPath()
+    if (mod.inGame()) {
+      mod.stopPath()
+      mod.stopWalk()
+    }
   }
 
   isEqual (other) {
@@ -450,12 +461,15 @@ class MineAndCollectTask extends Task {
     this._count = count
     this._giveUpMs = opts.giveUpMs || 120000
     this._pickup = new PickupDroppedItemTask(itemNames, count)
+    this._badDrops = new Set()
+    this._gaveUp = false
     this._mine = null
   }
 
   onStart (mod) {
     mod.stopPath()
     this._gaveUp = false
+    this._badDrops.clear()
     this._mine = new DoToClosestBlockTask(pos => new DestroyBlockTask(pos), {
       blocks: this._blockNames,
       radius: 48,
@@ -466,8 +480,10 @@ class MineAndCollectTask extends Task {
   onTick (mod) {
     if (this.isFinished(mod)) return null
     // 参照 ResourceTask：先看地上有没有目标掉落物
-    if (mod.findClosestItemEntity(this._itemNames, 16)) {
+    if (mod.findClosestItemEntity(this._itemNames, 16, this._badDrops)) {
       if (!this._pickup || this._pickup.isFinished(mod)) {
+        // 上一次没捡到的那一个就别再追了，换下一个/回去挖
+        if (this._pickup && this._pickup._gaveUpDropId) this._badDrops.add(this._pickup._gaveUpDropId)
         this._pickup = new PickupDroppedItemTask(this._itemNames, this._count)
       }
       return this._pickup
