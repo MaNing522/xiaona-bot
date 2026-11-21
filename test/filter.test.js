@@ -40,10 +40,11 @@ describe('腾讯词库匹配', () => {
     expect(maskByWords('小明：操！', ['操'], '***')).toBe('小明：***！');
   });
 
-  it('日常口头禅和短缩写不处理', () => {
+  it('纯字母短缩写放过，他妈这类照常屏蔽', () => {
     const words = ['他妈', '他妈的', '你他妈', 'c', 'cnm', 'mb', 'tmd'];
-    expect(maskByWords('你他妈在干嘛', words, '***')).toBe('你他妈在干嘛');
     expect(maskByWords('cnm mb c tmd', words, '***')).toBe('cnm mb c tmd');
+    expect(maskByWords('你他妈在干嘛', words, '***')).toBe('***在干嘛');
+    expect(maskByWords('他妈', words, '***')).toBe('***');
     // 更长的词条仍然优先命中
     expect(maskByWords('他妈的政府', [...words, '他妈的政府'], '***')).toBe('***');
   });

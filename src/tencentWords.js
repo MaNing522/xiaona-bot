@@ -17,10 +17,9 @@ const WORD_FILE = path.join(ROOT, 'src', 'tencent-sensitive-words.txt');
 let cache = null;
 let lastWarn = 0;
 
-// 日常口头禅 / 游戏里常见的短缩写，不参与屏蔽：
-// “你他妈在干嘛”这种正常吐槽不该整句被打码；c / cnm / mb 等也按普通聊天放过。
-// 长词优先，所以“他妈的政府”这类更长的词条仍然会被整体命中。
-const IGNORED = new Set(['他妈', '他妈的', '你他妈', '你他妈的', '你们他妈', 'c', 'cnm', 'mb', 'tmd', 'nmd', 'nm']);
+// 纯字母的短缩写（c / cnm / mb / tmd 等）歧义太大，不参与屏蔽；
+// 中文脏话（他妈 / 你他妈 等）照常按词库替换成占位符，只替换命中的字，不影响整句转发。
+const IGNORED = new Set(['c', 'cnm', 'mb', 'tmd', 'nmd', 'nm']);
 
 /** 用一组词做最长匹配替换（纯函数，方便单测） */
 export function maskByWords(text, words, replace) {
