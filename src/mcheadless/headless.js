@@ -138,37 +138,40 @@ function createBot () {
   // 适配原版 1.21.2+ 的客户端 tick 协议（Sonar 会校验）：
   // 1) 每个移动包之后必须紧跟 tick_end
   // 2) 位置未变化时不能重复发送 position（原版只发 tick_end）
+  // 注意：这里必须捕获本次连接自己的 client —— 换服/重连会把全局 bot 置空或换成新实例，
+  // 旧实例的物理 tick 仍可能回调，读全局 bot._client 会直接崩（2026-11-21 踩过）。
+  const client = bot._client
   let lastMoveKey = null
   let lastPosLook = null
   let lastPosLookAt = 0
   let vehActive = false // Sonar 载具检查期间由我们接管移动包
-  const rawWrite = bot._client.write.bind(bot._client)
-  bot._client.write = (name, params) => {
+  const rawWrite = client.write.bind(client)
+  client.write = (name, params) => {
     const isMove = ['position', 'position_look', 'look', 'flying', 'vehicle_move'].includes(name)
     if (vehActive && isMove) return // 骑乘/下船阶段不发送 mineflayer 的普通移动包
     if (name === 'position' || name === 'position_look') {
       if (name === 'position_look') { lastPosLook = { ...params }; lastPosLookAt = Date.now() }
       const key = `${params.x},${params.y},${params.z}`
       if (name === 'position' && key === lastMoveKey) {
-        if (bot._client.state === 'play') rawWrite('tick_end', {})
+        if (client.state === 'play') rawWrite('tick_end', {})
         return
       }
       lastMoveKey = key
     }
     rawWrite(name, params)
-    if (isMove && bot._client.state === 'play') rawWrite('tick_end', {})
+    if (isMove && client.state === 'play') rawWrite('tick_end', {})
     if (process.env.DEBUG_MOVE) log('OUT', name, params?.y, params?.onGround)
   }
-  bot._client.on('login', () => { lastMoveKey = null; lastPosLook = null })
+  client.on('login', () => { lastMoveKey = null; lastPosLook = null })
   let myEntityId = null
-  bot._client.on('login', p => { if (p && typeof p.entityId === 'number') myEntityId = p.entityId })
+  client.on('login', p => { if (p && typeof p.entityId === 'number') myEntityId = p.entityId })
 
   // 原版在传送后会连续发送两次 position_look（第二次 dy=0），
   // Sonar 依靠这次“零位移旋转包”开启坠落检查，缺了会报 unexpected y motion。
-  bot._client.on('position', () => {
+  client.on('position', () => {
     // 延后到本轮事件处理完，确保拿到 mineflayer 刚发出的 position_look 参数
     setImmediate(() => {
-      if (bot._client.state !== 'play' || !lastPosLook) return
+      if (client.state !== 'play' || !lastPosLook) return
       if (Date.now() - lastPosLookAt > 1500) return // 复活/传送后的旧坐标不要再补发
       const dup = { ...lastPosLook, onGround: false }
       if (process.env.DEBUG_MOVE) log('OUT dup pos_look', dup.y)
@@ -181,18 +184,18 @@ function createBot () {
   // mineflayer 默认只在 play 阶段发 brand，且发了两次会导致 "sent duplicate client brand"，
   // 因此这里提前发一次 brand，并拦截掉后续 mineflayer 的重复发送。
   let brandSent = false
-  const rawWriteChannel = bot._client.writeChannel.bind(bot._client)
-  bot._client.writeChannel = (channel, params) => {
+  const rawWriteChannel = client.writeChannel.bind(client)
+  client.writeChannel = (channel, params) => {
     if (channel === 'minecraft:brand') {
       if (brandSent) return
       brandSent = true
     }
     return rawWriteChannel(channel, params)
   }
-  bot._client.on('success', () => {
+  client.on('success', () => {
     brandSent = false
     try { bot.setSettings({}) } catch (e) { log('settings send failed:', e.message) }
-    try { bot._client.writeChannel('minecraft:brand', 'vanilla') } catch (e) { log('brand send failed:', e.message) }
+    try { client.writeChannel('minecraft:brand', 'vanilla') } catch (e) { log('brand send failed:', e.message) }
   })
 
   // ---------- Sonar 验证交互（hotbar / 挥手）----------
@@ -200,21 +203,21 @@ function createBot () {
   // mineflayer 自带的处理会对 -1 断言崩溃，必须在它的插件注入之后替换掉。
   const onHeldItemSlot = p => {
     if (typeof p.slot !== 'number' || p.slot < 0 || p.slot > 8) return
-    try { bot._client.write('held_item_slot', { slotId: p.slot }) } catch (e) { log('held item resp failed:', e.message) }
+    try { client.write('held_item_slot', { slotId: p.slot }) } catch (e) { log('held item resp failed:', e.message) }
   }
   bot.once('inject_allowed', () => {
-    bot._client.removeAllListeners('held_item_slot')
-    bot._client.on('held_item_slot', onHeldItemSlot)
+    client.removeAllListeners('held_item_slot')
+    client.on('held_item_slot', onHeldItemSlot)
   })
   // Sonar 会让“自己”挥手并要求回包；普通服务器广播的挥手属于别人，不能回，否则会跟着挥手
-  bot._client.on('animation', p => {
+  client.on('animation', p => {
     if (p.animation !== 0 || p.entityId !== myEntityId) return
-    try { bot._client.write('arm_animation', { hand: 0 }) } catch (e) { log('swing resp failed:', e.message) }
+    try { client.write('arm_animation', { hand: 0 }) } catch (e) { log('swing resp failed:', e.message) }
   })
 
   // 不倒图腾：只在“图腾被消耗”这一事件上补下一个（entity_status 35 或副手槽被清空），
   // 不做定时轮询；背包里没有备用图腾就什么都不做。
-  bot._client.on('entity_status', p => {
+  client.on('entity_status', p => {
     if (!bot.entity || p.entityId !== bot.entity.id || p.entityStatus !== 35) return
     log('图腾已触发，立即补下一个')
     setImmediate(() => equipTotem().catch(() => {}))
@@ -277,17 +280,17 @@ function createBot () {
     })
   }
 
-  bot._client.on('spawn_entity', p => {
+  client.on('spawn_entity', p => {
     vehPositions.set(p.entityId, { x: p.x, y: p.y, z: p.z })
   })
-  bot._client.on('set_passengers', p => {
+  client.on('set_passengers', p => {
     if (!Array.isArray(p.passengers) || !p.passengers.includes(myEntityId)) return
     const pos = vehPositions.get(p.entityId)
     if (!pos) return
     startVehicleTest(p.entityId, pos)
   })
   // 载具被移除后立刻补一个“仍在空中”的 position，Sonar 据此进入下一阶段
-  bot._client.on('entity_destroy', p => {
+  client.on('entity_destroy', p => {
     if (!vehActive || !Array.isArray(p.entityIds) || !p.entityIds.includes(currentVehicleId)) return
     const y = (vehLowestY ?? 3000) - 1
     // 保持 vehActive，避免 mineflayer 的普通位置包抢先发出去
@@ -297,7 +300,7 @@ function createBot () {
     vehTimers = [setTimeout(() => {
       vehActive = false
       try {
-        bot._client.write('position', { x: 8, y, z: 8, flags: { onGround: false, hasHorizontalCollision: undefined } })
+        client.write('position', { x: 8, y, z: 8, flags: { onGround: false, hasHorizontalCollision: undefined } })
         log('sonar vehicle: sent dismount position', y)
       } catch (e) { log('dismount position failed:', e.message) }
     }, 100)]
@@ -309,7 +312,7 @@ function createBot () {
     onAuthMessage(msg)
   })
   if (process.env.DEBUG_PACKETS) {
-    bot._client.on('packet', (data, meta) => {
+    client.on('packet', (data, meta) => {
       if (meta.name === 'show_dialog') log('IN', meta.name, JSON.stringify(data).slice(0, 800))
       else if (meta.name !== 'keep_alive' && meta.name !== 'registry_data') log('IN', meta.name)
     })
@@ -388,7 +391,7 @@ function createBot () {
     if (!p) return
   })
   // 服务端下发的地图物品数据：按地图编号累积成 128×128 的颜色表（0 = 未探索）
-  bot._client.on('map', (p) => {
+  client.on('map', (p) => {
     if (!p || typeof p.itemDamage !== 'number' || p.itemDamage < 0) return
     const cur = mapDataById.get(p.itemDamage) || {
       id: p.itemDamage,
