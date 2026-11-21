@@ -74,10 +74,11 @@ export const AGENT_TOOLS = [
     run: async (args, ctx) => ctx.playerQuery(String(args.name || '').trim()),
   },
   {
-    minRole: 'guest',
+    // 玩家坐标属于隐私：只在管理员及以上才开放，避免群友互相查位置、跟踪或蹲点
+    minRole: 'admin',
     function: {
       name: 'player_pos',
-      description: '查询某个在线玩家当前的坐标（X/Y/Z）和所在维度（主世界/下界/末地）。只需要游戏ID，不会改动任何东西；玩家不在线时会返回服务器提示。',
+      description: '（仅管理员）查某个在线玩家当前的坐标（X/Y/Z）和所在维度。坐标属于玩家隐私，只在对方明确、确有正当理由时用；不要在群聊里主动扩散别人的坐标，也不要写进记忆。',
       parameters: {
         type: 'object',
         properties: { name: { type: 'string', description: '玩家游戏ID，3-16 位字母/数字/下划线' } },

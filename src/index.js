@@ -4467,7 +4467,6 @@ function formatPlanPlayer(name, p) {
     const best = intOf(pick('best_ping'));
     const avg = numOf(pick('average_ping'));
     const worst = intOf(pick('worst_ping'));
-    const uuid = pick('uuid');
 
     const rows = [];
     if (playtime != null) rows.push(`· 总时长：${dur(playtime)}`);
@@ -4485,7 +4484,6 @@ function formatPlanPlayer(name, p) {
         rows.push(`· 延迟：最好 ${best ?? '?'}ms ｜ 平均 ${avg ?? '?'}ms ｜ 最差 ${worst ?? '?'}ms`);
     }
     if (data.operator === true) rows.push('· 身份：管理员');
-    if (uuid) rows.push(`· UUID：${uuid}`);
 
     if (!rows.length) {
         // 换了 Plan 版本/字段名对不上时，别在群里刷一大坨 JSON，写日志方便补字段
