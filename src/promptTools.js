@@ -25,7 +25,7 @@ const TOOL_HINTS = {
     mcbot_command: '发送服务器命令（/login、/reg、/spawn 等，自动补 /）',
     mcbot_cmd: '给 MC 客户端下任务指令（它只是执行器，决策在你）：goto 坐标 / fly 坐标 / collect 方块 [数量] / develop / pvp [玩家] / mace / follow / stop / xray / toss 等',
     mcbot_map: '画附近地形的俯视地图：存成图片并发到当前 QQ 会话，同时给你地形摘要和画面描述（水/岩浆/建筑/玩家）。有人问"周围什么样"时用',
-    mcbot_mapitem: '把物品栏里的地图物品导出成图片发到当前 QQ 会话（要求小钠身上有地图，且这张图探索过）',
+    mcbot_mapitem: '把物品栏里的地图物品导出成图片发到当前 QQ 会话，并把地图画面（占比最大的地形、水域、未探索比例、标记数）和视觉描述一起给你。要求小钠身上有地图，且这张图探索过',
     mcbot_players: '看渲染范围内玩家的距离',
     mcbot_inventory: '查看自己 MC 客户端的背包',
     ai_balance: '查 AI 服务商账户余额（账务信息）',

@@ -401,6 +401,7 @@ function createBot () {
       at: 0,
     }
     cur.scale = Number(p.scale) || 0
+    if (Array.isArray(p.icons)) cur.icons = p.icons
     if (p.columns && p.rows && p.data) {
       const ox = Number(p.x) || 0
       const oy = Number(p.y) || 0
@@ -3192,26 +3193,33 @@ async function dispatchCommand (username, raw) {
         break
       }
       case 'mapitem': {
-        // 把物品栏里的地图物品（filled_map）导出成 PNG：先拿在手上让服务端下发数据
+        // 把物品栏里的地图物品（filled_map）导出成 PNG：先拿在手上让服务端下发数据；
+        // 没反应就右键一次再看（有些服务端此时才重发），仍拿不到就说明这张图没探索过。
         if (!bot || !bot.entity) throw new Error('不在服务器里')
         const maps = bot.inventory.items().filter((i) => i.name === 'filled_map' || i.name === 'map')
         if (!maps.length) throw new Error('物品栏里没有地图')
         const want = Number(args[0]) || 0
         const prev = bot.heldItem
-        const before = lastMapPacketAt
-        try { await bot.equip(maps[0], 'hand') } catch {}
-        const t0 = Date.now()
-        while (Date.now() - t0 < 3000 && lastMapPacketAt <= before) {
-          await new Promise((r) => setTimeout(r, 150))
+        const waitMapPacket = async (ms, activate) => {
+          const before = lastMapPacketAt
+          if (activate) { try { bot.activateItem() } catch {} }
+          const t0 = Date.now()
+          while (Date.now() - t0 < ms && lastMapPacketAt <= before) {
+            await new Promise((r) => setTimeout(r, 150))
+          }
+          return lastMapPacketAt > before
         }
+        try { await bot.equip(maps[0], 'hand') } catch {}
+        let got = await waitMapPacket(3000, false)
+        if (!got && !(want && mapDataById.has(want))) got = await waitMapPacket(5000, true)
         if (prev) { try { await bot.equip(prev, 'hand') } catch {} }
         const id = want && mapDataById.has(want) ? want : lastMapId
         const data = id ? mapDataById.get(id) : null
         if (!data || !data.hasData) {
-          throw new Error('服务器还没下发这张地图的数据（这张图可能还没探索过）')
+          throw new Error(`服务器还没下发这张地图的数据（物品栏里有 ${maps.length} 张地图，但这张可能还没探索过）`)
         }
         const out = renderItemMap(data)
-        lastMap = { path: out.file, at: out.at, radius: 0, center: null, dim: '地图物品', summary: out.summary }
+        lastMap = { path: out.file, at: out.at, radius: 0, center: null, dim: '地图物品', summary: out.summary, analysis: out.analysis }
         log(`mapitem: ${out.file}（#${out.id}）`)
         reply(`地图 #${out.id} 已保存`)
         break
