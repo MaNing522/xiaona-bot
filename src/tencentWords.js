@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './paths.js';
 import { logger } from './logger.js';
-import { maskSensitive } from './filter.js';
+import { maskSensitive, parseSensitiveWords } from './filter.js';
 
 const WORD_FILE = path.join(ROOT, 'src', 'tencent-sensitive-words.txt');
 let cache = null;
@@ -21,8 +21,34 @@ let lastWarn = 0;
 // 中文脏话（他妈 / 你他妈 等）照常按词库替换成占位符，只替换命中的字，不影响整句转发。
 const IGNORED = new Set(['c', 'cnm', 'mb', 'tmd', 'nmd', 'nm']);
 
-/** 用一组词做最长匹配替换（纯函数，方便单测） */
-export function maskByWords(text, words, replace) {
+/**
+ * 标出放行词在文本里占的字符：字库里有不少日常词（服务器 / 管理 / 手机…），
+ * 直接打码正常聊天太出戏；放行词整段（含被它包含的短词）都不替换。
+ * 例：放行「管理」→“管理员”不会被“管理”这一条打码。
+ */
+function ignoreCovers(lower, ignoreWords) {
+  const covered = new Uint8Array(lower.length);
+  for (const w of ignoreWords) {
+    if (!w || w.length > lower.length) continue;
+    let from = 0;
+    for (;;) {
+      const at = lower.indexOf(w, from);
+      if (at < 0) break;
+      covered.fill(1, at, at + w.length);
+      from = at + 1;
+    }
+  }
+  return covered;
+}
+
+/**
+ * 用一组词做最长匹配替换（纯函数，方便单测）
+ * @param {string} text 原文
+ * @param {string[]} words 词表
+ * @param {string} [replace] 占位符
+ * @param {string|string[]} [ignore] 放行词（逗号等分隔，或已拆好的数组）
+ */
+export function maskByWords(text, words, replace, ignore) {
   const src = String(text ?? '');
   if (!src) return src;
   const set = new Set();
@@ -42,22 +68,30 @@ export function maskByWords(text, words, replace) {
   if (!set.size && !singles.size) return src;
   const rep = String(replace || '***');
   const lower = src.toLowerCase();
+  const ignores = (Array.isArray(ignore) ? ignore : parseSensitiveWords(ignore))
+    .map((w) => String(w ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  const covered = ignores.length ? ignoreCovers(lower, ignores) : null;
   const isCjk = (ch) => /[\u3400-\u9fff\uf900-\ufaff]/.test(ch || '');
   let out = '';
   let i = 0;
   while (i < src.length) {
-    let last = -1;
+    let pick = -1;
     const limit = Math.min(lower.length, i + maxLen);
-    for (let j = i + 1; j <= limit; j++) {
-      if (set.has(lower.slice(i, j))) last = j;
+    // 从长到短找，跳过落在放行区间里的候选
+    for (let j = limit; j > i; j--) {
+      if (!set.has(lower.slice(i, j))) continue;
+      let clash = false;
+      if (covered) for (let k = i; k < j; k++) if (covered[k]) { clash = true; break; }
+      if (!clash) { pick = j; break; }
     }
-    if (last > i) {
+    if (pick > i) {
       out += rep;
-      i = last;
+      i = pick;
       continue;
     }
     // 单字脏话（如“操”）：只有前后不是汉字时才算，避免误伤“操作 / 体操”
-    if (singles.has(lower[i])) {
+    if (singles.has(lower[i]) && !(covered && covered[i])) {
       const before = i === 0 ? '' : src[i - 1];
       const after = i + 1 >= src.length ? '' : src[i + 1];
       if (!isCjk(before) && !isCjk(after)) {
@@ -96,13 +130,13 @@ export function librarySize() {
 }
 
 /** 腾讯词库过滤（词库文件缺失时原样返回） */
-export function tencentMask(text, replace) {
-  return maskByWords(text, libraryWords(), replace);
+export function tencentMask(text, replace, ignore) {
+  return maskByWords(text, libraryWords(), replace, ignore);
 }
 
-/** 转发消息统一入口：先过 config.json 的自定义词，再过腾讯词库 */
+/** 转发消息统一入口：先过 config.json 的自定义词，再过腾讯词库（filter.ignore 为放行词） */
 export function maskForwardText(text, opt) {
   const o = opt || {};
   if (o.enabled === false) return String(text ?? '');
-  return tencentMask(maskSensitive(text, o), o.replace);
+  return tencentMask(maskSensitive(text, o), o.replace, o.ignore);
 }
