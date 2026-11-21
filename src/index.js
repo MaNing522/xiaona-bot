@@ -567,6 +567,47 @@ function callApi(action, params) {
     return p;
 }
 
+// ---------- 群公告 ----------
+/**
+ * 取群公告列表（OneBot get_group_notice；SnowLuma 里叫 _get_group_notice，未知 action 时换名重试）。
+ * 各实现字段不一致（message.text / content / 消息段数组），这里统一整理成 { text, sender, at }。
+ * @returns {Promise<Array<{text:string,sender:string,at:number}>>}
+ */
+async function fetchGroupNotices(gid) {
+    const g = String(gid || '').trim();
+    if (!/^\d{5,14}$/.test(g)) return [];
+    let res;
+    try {
+        res = await callApi('get_group_notice', { group_id: Number(g) });
+    } catch (e) {
+        const s = String((e && e.message) || '');
+        if (!/1404|unknown action|未知/i.test(s)) throw e;
+        res = await callApi('_get_group_notice', { group_id: Number(g) });
+    }
+    const list = Array.isArray(res) ? res : (res && Array.isArray(res.data) ? res.data : []);
+    return list.map((n) => {
+        const msg = n && n.message;
+        let text = '';
+        if (typeof msg === 'string') text = msg;
+        else if (Array.isArray(msg)) text = msg.map((seg) => (seg && seg.data && seg.data.text) || '').join('');
+        else if (msg && typeof msg.text === 'string') text = msg.text;
+        if (!text && n && typeof n.content === 'string') text = n.content;
+        let at = Number(n && (n.publish_time || n.time)) || 0;
+        if (at && at < 1e12) at *= 1000; // 秒级时间戳统一成毫秒
+        return { text: String(text).trim(), sender: String((n && n.sender_id) || ''), at };
+    }).filter((x) => x.text);
+}
+
+/** 群公告列表 → 给人/AI 看的文本 */
+function formatGroupNotices(list) {
+    if (!Array.isArray(list) || !list.length) return '这个群现在没有群公告。';
+    return list.map((n, i) => {
+        const when = n.at ? new Date(n.at).toLocaleString('zh-CN', { hour12: false }) : '';
+        const tail = when ? `（${when}${n.sender ? ` · 发布者 ${n.sender}` : ''}）` : '';
+        return `${list.length > 1 ? `${i + 1}. ` : ''}${n.text}${tail}`;
+    }).join('\n');
+}
+
 /**
  * 把 OneBot 返回的错误 JSON 精简成一行，便于日志阅读。
  * NapCat 的失败信息里 message 常常是带换行的一长串（EventChecker / NTEvent …），
@@ -942,7 +983,7 @@ function expectedHistoryCount() {
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null, groupId = '' } = {}) {
     // 地图（地形俯视图 / 物品栏地图）共用：发图到当前会话 → 视觉模型看一眼 → 摘要交给模型
     const emitMap = async (m, look = true) => {
         let sent = false;
@@ -991,6 +1032,15 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             const n = Number(count);
             const take = Number.isFinite(n) && n > 0 ? Math.min(100, Math.round(n)) : expectedHistoryCount();
             return historyContext(key, take) || '没有找到和这个人的历史聊天记录。';
+        },
+        // 群公告：读当前群的公告（群里任何身份都能看；私聊/游戏里没有群公告）
+        groupNotice: async () => {
+            if (!groupId) return '这里不是群聊（私聊 / 游戏里），看不到群公告。';
+            try {
+                return formatGroupNotices(await fetchGroupNotices(groupId));
+            } catch (e) {
+                return `群公告读取失败：${e.message}`;
+            }
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
@@ -2220,6 +2270,14 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
     if (event.message_type !== 'group' || !event.group_id) {
         return sendReply(event, '❌ 该指令仅可在群聊中使用。');
     }
+    // 查看群公告：不填内容就是「看」，群里任何人都能看；填了内容才是发布（下面再校验管理权限）
+    if (cmd === '/群公告' && !arg.trim()) {
+        try {
+            return sendReply(event, formatGroupNotices(await fetchGroupNotices(event.group_id)));
+        } catch (e) {
+            return sendReply(event, `❌ 群公告读取失败：${e.message}`.slice(0, 200));
+        }
+    }
     // 仅主人/管理员
     if (roleName !== 'owner' && roleName !== 'master' && roleName !== 'admin') {
         return sendReply(event, '❌ 无权限（需主人或管理员）。');
@@ -2282,8 +2340,7 @@ async function handleGroupAdmin(event, cmd, arg, roleName) {
             await callApi('set_group_whole_ban', { group_id: gid, enable: false });
             await sendReply(event, '🔊 已解除全体禁言。');
         } else if (cmd === '/群公告') {
-            const content = arg.trim();
-            if (!content) return sendReply(event, '❌ 用法：#群公告 要发布的内容');
+            const content = arg.trim(); // 空内容在函数开头已按「查看公告」处理，到这里一定有内容
             // NapCat 叫 send_group_notice，SnowLuma 里叫 _send_group_notice：先按标准名调，未知 action 再换名重试
             try {
                 await callApi('send_group_notice', { group_id: gid, content });
@@ -3607,6 +3664,8 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
             extraUserMessages: prepared.slice(1).map((p) => ({ role: 'user', content: p.metaLine })),
             ctx: buildAgentCtx(prepared[0].memKey, String(first.event.user_id), {
                 images: imgs,
+                // 群公告工具要按当前群查（私聊/游戏里没有群）
+                groupId: first.event.message_type === 'group' ? String(first.event.group_id || '') : '',
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
                     if (signal && signal.aborted) return Promise.resolve();
@@ -3799,7 +3858,7 @@ async function askAiFromMcInner(key, player, text, isPrivate) {
         allowSkip: false,
         allowSearch: searchEnabled(),
         userId: player,
-        ctx: buildAgentCtx(mcMemKey, mcQq || player),
+        ctx: buildAgentCtx(mcMemKey, mcQq || player, { groupId: MC_BRIDGE_GROUP || '' }),
     });
 
     // 标记已在 aiReply 里剥离；这里只兜底再清一次
