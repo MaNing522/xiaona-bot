@@ -939,6 +939,25 @@ function expectedHistoryCount() {
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
 function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null } = {}) {
+    // 地图（地形俯视图 / 物品栏地图）共用：发图到当前会话 → 视觉模型看一眼 → 摘要交给模型
+    const emitMap = async (m, look = true) => {
+        let sent = false;
+        if (sendImage && m && m.path) {
+            try {
+                await sendImage(m.path);
+                sent = true;
+            } catch (e) {
+                logger.warn('[地图] 发送失败:', e.message);
+            }
+        }
+        const parts = [String((m && m.summary) || '地图已生成。').trim()];
+        if (look !== false && m && m.path) {
+            const seen = await describeGeneratedImage(m.path);
+            if (seen) parts.push(`地图画面：${seen}`);
+        }
+        parts.push(sent ? '图片已经发到当前会话。' : '当前场景发不了图片，只能把摘要给你。');
+        return parts.join('\n');
+    };
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
@@ -979,22 +998,17 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             } catch (e) {
                 return `地图生成失败：${e.message}`;
             }
-            let sent = false;
-            if (sendImage && m.path) {
-                try {
-                    await sendImage(m.path);
-                    sent = true;
-                } catch (e) {
-                    logger.warn('[地图] 发送失败:', e.message);
-                }
+            return emitMap(m, look);
+        },
+        // 物品栏里的地图物品（filled_map）→ 图片发到当前会话
+        mcbotMapItem: async (look = true) => {
+            let m;
+            try {
+                m = await mcBot.mapItem();
+            } catch (e) {
+                return `地图导出失败：${e.message}`;
             }
-            const parts = [String(m.summary || '地图已生成。').trim()];
-            if (look !== false) {
-                const seen = await describeGeneratedImage(m.path);
-                if (seen) parts.push(`地图画面：${seen}`);
-            }
-            parts.push(sent ? '图片已经发到当前会话。' : '当前场景发不了图片，只能把摘要给你。');
-            return parts.join('\n');
+            return emitMap(m, look);
         },
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {

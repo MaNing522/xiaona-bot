@@ -207,6 +207,26 @@ export async function command(command) {
   return sendCmd(`srvcmd ${c}`);
 }
 
+/**
+ * 把物品栏里的地图物品（filled_map）导出成 PNG。
+ * headless 会把它拿在手上等服务器下发数据（最多 3 秒），再渲染；同样按 /state 轮询。
+ * @returns {Promise<{path:string, summary:string}>}
+ */
+export async function mapItem() {
+  await requireOnline();
+  const before = (((await http('/state', { timeout: 3000 })) || {}).map || {}).at || 0;
+  const r = await http('/cmd', { method: 'POST', body: { cmd: 'mapitem' }, timeout: 30000 });
+  if (r && r.ok === false) throw new Error(r.error || '导出地图失败');
+  const t0 = Date.now();
+  while (Date.now() - t0 < 60000) {
+    const st = await http('/state', { timeout: 3000 }).catch(() => null);
+    const m = st && st.map;
+    if (m && m.at > before && m.path) return m;
+    await new Promise((res) => setTimeout(res, 800));
+  }
+  throw new Error('导出地图物品超时（60 秒）');
+}
+
 /** 任务指令：goto / fly / collect / pvp / mace / develop / follow / stop / xray / toss 等 */
 export async function run(command) {
   const c = String(command || '').trim();
