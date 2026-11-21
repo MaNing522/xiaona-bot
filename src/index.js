@@ -3907,12 +3907,15 @@ function sendToBoundPlayers(text, qq, name) {
         logger.info('[MC桥] 群里没人绑定游戏ID，这条没进游戏（群里已有 #绑定 提示）');
         return false;
     }
+    // 所有进游戏的 QQ 文本都在这里统一过一遍敏感词：不管从哪条分支调用，都不会漏
+    const safeText = maskForwardText(text, cfg.filter);
+    if (safeText !== text) logger.info('[过滤] 进游戏内容命中敏感词，已替换后转发');
     // 昵称里的方括号会破坏标签解析，去掉；昵称同样过敏感词，避免换个名字绕过过滤
     const safeName = name ? maskForwardText(String(name).replace(/[[\]]/g, ''), cfg.filter) : '';
     let prefix = '[QQ]';
     if (safeName) prefix += `[${safeName}]`;
     if (qq) prefix += `[${qq}]`;
-    sendToMc(text, { players: receivers, prefix })
+    sendToMc(safeText, { players: receivers, prefix })
         .then((r) => {
             if (!r) return;
             if (!r.ok) {
@@ -3944,9 +3947,8 @@ function forwardGroupToMc(event, who) {
         .then(() => buildForwardText(event.message, event.group_id))
         .then((text) => {
             if (!text) return;
-            // 转发进游戏前先过敏感词（config.json 的 filter，热加载生效）
-            const safe = maskForwardText(text, cfg.filter);
-            if (!sendToBoundPlayers(`：${safe}`, event.user_id, who)) hintNobodyBound();
+            // 限流/敏感词统一在 sendToBoundPlayers 里处理，这里只负责渲染
+            if (!sendToBoundPlayers(`：${text}`, event.user_id, who)) hintNobodyBound();
         })
         .catch((e) => logger.error('[MC桥] 转发内容渲染失败:', e.message));
 }
