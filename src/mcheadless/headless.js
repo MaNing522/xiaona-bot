@@ -110,7 +110,9 @@ function pushChatLine (text) {
 }
 
 // 登录插件（AuthMe）状态
-const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || ''
+// 密码优先级：环境变量 MC_PASSWORD（.env 的 MC_BOT_PASSWORD） > config.json 的 password > 默认。
+// 默认值就是小钠这个号的统一密码，首次进服自动 /register、之后自动 /login 都用它。
+const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || 'ZwzzxyBot123!'
 let authState = 'unknown' // unknown | pending | done
 let authTries = 0
 let authResponded = false
