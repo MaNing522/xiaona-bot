@@ -48,4 +48,14 @@ describe('腾讯词库匹配', () => {
     // 更长的词条仍然优先命中
     expect(maskByWords('他妈的政府', [...words, '他妈的政府'], '***')).toBe('***');
   });
+
+  it('放行词整段不打码（服务器 / 管理员 / 你妈妈）', () => {
+    const lib = ['服务器', '管理', '你妈', '傻逼'];
+    const ig = '服务器,管理,妈妈';
+    expect(maskByWords('今天服务器好卡', lib, '***', ig)).toBe('今天服务器好卡');
+    expect(maskByWords('管理员在吗', lib, '***', ig)).toBe('管理员在吗');
+    expect(maskByWords('你妈妈好', lib, '***', ig)).toBe('你妈妈好');
+    expect(maskByWords('你个傻逼', lib, '***', ig)).toBe('你个***');
+    expect(maskByWords('你妈的', lib, '***', ig)).toBe('***的');
+  });
 });
