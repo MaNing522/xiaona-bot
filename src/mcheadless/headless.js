@@ -72,6 +72,9 @@ let lastMap = null
 const mapDataById = new Map()
 let lastMapPacketAt = 0
 let lastMapId = 0
+// 登录验证码（AuthMe map captcha）：检测到提示就自动把那张地图导出成图片，
+// 由上层（小钠）交给视觉模型读数字；读不出来再把图发到 QQ 找人看。
+let captcha = { pending: false, path: null, at: 0, error: '' }
 
 // 登录插件（AuthMe）状态
 const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || ''
@@ -310,6 +313,7 @@ function createBot () {
   bot.on('messagestr', msg => {
     if (process.env.DEBUG_MSG) log('MSG', msg)
     onAuthMessage(msg)
+    maybeCaptcha(msg, myGen)
   })
   if (process.env.DEBUG_PACKETS) {
     client.on('packet', (data, meta) => {
@@ -461,6 +465,7 @@ function onSpawn () {
   authResponded = false
   authSeen = false
   regTries = 0
+  captcha = { pending: false, path: null, at: 0, error: '' }
   global.__regLastAt = 0
   if (patrolTimer) clearTimeout(patrolTimer)
   patrolTimer = null
@@ -621,6 +626,7 @@ function onAuthMessage (msg) {
   if (/successful(ly)? (login|logged in|registered)|registered successfully|you are now (logged in|authenticated)|already logged in|登录成功|注册成功|成功注册|认证成功/.test(low)) {
     authResponded = true
     authSeen = true
+    captcha = { pending: false, path: null, at: 0, error: '' }
     markAuthed('plugin-confirmed')
     return
   }
@@ -3151,9 +3157,66 @@ const CMD_ALIASES = {
   矿透: 'xray', 透视: 'xray',
   地图: 'map', map: 'map',
   地图物品: 'mapitem', 手上地图: 'mapitem',
+  验证码: 'captcha', captcha: 'captcha',
   丢垃圾: 'toss', 清理: 'toss', 扔垃圾: 'toss',
   状态: 'status', 汇报: 'status',
   帮助: 'help', 帮: 'help', 指令: 'help', help: 'help'
+}
+
+/**
+ * 把物品栏里的地图物品（filled_map）导出成 PNG：
+ * 先拿在手上让服务端下发数据，没反应就右键一次再看（有些服务端此时才重发），
+ * 仍拿不到就说明这张图没探索过。
+ */
+async function exportMapItem (want = 0) {
+  if (!bot || !bot.entity) throw new Error('不在服务器里')
+  const maps = bot.inventory.items().filter((i) => i.name === 'filled_map' || i.name === 'map')
+  if (!maps.length) throw new Error('物品栏里没有地图')
+  const prev = bot.heldItem
+  const waitMapPacket = async (ms, activate) => {
+    const before = lastMapPacketAt
+    if (activate) { try { bot.activateItem() } catch {} }
+    const t0 = Date.now()
+    while (Date.now() - t0 < ms && lastMapPacketAt <= before) {
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return lastMapPacketAt > before
+  }
+  try { await bot.equip(maps[0], 'hand') } catch {}
+  let got = await waitMapPacket(3000, false)
+  if (!got && !(want && mapDataById.has(want))) got = await waitMapPacket(5000, true)
+  if (prev) { try { await bot.equip(prev, 'hand') } catch {} }
+  const id = want && mapDataById.has(want) ? want : lastMapId
+  const data = id ? mapDataById.get(id) : null
+  if (!data || !data.hasData) {
+    throw new Error(`服务器还没下发这张地图的数据（物品栏里有 ${maps.length} 张地图，但这张可能还没探索过）`)
+  }
+  const out = renderItemMap(data)
+  lastMap = { path: out.file, at: out.at, radius: 0, center: null, dim: '地图物品', summary: out.summary, analysis: out.analysis }
+  return out
+}
+
+/**
+ * 登录验证码提示 → 自动导出验证码地图。
+ * 只负责"把图准备好"，识别数字和提交 /captcha 由上层（小钠）做。
+ */
+function maybeCaptcha (msg, gen) {
+  const s = String(msg || '')
+  if (!/captcha|验证码/i.test(s)) return
+  if (captcha.pending) return
+  captcha = { pending: true, path: null, at: Date.now(), error: '' }
+  log('captcha: 服务器要求验证码，准备导出验证码地图')
+  setTimeout(() => {
+    if (gen !== connGen) return
+    exportMapItem(0).then((out) => {
+      if (gen !== connGen) return
+      captcha = { pending: true, path: out.file, at: Date.now(), error: '' }
+      log(`captcha: 已导出验证码地图 ${out.file}`)
+    }).catch((e) => {
+      captcha.error = e.message
+      log('captcha: 导出失败:', e.message)
+    })
+  }, 800)
 }
 
 async function dispatchCommand (username, raw) {
@@ -3172,7 +3235,7 @@ async function dispatchCommand (username, raw) {
       case 'help':
         reply('进/出服：！进服 <host> [port] [version] ！退服')
         reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径] ！地图物品')
-        reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
+        reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！验证码 ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
         break
       case 'join': {
         const t = joinServer(args[0], args[1], args[2])
@@ -3193,35 +3256,17 @@ async function dispatchCommand (username, raw) {
         break
       }
       case 'mapitem': {
-        // 把物品栏里的地图物品（filled_map）导出成 PNG：先拿在手上让服务端下发数据；
-        // 没反应就右键一次再看（有些服务端此时才重发），仍拿不到就说明这张图没探索过。
-        if (!bot || !bot.entity) throw new Error('不在服务器里')
-        const maps = bot.inventory.items().filter((i) => i.name === 'filled_map' || i.name === 'map')
-        if (!maps.length) throw new Error('物品栏里没有地图')
-        const want = Number(args[0]) || 0
-        const prev = bot.heldItem
-        const waitMapPacket = async (ms, activate) => {
-          const before = lastMapPacketAt
-          if (activate) { try { bot.activateItem() } catch {} }
-          const t0 = Date.now()
-          while (Date.now() - t0 < ms && lastMapPacketAt <= before) {
-            await new Promise((r) => setTimeout(r, 150))
-          }
-          return lastMapPacketAt > before
-        }
-        try { await bot.equip(maps[0], 'hand') } catch {}
-        let got = await waitMapPacket(3000, false)
-        if (!got && !(want && mapDataById.has(want))) got = await waitMapPacket(5000, true)
-        if (prev) { try { await bot.equip(prev, 'hand') } catch {} }
-        const id = want && mapDataById.has(want) ? want : lastMapId
-        const data = id ? mapDataById.get(id) : null
-        if (!data || !data.hasData) {
-          throw new Error(`服务器还没下发这张地图的数据（物品栏里有 ${maps.length} 张地图，但这张可能还没探索过）`)
-        }
-        const out = renderItemMap(data)
-        lastMap = { path: out.file, at: out.at, radius: 0, center: null, dim: '地图物品', summary: out.summary, analysis: out.analysis }
+        const out = await exportMapItem(Number(args[0]) || 0)
         log(`mapitem: ${out.file}（#${out.id}）`)
         reply(`地图 #${out.id} 已保存`)
+        break
+      }
+      case 'captcha': {
+        // 手动（或上层）要求导出验证码地图：导出后标记 pending，等着上层识别
+        const out = await exportMapItem(Number(args[0]) || 0)
+        captcha = { pending: true, path: out.file, at: Date.now(), error: '' }
+        log(`captcha: 已导出验证码地图 ${out.file}`)
+        reply('验证码地图已导出')
         break
       }
       case 'srvcmd': {
@@ -3531,7 +3576,7 @@ function botState () {
   const connected = Boolean(bot && bot._client && bot._client.state === 'play')
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
   if (!bot || !bot.entity) {
-    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap }
+    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, captcha }
   }
   const p = bot.entity.position
   const players = Object.values(bot.players)
@@ -3568,6 +3613,7 @@ function botState () {
     lastReply,
     lastError,
     map: lastMap,
+    captcha,
     players,
     inventory,
     offhand,

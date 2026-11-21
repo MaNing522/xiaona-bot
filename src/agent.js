@@ -172,6 +172,20 @@ export const AGENT_TOOLS = [
   {
     minRole: 'admin',
     function: {
+      name: 'mcbot_captcha',
+      description: '导出服务器的登录验证码地图（AuthMe captcha，图上画着数字），发到当前 QQ 会话，并把画面交给视觉模型读数字。小钠进服后卡在验证码、或用户要看验证码时用；读到数字后再用 mcbot_command 发 /captcha <数字>。',
+      parameters: {
+        type: 'object',
+        properties: {
+          look: { type: 'boolean', description: '是否让视觉模型描述画面，默认 true' },
+        },
+      },
+    },
+    run: async (args, ctx) => ctx.mcbotCaptcha(args.look !== false),
+  },
+  {
+    minRole: 'admin',
+    function: {
       name: 'mcbot_chat',
       description: '让小钠在游戏公屏发言。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command**。',
       parameters: {
