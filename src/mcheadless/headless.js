@@ -111,8 +111,10 @@ function pushChatLine (text) {
 
 // 登录插件（AuthMe）状态
 // 密码优先级：环境变量 MC_PASSWORD（.env 的 MC_BOT_PASSWORD） > config.json 的 password > 默认。
-// 默认值就是小钠这个号的统一密码，首次进服自动 /register、之后自动 /login 都用它。
-const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || 'ZwzzxyBot123!'
+// 只能用小写字母/数字/下划线：服务端 /register 的参数是 brigadier 的 word 类型，
+// 带 ! 之类的符号会直接报 “Expected whitespace to end one argument”，所以这里统一过滤掉。
+const AUTH_PASSWORD = String(process.env.MC_PASSWORD || fileCfg.password || 'ZwzzxyBot123')
+  .replace(/[^A-Za-z0-9_]/g, '') || 'ZwzzxyBot123'
 let authState = 'unknown' // unknown | pending | done
 let authTries = 0
 let authResponded = false
@@ -3286,7 +3288,9 @@ async function dispatchCommand (username, raw) {
   const rest = input.slice(rawCmd.length).trim()
   if (!rawCmd) throw new Error('空指令')
 
-  if (authState !== 'done' && !['stop', 'status', 'help', 'join', 'leave'].includes(cmd)) {
+  // 登录前也要能发命令：AuthMe 的 /register、/login、/captcha 都发生在未登录阶段
+  const AUTH_FREE = ['stop', 'status', 'help', 'join', 'leave', 'srvcmd', 'say']
+  if (authState !== 'done' && !AUTH_FREE.includes(cmd)) {
     throw new Error('尚未登录')
   }
 
