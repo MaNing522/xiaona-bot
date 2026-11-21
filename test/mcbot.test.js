@@ -27,7 +27,7 @@ describe('mcbot 状态文本', () => {
 
   it('未进服 / 连接中', () => {
     const notJoined = formatStatus({ connected: false, spawned: false, server: { host: '1.2.3.4', port: 25565, wantConnect: false } });
-    expect(notJoined).toContain('不在服务器');
+    expect(notJoined).toContain('不在线');
     const connecting = formatStatus({ connected: false, spawned: false, server: { host: '1.2.3.4', port: 25565, wantConnect: true }, auth: 'unknown' });
     expect(connecting).toContain('正在连接');
   });

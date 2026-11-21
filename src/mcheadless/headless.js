@@ -3289,7 +3289,7 @@ async function dispatchCommand (username, raw) {
         break
       case 'join': {
         const t = joinServer(args[0], args[1], args[2])
-        reply(`正在连接 ${t.host}:${t.port}（${t.version}）`)
+        reply(t.already ? `已经在 ${t.host}:${t.port} 里了，无需重进` : `正在连接 ${t.host}:${t.port}（${t.version}）`)
         break
       }
       case 'leave':
@@ -3575,6 +3575,10 @@ function joinServer (address, portArg, versionArg) {
   if (m) { host = m[1]; port = Number(m[2]) }
   if (!port) port = 25565
   if (!(port >= 1 && port <= 65535)) throw new Error(`端口不合法：${port}`)
+  // 已经连着的就是同一个服：直接返回，别把现有连接打掉（AI 老是重复 join）
+  if (bot && !bot.ended && wantConnect && CFG.host === host && CFG.port === port) {
+    return { host, port, version: (versionArg ? String(versionArg).trim() : CFG.version), already: true }
+  }
   CFG.host = host
   CFG.port = port
   if (versionArg) CFG.version = String(versionArg).trim()

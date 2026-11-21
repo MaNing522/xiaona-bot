@@ -256,6 +256,26 @@ export function extractTextToolCalls(content, tools = []) {
     calls.push(c);
     return '';
   });
+  // 4) DeepSeek 的 DSML 标签：<|DSML|invoke name="x"><|DSML|parameter name="k">v</|DSML|parameter></|DSML|invoke>
+  //    （中转常把它原样当正文吐出来，之前会整段发到聊天里）
+  const dsmlInvoke = /<\|{1,2}\s*DSML\s*\|{1,2}\s*invoke\b([^>]*)>([\s\S]*?)<\/\|{1,2}\s*DSML\s*\|{1,2}\s*invoke\s*>/gi;
+  text = text.replace(dsmlInvoke, (whole, attrs, inner) => {
+    const nm = String(attrs || '').match(/name\s*=\s*["']?([A-Za-z0-9_]+)/i);
+    if (!nm) return whole;
+    const args = {};
+    const paramRe = /<\|{1,2}\s*DSML\s*\|{1,2}\s*parameter\b([^>]*)>([\s\S]*?)<\/\|{1,2}\s*DSML\s*\|{1,2}\s*parameter\s*>/gi;
+    let pm;
+    while ((pm = paramRe.exec(inner))) {
+      const kn = String(pm[1] || '').match(/name\s*=\s*["']?([A-Za-z0-9_]+)/i);
+      if (kn) args[kn[1]] = String(pm[2] || '').trim();
+    }
+    const c = toCall(nm[1], args);
+    if (!c) return whole;
+    calls.push(c);
+    return '';
+  });
+  // 5) 还残留的 DSML 标签（外层包裹、残缺片段）一律清掉，绝不能发到聊天里
+  text = text.replace(/<\/?\|{1,2}\s*DSML\s*\|{1,2}[^>]*>/gi, '');
   return { content: text.trim(), tool_calls: calls.length ? calls : null };
 }
 

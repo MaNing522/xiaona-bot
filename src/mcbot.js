@@ -46,12 +46,12 @@ export function formatStatus(st) {
   const srv = st.server || {};
   const addr = srv.host ? `${srv.host}:${srv.port}` : '未指定';
   if (!st.spawned) {
-    if (srv.wantConnect && st.connected) return `正在进入 ${addr}（已连上，等待出生）`;
-    if (srv.wantConnect) return `正在连接 ${addr}（认证：${st.auth || '未知'}）`;
-    return '当前不在服务器里；可用 mcbot_join 进服。';
+    if (srv.wantConnect && st.connected) return `❌ 还不算在线：正在进入 ${addr}（已连上，等待出生）`;
+    if (srv.wantConnect) return `❌ 当前不在线：正在连接 ${addr}（认证：${st.auth || '未知'}）`;
+    return '❌ 当前不在线（不在任何服务器里）；要进服再用 mcbot_join。';
   }
   const lines = [];
-  lines.push(`服务器：${addr}（${srv.version || '未知版本'}）`);
+  lines.push(`✅ 当前在线：${addr}（已经进服了，不用再 join）`);
   lines.push(`坐标：${st.pos.x}, ${st.pos.y}, ${st.pos.z}${st.gamemode ? `（${st.gamemode}）` : ''}`);
   lines.push(`血量：${st.health ?? '?'}　饥饿：${st.food ?? '?'}　鞘翅：${st.elytraFlying ? '飞行中' : '未飞'}`);
   if (st.collect) lines.push(`收集：${st.collect.type} ${st.collect.done}/${st.collect.total}`);
@@ -171,9 +171,15 @@ async function requireOnline() {
 export async function join(address, port, version) {
   const t = parseTarget(address, port);
   await ensureStarted();
+  // 已经在这个服里就别再 join：重复连接会掉线重连一次，白白断几秒
+  const now = await http('/state', { timeout: 2000 }).catch(() => null);
+  if (now && now.spawned && now.server
+      && String(now.server.host) === t.host && Number(now.server.port) === t.port) {
+    return `小钠已经在 ${t.host}:${t.port} 里了（在线，不用重进）`;
+  }
   const v = String(version || '').trim();
   const r = await sendCmd(`join ${t.host} ${t.port}${v ? ` ${v}` : ''}`);
-  return `正在进入 ${t.host}:${t.port}：${r}`;
+  return r;
 }
 
 export async function leave() {
