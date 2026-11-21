@@ -46,6 +46,9 @@ export function formatStatus(st) {
   const srv = st.server || {};
   const addr = srv.host ? `${srv.host}:${srv.port}` : '未指定';
   if (!st.spawned) {
+    if (st.kick && st.kick.reason) {
+      return `❌ 当前不在线：被服务器踢出（原因：${st.kick.reason}）。已经停止自动重连，别自己再 mcbot_join，先把这件事告诉用户。`;
+    }
     if (srv.wantConnect && st.connected) return `❌ 还不算在线：正在进入 ${addr}（已连上，等待出生）`;
     if (srv.wantConnect) return `❌ 当前不在线：正在连接 ${addr}（认证：${st.auth || '未知'}）`;
     return '❌ 当前不在线（不在任何服务器里）；要进服再用 mcbot_join。';

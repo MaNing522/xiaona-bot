@@ -105,7 +105,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_join',
-      description: '让小钠用自带的 MC 客户端（离线登录，默认名 xiaona，Baritone 式寻路/挖矿/飞行）进入一个服务器。地址只填域名/IP（可带 :端口），不要带 http://。已经在同一个服务器里时调用不会重连（直接回“已在里面”），所以不确定时也可以放心先 mcbot_status 看一眼再决定。',
+      description: '让小钠用自带的 MC 客户端（离线登录，默认名 xiaona，Baritone 式寻路/挖矿/飞行）进入一个服务器。地址只填域名/IP（可带 :端口），不要带 http://。已经在同一个服务器里时调用不会重连（直接回“已在里面”），所以不确定时也可以放心先 mcbot_status 看一眼再决定。被服务器踢出后不会自动重连；除非用户明确要求重进，否则不要自己再 join。',
       parameters: {
         type: 'object',
         properties: {
