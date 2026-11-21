@@ -268,8 +268,13 @@ export async function rawState() {
  */
 export async function captcha() {
   await requireOnline();
-  const before = ((await http('/state', { timeout: 3000 })) || {}).captcha || {};
-  const beforeAt = Number(before.at) || 0;
+  // headless 检测到验证码提示已经导出了一张：直接用最近这张，别再折腾一次物品栏
+  const st0 = (await http('/state', { timeout: 3000 }).catch(() => null)) || {};
+  const c0 = st0.captcha || {};
+  if (c0.pending && c0.path) {
+    try { fs.accessSync(c0.path); return c0; } catch { /* 文件被清掉了，重新导 */ }
+  }
+  const beforeAt = Number(c0.at) || 0;
   const r = await http('/cmd', { method: 'POST', body: { cmd: 'captcha' }, timeout: 40000 });
   if (r && r.ok === false) throw new Error(r.error || '导出验证码地图失败');
   const t0 = Date.now();
