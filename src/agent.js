@@ -481,11 +481,12 @@ function raceAbort(promise, signal) {
  * @param {object} opts.ctx        工具执行上下文（供各工具 run 使用）
  * @param {number} [opts.maxSteps] 最多循环几步（防止死循环），默认 24
  * @param {Function} [opts.onTool] 每次调用工具时的回调（日志用）
+ * @param {Function} [opts.onToolResult] 每次拿到工具结果时的回调 (name, text, ok)（日志用）
  * @param {Function} [opts.steer]  引导：每次请求模型前调用，返回期间用户新发的消息（[{role,content}]），
  *                                 直接追加进当前对话——正常 agent 的 steering，而不是排队等下一轮。
  * @returns {Promise<string>} 模型最终的文字回复
  */
-export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 24, onTool, signal, steer }) {
+export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 24, onTool, onToolResult, signal, steer }) {
   // AI 自己中途发出去的话（唱歌/图片/旁白，由 ctx.noteSent 收集进 ctx.ownSaid）：
   // 下一次请求模型前回灌成 assistant 消息，让它知道自己已经发过什么，别重复或自相矛盾。
   const drainSaid = () => {
@@ -564,6 +565,10 @@ export async function runAgentLoop({ messages, tools, chat, ctx, maxSteps = 24, 
       // 工具结果必须始终回灌给模型（成功/失败都要），哪怕空字符串也补一句，
       // 否则有的服务商会对空的 tool 消息报错，整轮回复就断了
       const content = String((out && out.text) ?? '').trim() || '（工具执行完成，但没有返回内容）';
+      // 把工具回给模型的内容也交给调用方记日志（截断在外部做）
+      if (onToolResult) {
+        try { onToolResult(name, content, !(out && out.ok === false)); } catch { /* 日志失败不影响主流程 */ }
+      }
       messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
@@ -612,10 +617,11 @@ export function decideSkip(reply, allowSkip, usedTool) {
  * @param {number} [opts.maxSteps] 最多循环几步，默认 24
  * @param {boolean} [opts.allowSkip] 是否允许用【REPLY:是】判定"这条不接"
  * @param {Function} [opts.onTool] 工具调用回调（日志用）
+ * @param {Function} [opts.onToolResult] 工具结果回调 (name, text, ok)（日志用）
  * @param {Function} [opts.steer] 引导回调：每次请求模型前拉取用户新消息（见 runAgentLoop）
  * @returns {Promise<{reply:string, wantVoice:boolean, skip:boolean}>}
  */
-export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 24, allowSkip = false, onTool, signal, steer }) {
+export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxSteps = 24, allowSkip = false, onTool, onToolResult, signal, steer }) {
   let usedTool = false;
   const raw = await runAgentLoop({
     messages,
@@ -624,6 +630,7 @@ export async function runAgentReply({ messages, tools = [], chat, ctx = {}, maxS
     ctx,
     maxSteps,
     signal,
+    onToolResult,
     steer,
     // 调过工具 = 明确在办事，即使没写【REPLY:是】也不能被跳过（见 decideSkip）
     onTool: (name, args) => { usedTool = true; if (onTool) onTool(name, args); },

@@ -107,6 +107,27 @@ describe('runAgentLoop（工具调用循环）', () => {
     expect(said).toHaveLength(0); // 已回灌并从队列取走，不会重复
   });
 
+  it('工具结果通过 onToolResult 回调交给上层记日志', async () => {
+    let call = 0;
+    const got = [];
+    const chat = async () => {
+      call += 1;
+      if (call === 1) {
+        return { content: '', tool_calls: [{ id: 'r', type: 'function', function: { name: 'mc_status', arguments: '{}' } }] };
+      }
+      return { content: '好', tool_calls: null };
+    };
+    const ctx = { mcStatus: async () => '在线 3 人' };
+    await runAgentLoop({
+      messages: [],
+      tools: toolsForRole('guest'),
+      chat,
+      ctx,
+      onToolResult: (name, text, ok) => got.push([name, text, ok]),
+    });
+    expect(got[0]).toEqual(['mc_status', '在线 3 人', true]);
+  });
+
   it('没有工具调用时直接返回文本', async () => {
     const chat = async () => ({ content: '在呢～', tool_calls: null });
     const out = await runAgentLoop({ messages: [], tools: toolsForRole('guest'), chat, ctx: {} });
