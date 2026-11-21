@@ -4,6 +4,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const baritone = require('./baritone')
+const { createAltoClef } = require('./altoclef')
 const { renderMap, renderItemMap } = require('./mapRender')
 const { Vec3 } = require('vec3')
 const http = require('http')
@@ -57,6 +58,9 @@ function proxyConnect (client) {
 }
 
 let bot = null
+// AltoClef 行为决策层（任务链 + 生存/吃饭/落地水），全程只有一个实例，
+// 内部通过 getBot() 现取 bot，重连换实例也不用重建。
+let alto = null
 let stopped = false
 let wantConnect = AUTO_CONNECT   // false = 已退服/还没 join，断线不重连
 let connGen = 0                  // 连接代际：join/leave 后旧实例的回调直接作废
@@ -183,6 +187,9 @@ function createBot () {
   })
   bot = mine
   mine.loadPlugin(pathfinder)
+  if (!alto) {
+    alto = createAltoClef(() => bot, { log: (...a) => log(...a) })
+  }
 
   // 适配原版 1.21.2+ 的客户端 tick 协议（Sonar 会校验）：
   // 1) 每个移动包之后必须紧跟 tick_end
@@ -673,6 +680,16 @@ function resumeMode () {
       if (!DEV.running) {
         log('resume: 继续自主发育')
         develop().catch(() => {})
+      }
+      break
+    case 'task':
+      if (mode.cmd) {
+        log(`resume: 继续任务 ${mode.cmd}`)
+        dispatchCommand('agent', mode.cmd).catch((e) => log('resume task failed:', e.message))
+      } else {
+        saveMode('patrol')
+        stopped = false
+        schedulePatrol(1500)
       }
       break
     default: // patrol / fly（落地后不重复起飞）
@@ -3206,7 +3223,9 @@ const CMD_ALIASES = {
   服务器命令: 'srvcmd', 执行: 'srvcmd', cmd: 'srvcmd',
   跟随: 'follow', 跟: 'follow', 追: 'follow',
   说: 'say', 代发: 'say', 发言: 'say', 喊: 'say',
-  收集: 'collect', 采集: 'collect', 挖: 'collect',
+  收集: 'collect', 采集: 'collect', 挖: 'collect', 挖矿: 'mine', 采矿: 'mine',
+  获取: 'get', 拿: 'get', 要: 'get', 获取物品: 'get',
+  吃饭: 'food', 食物: 'food', 找食物: 'food',
   停止: 'stop', 停: 'stop', 别动: 'stop',
   巡逻: 'go', 逛: 'go', 自由活动: 'go',
   去: 'goto', 前往: 'goto', 走到: 'goto',
@@ -3293,6 +3312,30 @@ function maybeCaptcha (msg, gen) {
   }, 800)
 }
 
+/**
+ * 交给 AltoClef 任务链执行（后台跑，不阻塞控制口）。
+ * persistCmd 写进 mode，断线重连/进程重启后 resumeMode 能接着做。
+ */
+function startAltoTask (task, persistCmd, label) {
+  if (!alto) throw new Error('MC 客户端还没初始化')
+  stopPvp()
+  stopMace()
+  stopFollow()
+  stopCollect()
+  if (patrolTimer) clearTimeout(patrolTimer)
+  patrolTimer = null
+  stopped = false
+  saveMode('task', { cmd: persistCmd, label })
+  alto.run(task, label, () => {
+    // 任务自然结束（做完/放弃）：回到巡逻，别卡在 task 模式
+    if (mode.kind === 'task') {
+      saveMode('patrol')
+      stopped = false
+      schedulePatrol(1200)
+    }
+  })
+}
+
 async function dispatchCommand (username, raw) {
   const input = String(raw).trim()
   const [rawCmd, ...args] = input.split(/\s+/)
@@ -3310,7 +3353,7 @@ async function dispatchCommand (username, raw) {
     switch (cmd) {
       case 'help':
         reply('进/出服：！进服 <host> [port] [version] ！退服')
-        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径] ！地图物品')
+        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！去 x z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！获取 <物品> [数量] ！吃饭 [单位] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径] ！地图物品')
         reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！验证码 ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
         break
       case 'join': {
@@ -3383,6 +3426,7 @@ async function dispatchCommand (username, raw) {
         flyAbort = true // 若正在飞行，则就地滑翔降落
         DEV.cancelled = true
         saveMode('stopped')
+        if (alto) alto.cancel()
         stopPvp()
         stopMace()
         stopFollow()
@@ -3425,23 +3469,59 @@ async function dispatchCommand (username, raw) {
         runFollow(spec)
         break
       }
-      case 'collect': {
+      case 'collect':
+      case 'mine': {
         const arg = args[0]
         if (!arg || arg === 'off' || arg === 'stop' || arg === '停') {
+          if (alto) alto.cancel()
           if (!stopCollect('已停止收集')) reply('当前没有收集任务')
           saveMode('patrol')
+          stopped = false
           schedulePatrol(800)
           break
         }
         const type = BLOCK_ALIASES[arg] || arg.toLowerCase()
         if (!bot.registry.blocksByName[type]) throw new Error(`未知资源 ${arg}`)
         const total = Math.max(1, Math.min(Number(args[1]) || 1, 512))
-        stopPvp()
-        stopMace()
-        stopFollow()
-        saveMode('collect', { type, count: total })
-        reply(`开始收集 ${type} x${total}`)
-        runCollect(type, total)
+        const drops = alto.dropsOfBlock(type)
+        const have = alto.mod.countItems(drops)
+        if (have >= total) {
+          reply(`背包里已经有 ${drops.join('/')} x${have}，不用再挖`)
+          break
+        }
+        const task = alto.taskForMine(type, total)
+        startAltoTask(task, `mine ${type} ${total}`, `采集 ${type} x${total}`)
+        reply(`开始采集 ${type} x${total}（目标物品 ${drops.join('/')}，后台执行，停 可中断）`)
+        break
+      }
+      case 'get': {
+        const arg = args[0]
+        if (!arg || arg === 'off' || arg === 'stop' || arg === '停') {
+          if (alto) alto.cancel()
+          saveMode('patrol')
+          stopped = false
+          schedulePatrol(800)
+          reply('已取消获取任务')
+          break
+        }
+        const total = Math.max(1, Math.min(Number(args[1]) || 1, 512))
+        const spec = alto.resolveItem(arg, bot.registry)
+        if (!spec) throw new Error(`不知道怎么获取 ${arg}（可以直接写方块名，如 diamond_ore）`)
+        const have = alto.mod.countItems(spec.items)
+        if (have >= total) {
+          reply(`背包里已经有 ${spec.items.join('/')} x${have}，不用再采集`)
+          break
+        }
+        const task = alto.taskForGet(arg, total)
+        startAltoTask(task, `get ${arg} ${total}`, `获取 ${arg} x${total}`)
+        reply(`开始获取 ${arg} x${total}（后台执行，停 可中断）`)
+        break
+      }
+      case 'food': {
+        const units = Math.max(1, Math.min(Number(args[0]) || 20, 200))
+        const task = alto.taskForFood(units)
+        startAltoTask(task, `food ${units}`, `收集食物 ${units} 单位`)
+        reply(`开始找吃的（目标 ${units} 单位，后台执行，停 可中断）`)
         break
       }
       case 'develop': {
@@ -3457,19 +3537,24 @@ async function dispatchCommand (username, raw) {
         break
       }
       case 'goto': {
-        const [x, y, z] = args.map(Number)
-        if ([x, y, z].some(Number.isNaN)) throw new Error('用法 goto x y z')
-        stopPvp()
-        stopMace()
-        stopFollow()
-        stopCollect()
-        saveMode('goto', { x, y, z })
-        reply(`前往 ${x} ${y} ${z}`)
-        await goto(x, y, z)
-        if (mode.kind === 'goto') saveMode('patrol')
-        reply('到达目标')
-        stopped = false
-        schedulePatrol(1500)
+        const nums = args.map(Number)
+        let task = null
+        let label = ''
+        let persist = ''
+        if (nums.length === 2 && nums.every(n => !Number.isNaN(n))) {
+          task = new alto.tasks.GetToXZTask(nums[0], nums[1])
+          label = `前往 ${nums[0]} ${nums[1]}`
+          persist = `goto ${nums[0]} ${nums[1]}`
+        } else if (nums.length >= 3 && nums.slice(0, 3).every(n => !Number.isNaN(n))) {
+          const [x, y, z] = nums
+          task = new alto.tasks.GetToBlockTask(new Vec3(x, y, z))
+          label = `前往 ${x} ${y} ${z}`
+          persist = `goto ${x} ${y} ${z}`
+        } else {
+          throw new Error('用法 goto x y z 或 goto x z')
+        }
+        startAltoTask(task, persist, label)
+        reply(`${label}（后台执行，停 可中断）`)
         break
       }
       case 'fly': {
@@ -3559,6 +3644,10 @@ async function dispatchCommand (username, raw) {
           break
         }
         reply(`${fmt(bot.entity.position)} 模式=${bot.game.gameMode} 鞘翅=${Boolean(bot.entity.elytraFlying)}${mode.kind === 'develop' ? ` 发育中(钻石x${countItem('diamond')})` : ''}${pvpName ? ` PvP=${pvpName}` : ''}${maceName ? ` 重锤=${maceName}` : ''}${followTarget ? ` 跟随=${followLabel(followTarget)}` : ''}${collectJob ? ` 收集=${collectJob.type} ${collectJob.done}/${collectJob.total}` : ''}`)
+        if (alto) {
+          const at = alto.status()
+          if (at.task) reply(`任务：${at.task}${at.chain ? `（${at.chain}）` : ''}`)
+        }
         break
       default:
         throw new Error(`未知指令 ${cmd}`)
@@ -3577,6 +3666,7 @@ async function dispatchCommand (username, raw) {
 // ---------- 进出服（由小钠通过 HTTP 下令）----------
 // 换服/退服前把在跑的任务全部停掉，否则旧任务会拿着已经作废的 bot 继续跑
 function resetTasks () {
+  if (alto) alto.cancel()
   if (patrolTimer) clearTimeout(patrolTimer)
   patrolTimer = null
   flying = false
@@ -3696,7 +3786,7 @@ function botState () {
   const hud = { chat: chatLog.slice(-30), title: lastTitle, scoreboard: readScoreboard(), bossBars: readBossBars() }
   const caps = { captcha, captchaImages: captchaImages.slice(), kick: lastKick }
   if (!bot || !bot.entity) {
-    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, ...caps, ...hud }
+    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, task: alto ? alto.status() : null, lastReply, lastError, map: lastMap, ...caps, ...hud }
   }
   const p = bot.entity.position
   const players = Object.values(bot.players)
@@ -3726,6 +3816,7 @@ function botState () {
     follow: followTarget ? { kind: followTarget.kind, name: followTarget.name, type: followTarget.type } : null,
     followAir: followAirInfo(),
     collect: collectJob ? { type: collectJob.type, done: collectJob.done, total: collectJob.total } : null,
+    task: alto ? alto.status() : null,
     mode: { kind: mode.kind, updatedAt: mode.updatedAt },
     outputMode,
     antiXray: antiXray === null ? 'auto' : (antiXray ? 'on(表面挖)' : 'off(穿透挖)'),
@@ -3902,6 +3993,8 @@ function startWatchdog () {
       if (!collectRunning && mode.type) runCollect(mode.type, mode.count || 1)
       return
     }
+    // AltoClef 任务链自己负责重试/放弃，看门狗不要插手
+    if (mode.kind === 'task') return
     // patrol：卡住 15s 就重新规划，避免寻路死锁导致状态停滞
     const p = bot.entity.position
     if (Math.hypot(p.x - stall.x, p.y - stall.y, p.z - stall.z) > 0.3) {
@@ -3927,10 +4020,33 @@ function startWatchdog () {
   }, 5000).unref()
 }
 
+// AltoClef 决策层只在“巡逻/任务”模式下跑；飞行、发育、PvP、跟随、旧采集
+// 这些自己管动作的模式不插手，避免两套东西抢控制状态。
+function shouldRunAlto () {
+  if (!alto || !bot || !bot.entity) return false
+  if (authState !== 'done') return false
+  if (flying || stopped) return false
+  if (mode.kind !== 'patrol' && mode.kind !== 'task') return false
+  if (pvpRunning || maceRunning || followRunning || collectRunning || DEV.running) return false
+  return true
+}
+
+// 20 TPS 决策循环（和原版 AltoClef 的 tick 频率一致）
+setInterval(() => {
+  if (!shouldRunAlto()) return
+  try {
+    alto.tick()
+  } catch (e) {
+    log('alto tick failed:', e.message)
+  }
+}, 50).unref()
+
 
 function onDeath () {
   log('died, respawning')
   if (mode.kind === 'develop') DEV.dead = true
+  // 死亡等于本次任务失败：清掉 AltoClef 任务，重生后按 mode 重新决策
+  if (alto) alto.cancel()
   flying = false
   flyAbort = false
   stopped = false

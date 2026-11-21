@@ -23,7 +23,7 @@ const TOOL_HINTS = {
     mcbot_status: '**动手前先看它**：自己的服务器、坐标、血量、背包、附近玩家、任务进度（含有没有任务在跑）',
     mcbot_chat: '在游戏公屏发言',
     mcbot_command: '发送服务器命令（/login、/reg、/spawn 等，自动补 /）',
-    mcbot_cmd: '给 MC 客户端下任务指令（它只是执行器，决策在你）：goto 坐标 / fly 坐标 / collect 方块 [数量] / develop / pvp [玩家] / mace / follow / stop / xray / toss 等',
+    mcbot_cmd: '给 MC 客户端下任务指令（它只是执行器，决策在你）：goto 坐标 / fly 坐标 / get 物品 [数量] / mine 方块 [数量] / food [单位] / collect 方块 [数量] / develop / pvp [玩家] / mace / follow / stop / xray / toss 等。get/mine/food/goto 走 AltoClef 任务链，后台执行，用 mcbot_status 看进度',
     mcbot_map: '画附近地形的俯视地图：存成图片并发到当前 QQ 会话，同时给你地形摘要和画面描述（水/岩浆/建筑/玩家）。有人问"周围什么样"时用',
     mcbot_mapitem: '把物品栏里的地图物品导出成图片发到当前 QQ 会话，并把地图画面（占比最大的地形、水域、未探索比例、标记数）和视觉描述一起给你。要求小钠身上有地图，且这张图探索过',
     mcbot_captcha: '把最近的登录验证码地图发到当前 QQ 会话（附视觉识别的数字，仅供参考）。用户要看验证码时用；等用户告诉你数字后再用 mcbot_command 提交，不要自己猜',
@@ -123,6 +123,7 @@ function mcClientSection() {
 - 动手前先 \`mcbot_status\`：第一行就是「✅ 当前在线：服务器」或「❌ 当前不在线」，以它为准，别猜。在线就别再 \`mcbot_join\`（同一服务器重复 join 不会重连，只会得到「已经在里面」）。
 - 被服务器踢出后不会自动重连，状态第一行会写明原因。别自己反复 join，先把被踢的原因告诉用户；只有用户明确让你重进时才 \`mcbot_join\`。
 - \`develop\` / \`collect\` 这类是一次跑多步的宏，只当起点；效果不对就停掉换做法，没人规定必须按它的流程走。
+- \`get 物品 [数量]\`（如 get diamond 8）、\`mine 方块 [数量]\`（如 mine coal_ore 16）、\`food [单位]\`、\`goto x z\` 走 AltoClef 任务链：自动找目标、挖、捡掉落、卡住自己绕，后台执行，用 \`mcbot_status\` 看进度，\`stop\` 中断。需要合成才能得到的东西目前会明确说做不了，别硬试。
 - 看不懂的局面（进服卡住、验证码、任务目标、倒计时）先 \`mcbot_hud\`：最近聊天、屏幕标题/动作栏、计分板、Boss栏都能读到，按里面的服务器提示决定发什么命令，别猜。
 - 登录验证码：图由客户端自动导出并留档（最近 5 张）。用户要看就把图发过去（\`mcbot_captcha\`）；等用户告诉你数字后再提交，绝不能拿视觉识别的结果当准数。
 - 登录插件（AuthMe）的 /login 与 /register 由客户端用统一密码自动完成，别自己手动发这两条命令、也不要猜密码。

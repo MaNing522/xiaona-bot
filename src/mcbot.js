@@ -65,6 +65,9 @@ export function formatStatus(st) {
   if (st.mace) lines.push(`重锤：${st.mace}`);
   if (st.follow) lines.push(`跟随：${st.follow.name || st.follow.type || '目标'}`);
   if (st.mode && st.mode.kind) lines.push(`运行模式：${st.mode.kind}`);
+  if (st.task && st.task.task) {
+    lines.push(`任务：${st.task.task}${st.task.chain ? `（${st.task.chain}）` : ''}`);
+  }
   const inv = st.inventory && Object.keys(st.inventory).length
     ? Object.entries(st.inventory).slice(0, 15).map(([k, v]) => `${k}x${v}`).join('、')
     : '空';
