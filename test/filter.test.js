@@ -39,4 +39,12 @@ describe('腾讯词库匹配', () => {
     expect(maskByWords('操', ['操'], '***')).toBe('***');
     expect(maskByWords('小明：操！', ['操'], '***')).toBe('小明：***！');
   });
+
+  it('日常口头禅和短缩写不处理', () => {
+    const words = ['他妈', '他妈的', 'c', 'cnm', 'mb', 'tmd'];
+    expect(maskByWords('你他妈在干嘛', words, '***')).toBe('你他妈在干嘛');
+    expect(maskByWords('cnm mb c tmd', words, '***')).toBe('cnm mb c tmd');
+    // 更长的词条仍然优先命中
+    expect(maskByWords('他妈的政府', [...words, '他妈的政府'], '***')).toBe('***');
+  });
 });
