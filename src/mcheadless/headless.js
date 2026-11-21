@@ -368,11 +368,15 @@ function createBot () {
     if (r.status === 'noPath' && !stopped && !flying) schedulePatrol(3000)
   })
   bot.on('health', () => {
+    // leave() 会把全局 bot 置空，旧实例退出的最后一个 tick 仍可能回调到这里
+    if (!bot || typeof bot.health !== 'number') return
     if (bot.health < lastHealth - 0.5) log(`health ${lastHealth.toFixed(1)} -> ${bot.health.toFixed(1)}`)
     lastHealth = bot.health
   })
   bot.on('physicsTick', () => {
     // 掉落保护：未开鞘翅且即将落地时，减速/转向只能靠寻路，这里仅记录
+    // 退服瞬间旧实例还会再 tick 一次，此时 bot 已经是 null，必须挡掉
+    if (!bot || !bot.entity) return
     const p = bot.entity
     if (!p) return
   })
@@ -672,9 +676,12 @@ function goto (x, y, z, timeout = 60000, range = 0) {
     const finish = (err) => {
       if (done) return
       done = true
-      bot.removeListener('goal_reached', onReach)
-      bot.removeListener('path_update', onUpdate)
-      bot.removeListener('path_stop', onStop)
+      // 退服后 bot 已经置空：清理动作全部跳过，只把 Promise 收尾
+      if (bot) {
+        bot.removeListener('goal_reached', onReach)
+        bot.removeListener('path_update', onUpdate)
+        bot.removeListener('path_stop', onStop)
+      }
       clearTimeout(timer)
       try { bot.clearControlStates() } catch {} // 寻路结束立刻松手，避免残留移动把挖掘打断
       // 关键：超时/noPath 之后 pathfinder 的执行器还会继续挖/继续装备工具，
@@ -714,9 +721,11 @@ function gotoGoal (goal, timeout = 90000) {
       done = true
       clearInterval(planTimer)
       clearTimeout(timer)
-      bot.removeListener('goal_reached', onReach)
-      bot.removeListener('path_update', onUpdate)
-      bot.removeListener('path_stop', onStop)
+      if (bot) {
+        bot.removeListener('goal_reached', onReach)
+        bot.removeListener('path_update', onUpdate)
+        bot.removeListener('path_stop', onStop)
+      }
       try { bot.clearControlStates() } catch {}
       // 寻路彻底停掉：不然 pathfinder 的执行器还在自己挖，和我们的 digBlock 抢方块
       try { bot.pathfinder.stop() } catch {}
@@ -736,7 +745,7 @@ function gotoGoal (goal, timeout = 90000) {
     // 重算看门狗：partial 路径走完（或 A* 超时后原地停住）时重新规划，
     // 等价于 Baritone 的持续重算，避免“partial path 执行完就永久静止”
     const planTimer = setInterval(() => {
-      if (done || !bot.entity) return
+      if (done || !bot || !bot.entity) return
       const feet = bot.entity.position.floored()
       let reached = false
       try { reached = goal.isEnd(feet) } catch {}
