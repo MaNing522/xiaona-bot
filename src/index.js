@@ -983,7 +983,15 @@ function expectedHistoryCount() {
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null, groupId = '' } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null, groupId = '', ownSaid = null, noteSaid = null } = {}) {
+    // AI 中途自己发出去的内容（唱歌、图片、旁白）：进 ownSaid 队列供 agent 回灌给模型，
+    // 同时交给 noteSaid 记进记忆——让它下一轮也"知道自己发过什么"。
+    const markSent = (text) => {
+        const t = String(text || '').trim();
+        if (!t) return;
+        if (Array.isArray(ownSaid)) ownSaid.push(t);
+        if (typeof noteSaid === 'function') noteSaid(t);
+    };
     // 地图（地形俯视图 / 物品栏地图）共用：发图到当前会话 → 视觉模型看一眼 → 摘要交给模型
     const emitMap = async (m, look = true) => {
         let sent = false;
@@ -991,6 +999,7 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             try {
                 await sendImage(m.path);
                 sent = true;
+                markSent('（发了一张地图图片）');
             } catch (e) {
                 logger.warn('[地图] 发送失败:', e.message);
             }
@@ -1008,7 +1017,12 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
-        notify: (text) => (notify ? notify(String(text)) : Promise.resolve()),
+        notify: (text) => {
+            const t = String(text || '').trim();
+            if (!notify || !t) return Promise.resolve();
+            markSent(t);
+            return notify(t);
+        },
         // AI 决定要识别本条消息的图
         analyzeImage: async (question) => analyzeImages(images, question),
         mcStatus: (address) => agentMcStatus(address),
@@ -1079,6 +1093,7 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
                 try {
                     await sendImage(c.path);
                     sent = true;
+                    markSent('（发了验证码地图）');
                 } catch (e) {
                     logger.warn('[MCbot] 验证码图发送失败:', e.message);
                 }
@@ -1121,6 +1136,7 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
                 .trim();
             try {
                 await sendVoice(`(唱歌)${clean}`);
+                markSent(`（用语音唱了${song ? `《${song}》` : '一段歌'}）`);
                 return `已经把${song ? `《${song}》` : '这段歌'}唱出去了，不用在最终回复里再重复歌词，简短说一句就好。`;
             } catch (e) {
                 return `唱歌失败：${e.message}。可以把歌词用文字发出来。`;
@@ -3648,6 +3664,10 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         const allowSkip = prepared.every((p) => p.allowSkip);
         // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
         let voiceSent = false;
+        // 本轮 AI 自己发出去的内容（唱歌/图片/旁白）：ownSaid 给 agent 循环回灌，
+        // saidNow 留一份写进记忆，保证它下一轮也知道自己发过什么
+        const saidNow = [];
+        const ownSaid = [];
         const result = await aiReply({
             metaLine: prepared[0].metaLine,
             memory: prepared[0].mem,
@@ -3666,6 +3686,9 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
                 images: imgs,
                 // 群公告工具要按当前群查（私聊/游戏里没有群）
                 groupId: first.event.message_type === 'group' ? String(first.event.group_id || '') : '',
+                // AI 中途自己发出去的内容：回灌给模型（ownSaid）+ 记进记忆（noteSaid）
+                ownSaid,
+                noteSaid: (t) => saidNow.push(t),
                 // 工具调用中间那句"我正在…"也是模型原话，同样过一遍清洗，别让它夹带标记/元数据
                 notify: (text) => {
                     if (signal && signal.aborted) return Promise.resolve();
@@ -3707,6 +3730,9 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
                 name: p.meta.name, qq: String(p.event.user_id), isBot: p.meta.isRobot, scene: p.memScene,
             });
         }
+
+        // AI 中途自己发出去的内容（唱歌、地图、旁白）也进记忆，否则下一轮它不知道自己发过什么
+        if (saidNow.length) recordMessage(prepared[0].memKey, 'ai', saidNow.join('\n'), { scene: prepared[0].memScene });
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
