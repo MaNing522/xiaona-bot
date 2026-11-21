@@ -687,7 +687,7 @@ function onAuthMessage (msg) {
   const low = m.toLowerCase()
 
   // 已登录（含注册后自动登录）
-  if (/successful(ly)? (login|logged in|registered)|registered successfully|you are (now|already) (logged in|authenticated)|already authenticated|already logged in|登录成功|注册成功|成功注册|认证成功/.test(low)) {
+  if (/successful(ly)? (login|logged in|registered)|registered successfully|you are (now|already) (logged in|authenticated)|already authenticated|already logged in|valid session|no need to log ?in|登录成功|注册成功|成功注册|认证成功/.test(low)) {
     authResponded = true
     authSeen = true
     captcha = { pending: false, path: null, at: 0, error: '' }
