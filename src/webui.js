@@ -828,10 +828,10 @@ ${THEME_BOOT}
 <style>
 ${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
-  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+  --line-strong:#d9d9d9;--card2:#f5f7fa;--mapbg:#fbfcfd;--mapline:#e8ecf2;color-scheme:light}
 /* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
 html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
-  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;--mapbg:#262b33;--mapline:#3f4653;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -997,10 +997,10 @@ ${THEME_BOOT}
 <style>
 ${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
-  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+  --line-strong:#d9d9d9;--card2:#f5f7fa;--mapbg:#fbfcfd;--mapline:#e8ecf2;color-scheme:light}
 /* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
 html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
-  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;--mapbg:#262b33;--mapline:#3f4653;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -1154,10 +1154,10 @@ ${THEME_BOOT}
 <style>
 ${TOUCH_CSS}
 :root{--bg:#f0f2f5;--card:#fff;--line:#e8ebf0;--txt:#1f2329;--sub:#8a919f;--accent:#1677ff;--danger:#ff4d4f;
-  --line-strong:#d9d9d9;--card2:#f5f7fa;color-scheme:light}
+  --line-strong:#d9d9d9;--card2:#f5f7fa;--mapbg:#fbfcfd;--mapline:#e8ecf2;color-scheme:light}
 /* 暗色模式：跟随主面板左下角的切换（localStorage xiaona-theme） */
 html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb;--sub:#98a0ac;
-  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;color-scheme:dark}
+  --accent:#4096ff;--danger:#ff6b6b;--line-strong:#3a404b;--card2:#23272e;--mapbg:#262b33;--mapline:#3f4653;color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -1182,7 +1182,7 @@ select{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid var(--l
 .maps .mapcard:first-child{grid-column:1/-1}
 .mapcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .maph{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.cvwrap{position:relative;background:#fafbfc;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cvwrap{position:relative;background:var(--mapbg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 canvas{display:block;width:100%;cursor:crosshair;user-select:none;-webkit-user-select:none;touch-action:none}
 canvas:active{cursor:crosshair}
 /* 全屏：只把这一张地图铺满浏览器窗口（不进系统全屏），Esc 或右上角按钮退出 */
@@ -1531,7 +1531,7 @@ function drawOne(d){
   // 网格/坐标文字/玩家名字跟随亮暗主题（canvas 不继承 CSS 颜色）
   var _cs=getComputedStyle(document.documentElement);
   function _cv(n,fb){var v=(_cs.getPropertyValue(n)||'').trim();return v||fb}
-  var C_SUB=_cv('--sub','#8a919f'),C_LINE=_cv('--line','#e8ecf2'),C_TXT=_cv('--txt','#1f2329');
+  var C_SUB=_cv('--sub','#8a919f'),C_LINE=_cv('--mapline','#e8ecf2'),C_TXT=_cv('--txt','#1f2329');
   var _dark=document.documentElement.getAttribute('data-theme')==='dark';
   var C_HALO=_dark?'rgba(20,22,25,.85)':'rgba(255,255,255,.85)';
   var list=seriesOf(d.id);
