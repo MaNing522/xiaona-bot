@@ -4421,17 +4421,72 @@ function base64ToFile(data) {
 }
 
 // ---------- WebSocket 生命周期 ----------
-function connect() {
-    const headers = WS_TOKEN ? { Authorization: `Bearer ${WS_TOKEN}` } : {};
-    ws = new WebSocket(WS_URL, { headers });
+// 重连续命：同一时刻只允许一个 socket、一个重连定时器；
+// 断线期间每分钟打一次"已断多久"，免得像"悄悄掉线 4 分钟没人知道"。
+let reconnectTimer = null;
+let heartbeatTimer = null;
+let downSince = 0;
+let lastDownLog = 0;
+let lastAliveAt = 0;
 
-    ws.on('open', () => {
+function scheduleReconnect(delay = 3000) {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+}
+
+function stopHeartbeat() {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+}
+
+// 断线看护：一直没连上就每分钟提醒一次（含已断时长），连上就停
+setInterval(() => {
+    if (!downSince) return;
+    const now = Date.now();
+    if (now - lastDownLog < 60000) return;
+    lastDownLog = now;
+    const mins = Math.floor((now - downSince) / 60000);
+    logger.warn(`[连接] 仍未连上（已断线 ${mins} 分钟），每 3 秒重试中；若日志持续是 ECONNREFUSED，说明 3001 端口没有监听（SnowLuma / QQ 挂了）`);
+}, 15000).unref();
+
+function connect() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    const headers = WS_TOKEN ? { Authorization: `Bearer ${WS_TOKEN}` } : {};
+    let sock;
+    try {
+        sock = new WebSocket(WS_URL, { headers });
+    } catch (e) {
+        logger.error('[连接] 创建 socket 失败:', e.message);
+        scheduleReconnect();
+        return;
+    }
+    ws = sock;
+
+    sock.on('open', () => {
+        downSince = 0;
+        lastDownLog = 0;
+        lastAliveAt = Date.now();
         setBotConnected(true); setBotError(''); logger.info(`[连接] 已连接 SnowLuma: ${WS_URL}`);
+        // 半开连接看护：25 秒 ping 一次，70 秒没有任何回包就主动断开重连
+        stopHeartbeat();
+        heartbeatTimer = setInterval(() => {
+            if (sock !== ws) { stopHeartbeat(); return; }
+            if (Date.now() - lastAliveAt > 70000) {
+                logger.warn('[连接] 70 秒没有收到任何数据，判定连接已死，主动重连');
+                stopHeartbeat();
+                try { sock.terminate(); } catch { /* 已断 */ }
+                return;
+            }
+            try { sock.ping(); } catch { /* 发不出去就等 close */ }
+        }, 25000);
+        heartbeatTimer.unref();
         // 刚重启过的话，回发起更新的会话说一声（稍等 OneBot 就绪）
         setTimeout(sendRestartNotice, 1500);
     });
 
-    ws.on('message', (raw) => {
+    sock.on('pong', () => { lastAliveAt = Date.now(); });
+
+    sock.on('message', (raw) => {
+        lastAliveAt = Date.now();
         let data;
         try { data = JSON.parse(raw.toString()); } catch { return; }
         if (data.echo && pending.has(data.echo)) {
@@ -4450,11 +4505,20 @@ function connect() {
         }
     });
 
-    ws.on('error', (err) => { setBotError(err.message); logger.error('[连接] 错误:', err.message); });
-    ws.on('close', () => {
+    sock.on('error', (err) => {
+        // 错误不一定跟着 close（如 DNS/握手失败），直接 terminate 保证走 close 分支去重连
+        setBotError(err.message);
+        logger.error('[连接] 错误:', err.message);
+        try { sock.terminate(); } catch { /* 已断 */ }
+    });
+
+    sock.on('close', () => {
+        if (sock !== ws) return; // 旧 socket 的 close 不影响新连接
+        stopHeartbeat();
         setBotConnected(false);
+        if (!downSince) downSince = Date.now();
         logger.info('[连接] 已断开，3秒后重连…');
-        setTimeout(connect, 3000);
+        scheduleReconnect();
     });
 }
 
