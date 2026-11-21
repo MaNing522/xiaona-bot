@@ -17,6 +17,11 @@ const WORD_FILE = path.join(ROOT, 'src', 'tencent-sensitive-words.txt');
 let cache = null;
 let lastWarn = 0;
 
+// 日常口头禅 / 游戏里常见的短缩写，不参与屏蔽：
+// “你他妈在干嘛”这种正常吐槽不该整句被打码；c / cnm / mb 等也按普通聊天放过。
+// 长词优先，所以“他妈的政府”这类更长的词条仍然会被整体命中。
+const IGNORED = new Set(['他妈', '他妈的', 'c', 'cnm', 'mb', 'tmd', 'nmd', 'nm']);
+
 /** 用一组词做最长匹配替换（纯函数，方便单测） */
 export function maskByWords(text, words, replace) {
   const src = String(text ?? '');
@@ -26,7 +31,7 @@ export function maskByWords(text, words, replace) {
   let maxLen = 0;
   for (const w of words || []) {
     const s = String(w ?? '').trim().toLowerCase();
-    if (!s) continue;
+    if (!s || IGNORED.has(s)) continue;
     // 1~3 个字母的英文 / 拼音缩写（c、cnm、mb、sb…）歧义太大，直接放行，不参与替换
     if (/^[a-z]{1,3}$/.test(s)) continue;
     if (s.length === 1) { singles.add(s); continue; } // 单字只在独立出现时匹配，避免“操作”被打码
