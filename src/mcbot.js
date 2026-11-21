@@ -192,6 +192,52 @@ export async function status() {
   }
 }
 
+/**
+ * 把 /state 里的界面信息整理成中文（聊天 / 屏幕标题 / 计分板 / Boss栏）。
+ * 纯函数，方便单测；st 缺失字段都按"没有"处理。
+ */
+export function formatHud(st) {
+  if (!st) return 'MC 客户端还没启动（先用 mcbot_join 进服）。';
+  const lines = [];
+  const t = st.title || {};
+  const tt = [
+    t.title && `主标题「${t.title}」`,
+    t.subtitle && `副标题「${t.subtitle}」`,
+    t.actionBar && `动作栏「${t.actionBar}」`,
+  ].filter(Boolean);
+  if (tt.length) lines.push('屏幕：' + tt.join(' '));
+  const sb = st.scoreboard;
+  if (sb && (sb.title || (sb.items && sb.items.length))) {
+    lines.push(`计分板「${sb.title || ''}」：`);
+    for (const it of (sb.items || [])) lines.push('  ' + it);
+  }
+  if (Array.isArray(st.bossBars) && st.bossBars.length) {
+    lines.push('Boss栏：');
+    for (const b of st.bossBars) {
+      const h = Number(b.health);
+      const p = Number.isFinite(h) ? ` ${Math.round(Math.max(0, Math.min(1, h)) * 100)}%` : '';
+      lines.push(`  ${b.title || '(无标题)'}${p}`);
+    }
+  }
+  const chat = Array.isArray(st.chat) ? st.chat.slice(-20) : [];
+  if (chat.length) {
+    lines.push('最近聊天：');
+    for (const c of chat) {
+      const time = new Date(c.at).toLocaleTimeString('zh-CN', { hour12: false });
+      lines.push(`  [${time}] ${c.text}`);
+    }
+  }
+  if (st.captcha && st.captcha.pending) lines.push('注意：服务器正在要求登录验证码（验证码地图已导出）。');
+  return lines.length ? lines.join('\n') : '没有读到聊天、标题、计分板或 Boss栏（可能都不活跃）。';
+}
+
+/** 读界面信息（给 AI 的工具用） */
+export async function hud() {
+  const st = await rawState();
+  if (!st) return 'MC 客户端还没启动（先用 mcbot_join 进服）。';
+  return formatHud(st);
+}
+
 export async function chat(text) {
   const msg = String(text || '').trim();
   if (!msg) throw new Error('要发送的内容不能为空');

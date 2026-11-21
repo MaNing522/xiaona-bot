@@ -186,6 +186,15 @@ export const AGENT_TOOLS = [
   {
     minRole: 'admin',
     function: {
+      name: 'mcbot_hud',
+      description: '读小钠 MC 客户端的界面信息：最近聊天、屏幕标题/副标题/动作栏、侧边计分板、Boss 栏。服务器提示、验证码要求、任务目标都在这里，遇到看不懂的局面先调它。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (args, ctx) => ctx.mcbotHud(),
+  },
+  {
+    minRole: 'admin',
+    function: {
       name: 'mcbot_chat',
       description: '让小钠在游戏公屏发言。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command**。',
       parameters: {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTarget, formatStatus } from '../src/mcbot.js';
+import { parseTarget, formatStatus, formatHud } from '../src/mcbot.js';
 
 describe('mcbot 进服地址解析', () => {
   it('默认端口 25565', () => {
@@ -51,5 +51,32 @@ describe('mcbot 状态文本', () => {
     expect(text).toContain('dirtx3');
     expect(text).toContain('Steve');
     expect(text).toContain('diamond_ore 2/8');
+  });
+});
+
+describe('mcbot 界面信息（HUD）', () => {
+  it('未启动时提示先进服', () => {
+    expect(formatHud(null)).toContain('mcbot_join');
+  });
+
+  it('聊天 / 标题 / 计分板 / Boss栏 都能整理出来', () => {
+    const text = formatHud({
+      title: { title: '欢迎', subtitle: '请登录', actionBar: '3秒' },
+      scoreboard: { title: '目标', items: ['钻石 3/8', '金币 120'] },
+      bossBars: [{ title: '末影龙', health: 0.5 }],
+      chat: [{ at: Date.now(), text: '请输入 /captcha 1234' }],
+      captcha: { pending: true },
+    });
+    expect(text).toContain('主标题「欢迎」');
+    expect(text).toContain('动作栏「3秒」');
+    expect(text).toContain('计分板「目标」');
+    expect(text).toContain('钻石 3/8');
+    expect(text).toContain('末影龙 50%');
+    expect(text).toContain('请输入 /captcha 1234');
+    expect(text).toContain('验证码');
+  });
+
+  it('什么都没有时给出明确说明', () => {
+    expect(formatHud({})).toContain('没有读到');
   });
 });

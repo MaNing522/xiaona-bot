@@ -75,6 +75,34 @@ let lastMapId = 0
 // 登录验证码（AuthMe map captcha）：检测到提示就自动把那张地图导出成图片，
 // 由上层（小钠）交给视觉模型读数字；读不出来再把图发到 QQ 找人看。
 let captcha = { pending: false, path: null, at: 0, error: '' }
+// 界面信息：最近聊天 / 屏幕标题 / 计分板 / Boss栏 —— 都交给上层 AI 按需取用
+// （服务器提示、验证码要求、任务目标这些东西格式五花八门，不写死解析规则）
+const chatLog = []
+let lastTitle = { title: '', subtitle: '', actionBar: '', at: 0 }
+
+/** 把聊天组件（字符串 / {text,extra} / 数组）拍平成纯文本 */
+function flattenText (v) {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map(flattenText).join('')
+  if (typeof v === 'object') {
+    let s = typeof v.text === 'string' ? v.text : ''
+    if (Array.isArray(v.extra)) s += v.extra.map(flattenText).join('')
+    if (!s && typeof v.value === 'string') s = v.value
+    if (!s && typeof v.translate === 'string') s = v.translate
+    return s
+  }
+  return String(v)
+}
+
+function pushChatLine (text) {
+  const t = flattenText(text).replace(/\s+/g, ' ').trim()
+  if (!t) return
+  const last = chatLog[chatLog.length - 1]
+  if (last && last.text === t && Date.now() - last.at < 1000) return
+  chatLog.push({ at: Date.now(), text: t })
+  if (chatLog.length > 60) chatLog.splice(0, chatLog.length - 60)
+}
 
 // 登录插件（AuthMe）状态
 const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || ''
@@ -309,11 +337,21 @@ function createBot () {
     }, 100)]
   })
 
-  // 登录插件消息（AuthMe 等）
+  // 登录插件消息（AuthMe 等）+ 界面信息收集
   bot.on('messagestr', msg => {
     if (process.env.DEBUG_MSG) log('MSG', msg)
+    pushChatLine(msg)
     onAuthMessage(msg)
     maybeCaptcha(msg, myGen)
+  })
+  // 标题 / 动作栏（计分板和 Boss 栏直接读 mineflayer 的结构）
+  client.on('packet', (data, meta) => {
+    try {
+      if (meta.name === 'set_title_text') lastTitle = { ...lastTitle, title: flattenText(data.text), at: Date.now() }
+      else if (meta.name === 'set_title_subtitle') lastTitle = { ...lastTitle, subtitle: flattenText(data.text), at: Date.now() }
+      else if (meta.name === 'set_action_bar_text') lastTitle = { ...lastTitle, actionBar: flattenText(data.text), at: Date.now() }
+      else if (meta.name === 'clear_titles') lastTitle = { title: '', subtitle: '', actionBar: '', at: Date.now() }
+    } catch {}
   })
   if (process.env.DEBUG_PACKETS) {
     client.on('packet', (data, meta) => {
@@ -3538,6 +3576,9 @@ function joinServer (address, portArg, versionArg) {
   mapDataById.clear() // 地图编号是按服务器分配的，换服必须清缓存
   lastMapPacketAt = 0
   lastMapId = 0
+  chatLog.length = 0 // 换服后旧聊天记录会误导判断
+  lastTitle = { title: '', subtitle: '', actionBar: '', at: 0 }
+  captcha = { pending: false, path: null, at: 0, error: '' }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const old = bot
   connGen++ // 旧实例的 end 回调作废，也不会触发重连
@@ -3572,11 +3613,44 @@ function leaveServer () {
 }
 
 // ---------- 本机 HTTP 控制接口（给 agent 用）----------
+/** 侧边计分板：标题 + 各行文本（mineflayer 不同版本结构略有差异，统一拍平） */
+function readScoreboard () {
+  try {
+    const sb = bot && bot.scoreboard
+    if (!sb) return null
+    const raw = sb.items || []
+    const items = (Array.isArray(raw) ? raw : Object.values(raw))
+      .map((i) => {
+        if (i == null) return ''
+        if (typeof i === 'string') return i
+        if (i.displayName != null) return flattenText(i.displayName)
+        return i.name != null ? String(i.name) : ''
+      })
+      .filter(Boolean)
+    return { title: flattenText(sb.title || sb.name || ''), items: items.slice(0, 20) }
+  } catch { return null }
+}
+
+/** Boss 栏：标题 + 进度（mineflayer 存在 bot.bossBars） */
+function readBossBars () {
+  try {
+    const list = bot && bot.bossBars
+    if (!list || !list.length) return []
+    return list.slice(0, 5).map((b) => ({
+      title: flattenText(b.title),
+      health: Number(b.health),
+      dividers: Number(b.dividers) || 20
+    }))
+  } catch { return [] }
+}
+
 function botState () {
   const connected = Boolean(bot && bot._client && bot._client.state === 'play')
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
+  // 界面信息不依赖 spawned：登录/验证码阶段的提示也在这几条通道里
+  const hud = { chat: chatLog.slice(-30), title: lastTitle, scoreboard: readScoreboard(), bossBars: readBossBars() }
   if (!bot || !bot.entity) {
-    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, captcha }
+    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, captcha, ...hud }
   }
   const p = bot.entity.position
   const players = Object.values(bot.players)
@@ -3614,6 +3688,7 @@ function botState () {
     lastError,
     map: lastMap,
     captcha,
+    ...hud,
     players,
     inventory,
     offhand,
