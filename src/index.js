@@ -947,29 +947,69 @@ async function sendCaptchaToHuman(file, why) {
     }
 }
 
+/**
+ * 让 AI 根据界面信息（聊天/标题/计分板/Boss栏 + 验证码识别结果）判断该发哪条服务器命令。
+ * 不写死 /captcha：不同服务器可能要求 /captcha 数字、/register、点对话框、输入别的指令。
+ */
+async function askCaptchaCommand(hudText, digits, err) {
+    if (!AI_ENABLED) return '';
+    try {
+        const { reply } = await runAgentReply({
+            messages: [
+                {
+                    role: 'system',
+                    content: '你正在替一个 Minecraft 客户端通过服务器登录/注册/验证码。'
+                        + '根据下面的界面信息判断下一步该发送哪一条服务器命令（例如 /captcha 1234、/register 密码 密码、/code 1234 等）。'
+                        + '只输出这一条命令（以 / 开头，不要解释、不要代码块）；实在判断不出来就只输出 NONE。',
+                },
+                {
+                    role: 'user',
+                    content: [
+                        `界面信息：\n${hudText || '（无）'}`,
+                        digits ? `验证码图片识别结果：${digits}` : '验证码图片没能识别出数字',
+                        err ? `导出验证码地图时的错误：${err}` : '',
+                    ].filter(Boolean).join('\n'),
+                },
+            ],
+            chat: (body) => chatCompletionRaw({ messages: body.messages, temperature: 0.1, maxTokens: 300, timeoutMs: 30000 }),
+            tools: [],
+            maxSteps: 1,
+        });
+        const line = String(reply || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
+        if (/^NONE/i.test(line)) return '';
+        const m = line.match(/\/[A-Za-z][^\s`]*/);
+        return m ? m[0] : '';
+    } catch (e) {
+        logger.warn('[MCbot] 验证码决策失败:', e.message);
+        return '';
+    }
+}
+
 async function resolveCaptcha(c) {
     const file = c && c.path;
-    logger.info('[MCbot] 服务器要求登录验证码，开始识别…');
-    let code = '';
+    logger.info('[MCbot] 服务器要求登录验证码，读取界面信息并决定怎么提交…');
+    let digits = '';
     if (file) {
-        const seen = await describeGeneratedImage(file, '这是 Minecraft 登录插件 AuthMe 的验证码地图，请读出图中验证码的数字（通常 4~6 位），只输出数字，不要解释。');
-        code = (String(seen).match(/\d{3,8}/) || [])[0] || '';
+        const seen = await describeGeneratedImage(file, '这是 Minecraft 登录插件的验证码地图，请读出图中验证码的数字（通常 4~6 位），只输出数字，不要解释。');
+        digits = (String(seen).match(/\d{3,8}/) || [])[0] || '';
     }
-    if (code) {
+    const hudText = await mcBot.hud().catch(() => '');
+    const cmd = await askCaptchaCommand(hudText, digits, c && c.error);
+    if (cmd) {
         try {
-            await mcBot.command(`captcha ${code}`);
-            logger.info(`[MCbot] 已自动提交验证码：${code}`);
+            await mcBot.command(cmd.replace(/^\//, ''));
+            logger.info(`[MCbot] 已按 AI 判断提交：${cmd}`);
             await new Promise((r) => setTimeout(r, 2500));
             const st = await mcBot.rawState().catch(() => null);
             if (st && st.captcha && st.captcha.pending) {
-                await sendCaptchaToHuman(file, `自动识别成 ${code}，但服务器没放行`);
+                await sendCaptchaToHuman(file, `按识别结果发了 ${cmd}，但服务器没放行`);
             }
             return;
         } catch (e) {
-            logger.warn('[MCbot] 提交验证码失败:', e.message);
+            logger.warn('[MCbot] 提交验证码命令失败:', e.message);
         }
     }
-    await sendCaptchaToHuman(file, code ? '自动提交失败' : '自动识别失败');
+    await sendCaptchaToHuman(file, cmd ? `执行 ${cmd} 失败` : '没能判断该发什么命令');
 }
 
 async function watchCaptchaOnce() {
@@ -1081,6 +1121,8 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             }
             return emitMap({ path: c.path, at: c.at, summary: '这是服务器登录验证码地图。' }, look);
         },
+        // 界面信息：最近聊天 / 屏幕标题 / 计分板 / Boss栏
+        mcbotHud: () => mcBot.hud(),
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {
             const res = await fetchAndApplyUpdate();
