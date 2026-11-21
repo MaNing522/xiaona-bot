@@ -105,13 +105,13 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_join',
-      description: '让小钠用自己的 MC 客户端（离线登录，名字固定 xiaona）进入一个服务器看看。进去后可以聊天、看背包、走动、挖/放方块、用物品。地址只填域名/IP（可带 :端口），不要带 http://。',
+      description: '让小钠用自带的 MC 客户端（离线登录，默认名 xiaona，Baritone 式寻路/挖矿/飞行）进入一个服务器。地址只填域名/IP（可带 :端口），不要带 http://。进去后可用 mcbot_status 看状态、mcbot_cmd 下任务指令。',
       parameters: {
         type: 'object',
         properties: {
           address: { type: 'string', description: '服务器地址，如 play.example.com 或 1.2.3.4:25565' },
           port: { type: 'number', description: '端口，默认 25565；地址里已带端口时可不填' },
-          version: { type: 'string', description: '可选，如 1.21.11；不填则按服务器自动识别' },
+          version: { type: 'string', description: '可选，如 1.21.11；不填用客户端默认版本' },
         },
         required: ['address'],
       },
@@ -126,7 +126,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_leave',
-      description: '让小钠退出当前进入的 MC 服务器。',
+      description: '让小钠退出当前进入的 MC 服务器（同时停掉正在执行的任务）。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (args, ctx) => ctx.mcbot.leave(),
@@ -135,7 +135,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_status',
-      description: '查看小钠的 MC 客户端状态：是否在线、服务器、坐标、维度、血量、饥饿、手持物品、在线玩家列表。进服后先看这个。',
+      description: '查看小钠 MC 客户端的状态：服务器、是否已进服、坐标、血量、饥饿、背包、附近玩家、当前任务进度。进服后先看这个。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (args, ctx) => ctx.mcbot.status(),
@@ -144,10 +144,11 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_chat',
-      description: '让小钠在游戏里发言（不需要转向）。text 留空时返回最近 20 条聊天记录，用来看看大家在聊什么。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command，不要用这个**。',
+      description: '让小钠在游戏公屏发言。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command**。',
       parameters: {
         type: 'object',
-        properties: { text: { type: 'string', description: '要说的话（最多 200 字）；留空=只看最近聊天' } },
+        properties: { text: { type: 'string', description: '要说的话（最多 200 字）' } },
+        required: ['text'],
       },
     },
     run: async (args, ctx) => ctx.mcbot.chat(String(args.text || '').trim()),
@@ -156,10 +157,10 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_command',
-      description: '以小钠的 MC 客户端发送一条服务器命令（不用写 / 也行，会自动补）。适合 /login、/reg、/spawn、/home 等服务器指令。',
+      description: '以小钠的 MC 客户端执行一条服务器命令（不用写 / 也行，会自动补）。适合 /login、/reg、/spawn、/home 等服务器指令。',
       parameters: {
         type: 'object',
-        properties: { command: { type: 'string', description: '命令内容，如 /login xn123456 或 spawn' } },
+        properties: { command: { type: 'string', description: '命令内容，如 /login 密码 或 spawn' } },
         required: ['command'],
       },
     },
@@ -168,20 +169,26 @@ export const AGENT_TOOLS = [
   {
     minRole: 'admin',
     function: {
-      name: 'mcbot_login',
-      description: '小钠的辅助登录（登录插件用，固定口令 xn123456）：mode=auto 先 /login，服务器提示未注册就自动 /reg；也可指定 login/register。平时进服会自动尝试，这个工具用于手动补一次。',
+      name: 'mcbot_cmd',
+      description: [
+        '给小钠的 MC 客户端下任务指令（进服后使用），原样转给游戏客户端。常用：',
+        'goto x y z（寻路过去）、fly x y z（鞘翅飞过去）、collect <方块> [数量]（扫描并挖矿，如 collect diamond_ore 8）、',
+        'develop（自动发育：木头→石镐→铁镐→钻石套）、pvp [玩家]（打最近的/指定玩家）、mace [玩家]（重锤跳劈）、',
+        'follow [玩家]（跟随）、stop（停）、xray 开/关/auto（反矿透策略）、toss [n]（丢垃圾）。',
+      ].join(''),
       parameters: {
         type: 'object',
-        properties: { mode: { type: 'string', description: 'auto（默认）/ login / register' } },
+        properties: { command: { type: 'string', description: '任务指令，如 goto 100 64 100' } },
+        required: ['command'],
       },
     },
-    run: async (args, ctx) => ctx.mcbot.login(String(args.mode || 'auto').trim()),
+    run: async (args, ctx) => ctx.mcbot.run(String(args.command || '').trim()),
   },
   {
     minRole: 'admin',
     function: {
       name: 'mcbot_players',
-      description: '查看小钠客户端渲染范围内（默认 64 格，最多 256 格）能看到哪些玩家：名字、坐标、距离、血量（客户端实体数据里有才给）、手持物品。纯客户端获取，不需要服务器插件。',
+      description: '查看小钠客户端渲染范围内（默认 64 格，最多 256 格）能看到哪些玩家及距离。',
       parameters: {
         type: 'object',
         properties: { radius: { type: 'number', description: '观察半径（格），默认 64' } },
@@ -193,91 +200,10 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_inventory',
-      description: '查看小钠 MC 客户端背包里的物品和手持物品。',
+      description: '查看小钠 MC 客户端背包里的物品和数量。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (args, ctx) => ctx.mcbot.inventory(),
-  },
-  {
-    minRole: 'admin',
-    function: {
-      name: 'mcbot_move',
-      description: '让小钠朝某个方向走一小段。会自动先转向移动方向再前进。direction 支持 forward/back/left/right（相对当前朝向）或 north/south/east/west（绝对方位）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          direction: { type: 'string', description: 'forward/back/left/right/north/south/east/west，默认 forward' },
-          seconds: { type: 'number', description: '走多久（0.2~10 秒），默认 1' },
-        },
-      },
-    },
-    run: async (args, ctx) => ctx.mcbot.move(String(args.direction || 'forward'), Number(args.seconds) || 1),
-  },
-  {
-    minRole: 'admin',
-    function: {
-      name: 'mcbot_walk_to',
-      description: '让小钠走到指定坐标（自动寻路，出发前先朝目标看；不会为了抄近路挖方块）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          x: { type: 'number', description: '目标 X' },
-          y: { type: 'number', description: '目标 Y' },
-          z: { type: 'number', description: '目标 Z' },
-        },
-        required: ['x', 'y', 'z'],
-      },
-    },
-    run: async (args, ctx) => ctx.mcbot.walkTo(Number(args.x), Number(args.y), Number(args.z)),
-  },
-  {
-    minRole: 'admin',
-    function: {
-      name: 'mcbot_break',
-      description: '让小钠挖掉指定坐标的方块（自动先看向方块中心；距离超过 5 格会报错，先走过去）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          x: { type: 'number', description: '方块 X' },
-          y: { type: 'number', description: '方块 Y' },
-          z: { type: 'number', description: '方块 Z' },
-        },
-        required: ['x', 'y', 'z'],
-      },
-    },
-    run: async (args, ctx) => ctx.mcbot.breakBlock(Number(args.x), Number(args.y), Number(args.z)),
-  },
-  {
-    minRole: 'admin',
-    function: {
-      name: 'mcbot_place',
-      description: '让小钠在指定坐标放一个方块（自动先转向参照方块朝向目标的那一面；目标位置必须是空的）。item 不填就从背包里自动挑一个方块。',
-      parameters: {
-        type: 'object',
-        properties: {
-          x: { type: 'number', description: '要放置的位置 X' },
-          y: { type: 'number', description: '要放置的位置 Y' },
-          z: { type: 'number', description: '要放置的位置 Z' },
-          item: { type: 'string', description: '可选方块名，如 dirt / oak_planks / stone' },
-        },
-        required: ['x', 'y', 'z'],
-      },
-    },
-    run: async (args, ctx) => ctx.mcbot.placeBlock(
-      Number(args.x), Number(args.y), Number(args.z), String(args.item || '').trim(),
-    ),
-  },
-  {
-    minRole: 'admin',
-    function: {
-      name: 'mcbot_use',
-      description: '让小钠使用手持物品（吃东西、拉弓、右键等，不需要转向）。item 不填就用手上现有的；填了会先从背包装备。',
-      parameters: {
-        type: 'object',
-        properties: { item: { type: 'string', description: '可选物品名，如 bread / bow' } },
-      },
-    },
-    run: async (args, ctx) => ctx.mcbot.useItem(String(args.item || '').trim()),
   },
   {
     minRole: 'admin',
