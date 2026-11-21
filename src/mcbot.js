@@ -208,6 +208,35 @@ export async function command(command) {
 }
 
 /**
+ * 原始 /state（内部逻辑用：验证码看护等）。客户端没起来/读不到返回 null。
+ */
+export async function rawState() {
+  if (!(await alive())) return null;
+  return http('/state', { timeout: 2500 }).catch(() => null);
+}
+
+/**
+ * 导出登录验证码地图（AuthMe map captcha）。
+ * headless 会把它拿在手上等服务器下发数据，然后渲染成 PNG。
+ * @returns {Promise<{path:string, at:number, pending:boolean}>}
+ */
+export async function captcha() {
+  await requireOnline();
+  const before = ((await http('/state', { timeout: 3000 })) || {}).captcha || {};
+  const beforeAt = Number(before.at) || 0;
+  const r = await http('/cmd', { method: 'POST', body: { cmd: 'captcha' }, timeout: 40000 });
+  if (r && r.ok === false) throw new Error(r.error || '导出验证码地图失败');
+  const t0 = Date.now();
+  while (Date.now() - t0 < 45000) {
+    const st = await http('/state', { timeout: 3000 }).catch(() => null);
+    const c = st && st.captcha;
+    if (c && c.pending && c.path && (Number(c.at) || 0) > beforeAt) return c;
+    await new Promise((res) => setTimeout(res, 600));
+  }
+  throw new Error('导出验证码地图超时（45 秒）');
+}
+
+/**
  * 把物品栏里的地图物品（filled_map）导出成 PNG。
  * headless 会把它拿在手上等服务器下发数据（最多 3 秒），再渲染；同样按 /state 轮询。
  * @returns {Promise<{path:string, summary:string}>}

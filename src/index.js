@@ -882,7 +882,7 @@ async function analyzeImages(segs, question) {
  * 让视觉模型看一眼本地生成的图片（目前是 MC 地图），返回简短描述。
  * 视觉关闭 / 读取失败 / 接口报错都返回空串，调用方按"没看到"处理即可。
  */
-async function describeGeneratedImage(file) {
+async function describeGeneratedImage(file, question) {
     if (!file) return '';
     const v = visionSettings();
     if (v.provider === 'off') return '';
@@ -903,11 +903,11 @@ async function describeGeneratedImage(file) {
     try {
         const { reply } = await runAgentReply({
             messages: [
-                { role: 'system', content: MAP_VISION_PROMPT },
+                { role: 'system', content: question ? '你是一个看图助手，只按要求回答，不要寒暄。' : MAP_VISION_PROMPT },
                 {
                     role: 'user',
                     content: [
-                        { type: 'text', text: '描述这张 Minecraft 俯视地图上的地形。' },
+                        { type: 'text', text: question || '描述这张 Minecraft 俯视地图上的地形。' },
                         { type: 'image_url', image_url: { url } },
                     ],
                 },
@@ -921,6 +921,65 @@ async function describeGeneratedImage(file) {
         logger.warn('[地图] 视觉描述失败:', e.message);
         return '';
     }
+}
+
+// ---------- MC 登录验证码（AuthMe 地图验证码） ----------
+// headless 检测到验证码提示会自动导出那张地图；这里读数字、自动 /captcha，
+// 读不出来或提交后仍卡着，就把图发到桥接群找人看一眼。
+let captchaDoneKey = '';
+
+async function sendCaptchaToHuman(file, why) {
+    const gid = Number(MC_BRIDGE_GROUP || 0);
+    if (!gid) {
+        logger.warn(`[MCbot] ${why}（没配 MC_BRIDGE_GROUP，图发不出去）`);
+        return;
+    }
+    const text = `[MC] 小钠卡在登录验证码：${why}。${file ? '图已发，帮它看一眼数字（或直接替它发 /captcha 数字）。' : '没能导出验证码地图。'}`;
+    try {
+        const message = [];
+        if (file) {
+            message.push({ type: 'image', data: { file: 'base64://' + fs.readFileSync(file).toString('base64') } });
+        }
+        message.push({ type: 'text', data: { text } });
+        await callApi('send_group_msg', { group_id: gid, message });
+    } catch (e) {
+        logger.warn('[MCbot] 验证码图发送失败:', e.message);
+    }
+}
+
+async function resolveCaptcha(c) {
+    const file = c && c.path;
+    logger.info('[MCbot] 服务器要求登录验证码，开始识别…');
+    let code = '';
+    if (file) {
+        const seen = await describeGeneratedImage(file, '这是 Minecraft 登录插件 AuthMe 的验证码地图，请读出图中验证码的数字（通常 4~6 位），只输出数字，不要解释。');
+        code = (String(seen).match(/\d{3,8}/) || [])[0] || '';
+    }
+    if (code) {
+        try {
+            await mcBot.command(`captcha ${code}`);
+            logger.info(`[MCbot] 已自动提交验证码：${code}`);
+            await new Promise((r) => setTimeout(r, 2500));
+            const st = await mcBot.rawState().catch(() => null);
+            if (st && st.captcha && st.captcha.pending) {
+                await sendCaptchaToHuman(file, `自动识别成 ${code}，但服务器没放行`);
+            }
+            return;
+        } catch (e) {
+            logger.warn('[MCbot] 提交验证码失败:', e.message);
+        }
+    }
+    await sendCaptchaToHuman(file, code ? '自动提交失败' : '自动识别失败');
+}
+
+async function watchCaptchaOnce() {
+    const st = await mcBot.rawState().catch(() => null);
+    const c = st && st.captcha;
+    if (!st || !st.spawned || !c || !c.pending) return;
+    const key = `${c.path || ''}:${c.at || 0}`;
+    if (key === captchaDoneKey) return;
+    captchaDoneKey = key;
+    await resolveCaptcha(c);
 }
 
 /**
@@ -1011,6 +1070,16 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
                 return `地图导出失败：${e.message}`;
             }
             return emitMap(m, look);
+        },
+        // 登录验证码地图（AuthMe）：导出 → 发到当前会话 → 视觉识别数字
+        mcbotCaptcha: async (look = true) => {
+            let c;
+            try {
+                c = await mcBot.captcha();
+            } catch (e) {
+                return `验证码地图导出失败：${e.message}`;
+            }
+            return emitMap({ path: c.path, at: c.at, summary: '这是服务器登录验证码地图。' }, look);
         },
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {
@@ -4440,6 +4509,10 @@ if (WEBUI_ENABLED) {
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
 // 连不连、连哪由 config.json 的 bridge.mode 决定（env默认/off/loopback/lan/public），缺配置自动停用
 startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, getBlacklistedIds: getBlacklistedGameIds, runGameCommand });
+
+// MC 登录验证码看护：headless 检测到验证码提示会自动导出那张地图，
+// 这里定期看一眼，读数字 → 自动 /captcha → 不行就把图发到桥接群求助
+setInterval(() => { watchCaptchaOnce().catch(() => {}); }, 4000).unref();
 
 // 闲时维护：语音缓存清理 + 记忆过期清理。避开工作日高峰（9-12 / 14-18），
 // 高峰期自动推迟到闲时再跑，不跟实时对话抢资源。
