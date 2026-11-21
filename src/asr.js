@@ -240,14 +240,65 @@ function warnThrottled(msg) {
 }
 
 /** 读音频：目标格式吃不下就先转码成 wav，转不动退回原格式 */
+const rawAudioCache = new WeakMap();   // data → Promise<{buf,ext}|null>：同一段语音不重复下载
+const wavAudioCache = new WeakMap();   // data → Promise<{buf,ext}|null>：不重复转码
 async function loadAudio(data, wanted) {
     const ext = extOf(data);
-    let audio = null;
-    if (!wanted.has(ext)) audio = await convertToWav(data);
-    if (!audio) audio = await resolveAudio(data);
-    if (!audio || !audio.buf.length) return null;
-    return { buf: audio.buf, ext: audio.ext || ext || 'wav' };
+    if (!wanted.has(ext)) {
+        if (!wavAudioCache.has(data)) wavAudioCache.set(data, convertToWav(data));
+        const audio = await wavAudioCache.get(data);
+        if (audio && audio.buf.length) return { buf: audio.buf, ext: 'wav' };
+    }
+    if (!rawAudioCache.has(data)) rawAudioCache.set(data, resolveAudio(data));
+    const raw = await rawAudioCache.get(data);
+    if (!raw || !raw.buf.length) return null;
+    return { buf: raw.buf, ext: raw.ext || ext || 'wav' };
 }
+
+/**
+ * 从 wav 字节头算时长（秒）；不是 wav 或头不完整返回 null。
+ * 只解析 RIFF 的 fmt / data 两个块，足够算时长。
+ */
+export function wavDurationSec(buf) {
+    if (!buf || buf.length < 44) return null;
+    if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return null;
+    let pos = 12;
+    let byteRate = 0;
+    let dataLen = 0;
+    while (pos + 8 <= buf.length) {
+        const id = buf.toString('ascii', pos, pos + 4);
+        const size = buf.readUInt32LE(pos + 4);
+        if (id === 'fmt ' && size >= 16) byteRate = buf.readUInt32LE(pos + 16);
+        else if (id === 'data') {
+            dataLen = Math.min(size, buf.length - pos - 8);
+            break;
+        }
+        pos += 8 + size + (size % 2);
+    }
+    if (!byteRate || !dataLen) return null;
+    return dataLen / byteRate;
+}
+
+/**
+ * 一段语音的时长（秒）：优先 record 段自带的 duration，否则拿 wav 头算；
+ * 格式不是 wav 会先转码一次（和识别共用缓存）。算不出来返回 null。
+ */
+export function voiceDuration(data) {
+    if (!data || typeof data !== 'object') return Promise.resolve(null);
+    const d = Number(data.duration);
+    if (Number.isFinite(d) && d > 0) return Promise.resolve(d);
+    if (!durationCache.has(data)) {
+        durationCache.set(data, (async () => {
+            const audio = await loadAudio(data, new Set(['wav']));
+            if (!audio || audio.ext !== 'wav') return null;
+            return wavDurationSec(audio.buf);
+        })());
+    }
+    return durationCache.get(data);
+}
+
+/** 同一条 record 段的时长缓存（与转写缓存一样随段对象回收） */
+const durationCache = new WeakMap();
 
 /** 小米 MiMo ASR：成功返回文字，没 Key / 失败 / 空结果返回 null（调用方降级本地） */
 async function transcribeMimo(audio) {

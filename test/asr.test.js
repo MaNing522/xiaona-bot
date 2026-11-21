@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseFixList, fixText, transcribe } from '../src/asr.js';
+import { parseFixList, fixText, transcribe, wavDurationSec } from '../src/asr.js';
 import { config } from '../src/config.js';
 
 describe('parseFixList', () => {
@@ -147,5 +147,37 @@ describe('transcribe（上传给 FunASR 的请求）', () => {
     expect(t).toBe('小钠在吗');
     expect(calls.length).toBe(2);
     expect(calls[1]).toContain('127.0.0.1:8899');
+  });
+});
+
+/** 造一个只有头和 payload 的假 wav：16kHz / 单声道 / 16bit，byteRate = 32000 */
+function fakeWav(seconds) {
+  const dataLen = Math.round(32000 * seconds);
+  const buf = Buffer.alloc(44 + dataLen);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + dataLen, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(16000, 24);
+  buf.writeUInt32LE(32000, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(dataLen, 40);
+  return buf;
+}
+
+describe('wavDurationSec', () => {
+  it('按 wav 头算出时长', () => {
+    expect(wavDurationSec(fakeWav(12))).toBeCloseTo(12, 3);
+    expect(wavDurationSec(fakeWav(45))).toBeCloseTo(45, 3);
+  });
+
+  it('不是 wav 返回 null', () => {
+    expect(wavDurationSec(Buffer.from('not a wav file at all, just text'))).toBeNull();
+    expect(wavDurationSec(null)).toBeNull();
   });
 });
