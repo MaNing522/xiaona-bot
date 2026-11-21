@@ -4,7 +4,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const baritone = require('./baritone')
-const { renderMap } = require('./mapRender')
+const { renderMap, renderItemMap } = require('./mapRender')
 const { Vec3 } = require('vec3')
 const http = require('http')
 const fs = require('fs')
@@ -68,6 +68,10 @@ let patrolTimer = null
 let lastHealth = 20
 // 最近一次生成的地图（控制口 /state 会带出去，供小钠读路径/摘要）
 let lastMap = null
+// 服务端下发的地图物品数据：地图编号 → { scale, pixels(128×128 颜色 id), hasData }
+const mapDataById = new Map()
+let lastMapPacketAt = 0
+let lastMapId = 0
 
 // 登录插件（AuthMe）状态
 const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || ''
@@ -382,6 +386,36 @@ function createBot () {
     if (!bot || !bot.entity) return
     const p = bot.entity
     if (!p) return
+  })
+  // 服务端下发的地图物品数据：按地图编号累积成 128×128 的颜色表（0 = 未探索）
+  bot._client.on('map', (p) => {
+    if (!p || typeof p.itemDamage !== 'number' || p.itemDamage < 0) return
+    const cur = mapDataById.get(p.itemDamage) || {
+      id: p.itemDamage,
+      scale: 0,
+      pixels: new Uint8Array(128 * 128),
+      hasData: false,
+      at: 0,
+    }
+    cur.scale = Number(p.scale) || 0
+    if (p.columns && p.rows && p.data) {
+      const ox = Number(p.x) || 0
+      const oy = Number(p.y) || 0
+      for (let rz = 0; rz < p.rows; rz++) {
+        for (let rx = 0; rx < p.columns; rx++) {
+          const x = ox + rx
+          const y = oy + rz
+          if (x < 0 || x > 127 || y < 0 || y > 127) continue
+          const v = p.data[rz * p.columns + rx]
+          cur.pixels[y * 128 + x] = (Number(v) || 0) & 0xff
+        }
+      }
+      cur.hasData = true
+    }
+    cur.at = Date.now()
+    mapDataById.set(p.itemDamage, cur)
+    lastMapPacketAt = cur.at
+    lastMapId = p.itemDamage
   })
 }
 
@@ -3112,6 +3146,7 @@ const CMD_ALIASES = {
   简报: 'quiet', 少说: 'quiet',
   矿透: 'xray', 透视: 'xray',
   地图: 'map', map: 'map',
+  地图物品: 'mapitem', 手上地图: 'mapitem',
   丢垃圾: 'toss', 清理: 'toss', 扔垃圾: 'toss',
   状态: 'status', 汇报: 'status',
   帮助: 'help', 帮: 'help', 指令: 'help', help: 'help'
@@ -3132,7 +3167,7 @@ async function dispatchCommand (username, raw) {
     switch (cmd) {
       case 'help':
         reply('进/出服：！进服 <host> [port] [version] ！退服')
-        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径]')
+        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径] ！地图物品')
         reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
         break
       case 'join': {
@@ -3151,6 +3186,31 @@ async function dispatchCommand (username, raw) {
         lastMap = { path: out.file, at: out.at, radius: out.radius, center: out.center, dim: out.dim, summary: out.summary }
         log(`map: ${out.file}（半径 ${out.radius} 格）`)
         reply(`地图已保存（半径 ${out.radius} 格）`)
+        break
+      }
+      case 'mapitem': {
+        // 把物品栏里的地图物品（filled_map）导出成 PNG：先拿在手上让服务端下发数据
+        if (!bot || !bot.entity) throw new Error('不在服务器里')
+        const maps = bot.inventory.items().filter((i) => i.name === 'filled_map' || i.name === 'map')
+        if (!maps.length) throw new Error('物品栏里没有地图')
+        const want = Number(args[0]) || 0
+        const prev = bot.heldItem
+        const before = lastMapPacketAt
+        try { await bot.equip(maps[0], 'hand') } catch {}
+        const t0 = Date.now()
+        while (Date.now() - t0 < 3000 && lastMapPacketAt <= before) {
+          await new Promise((r) => setTimeout(r, 150))
+        }
+        if (prev) { try { await bot.equip(prev, 'hand') } catch {} }
+        const id = want && mapDataById.has(want) ? want : lastMapId
+        const data = id ? mapDataById.get(id) : null
+        if (!data || !data.hasData) {
+          throw new Error('服务器还没下发这张地图的数据（这张图可能还没探索过）')
+        }
+        const out = renderItemMap(data)
+        lastMap = { path: out.file, at: out.at, radius: 0, center: null, dim: '地图物品', summary: out.summary }
+        log(`mapitem: ${out.file}（#${out.id}）`)
+        reply(`地图 #${out.id} 已保存`)
         break
       }
       case 'srvcmd': {
@@ -3419,6 +3479,9 @@ function joinServer (address, portArg, versionArg) {
   authSeen = false
   regTries = 0
   lastMap = null // 换服后旧地图作废，避免拿到上一个服的位置
+  mapDataById.clear() // 地图编号是按服务器分配的，换服必须清缓存
+  lastMapPacketAt = 0
+  lastMapId = 0
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const old = bot
   connGen++ // 旧实例的 end 回调作废，也不会触发重连

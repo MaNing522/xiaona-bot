@@ -158,6 +158,20 @@ export const AGENT_TOOLS = [
   {
     minRole: 'admin',
     function: {
+      name: 'mcbot_mapitem',
+      description: '把小钠物品栏里的地图物品（filled_map）导出成图片并发到当前 QQ 会话，同时给你地图摘要和画面描述。要求小钠身上有地图、且这张图已经探索过。',
+      parameters: {
+        type: 'object',
+        properties: {
+          look: { type: 'boolean', description: '是否让视觉模型描述画面，默认 true' },
+        },
+      },
+    },
+    run: async (args, ctx) => ctx.mcbotMapItem(args.look !== false),
+  },
+  {
+    minRole: 'admin',
+    function: {
       name: 'mcbot_chat',
       description: '让小钠在游戏公屏发言。**要执行服务器命令（/login、/spawn 等）请用 mcbot_command**。',
       parameters: {
