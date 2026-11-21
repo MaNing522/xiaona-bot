@@ -1510,7 +1510,8 @@ function canBindHere(event) {
 
 // ---------- 主人指令：从 GitHub 拉更新（直连 + 多镜像兜底） ----------
 const GIT_TIMEOUT = 30000;
-const GIT_FETCH_TIMEOUT = 20000;
+const GIT_FETCH_TIMEOUT = 15000;   // 真正 fetch 的超时（以前 20 秒 × 9 个源 × 2 次 = 最坏 6 分钟）
+const GIT_PROBE_TIMEOUT = 8000;    // ls-remote 探活：只读、不写 FETCH_HEAD，可以并发
 
 /** 跑一条 git 命令（失败不抛异常，返回 { ok, out, err }） */
 function runGit(args, timeout = GIT_TIMEOUT) {
@@ -1626,21 +1627,76 @@ function restartAfterUpdateIfNeeded() {
     else logger.info('[更新] 非 PM2 环境，需手动重启生效');
 }
 
-/** 依次试直连和镜像，把远端 main 取到 FETCH_HEAD（不改工作区、不合并）
- *  网络经常抖：每个源试两次，都失败才轮到下一个源。 */
-async function fetchLatest() {
-    const errors = [];
-    for (const src of updateSources()) {
-        for (let attempt = 1; attempt <= 2; attempt++) {
-            const res = await runGit(['fetch', '--no-tags', src.url, 'main'], GIT_FETCH_TIMEOUT);
-            if (res.ok) return { ok: true, used: src.name };
-            const line = (res.err || res.out || '').split('\n').filter(Boolean).pop() || '未知错误';
-            errors.push(`${src.name}：${line.slice(0, 120)}`);
-            if (attempt === 1) await new Promise((r) => setTimeout(r, 1200));
-            else logger.info(`[更新] 源「${src.name}」两次都失败：${line.slice(0, 160)}`);
-        }
+/** 上一次成功的更新源名（存 data/update-source.json），下次优先用它，不用再从头试 */
+const UPDATE_SOURCE_FILE = path.join(SAVE_DIR, 'update-source.json');
+let lastGoodSource = '';
+let lastGoodSourceLoaded = false;
+
+function rememberGoodSource(name) {
+    lastGoodSourceLoaded = true;
+    if (!name || name === lastGoodSource) return;
+    lastGoodSource = name;
+    try { writeJsonAtomic(UPDATE_SOURCE_FILE, { name, at: Date.now() }); } catch { /* 写不进去不影响更新 */ }
+}
+
+function goodSource() {
+    if (!lastGoodSourceLoaded) {
+        lastGoodSourceLoaded = true;
+        const j = readJsonSafe(UPDATE_SOURCE_FILE, null, 'update-source.json');
+        lastGoodSource = (j && String(j.name || '')) || '';
     }
-    return { ok: false, err: errors.slice(-4).join('\n') };
+    return lastGoodSource;
+}
+
+/** ls-remote 探活：只读、不写 FETCH_HEAD，多个源可以同时跑 */
+function probeSource(url) {
+    return new Promise((resolve) => {
+        execFile('git', ['ls-remote', '--heads', url, 'main'],
+            { cwd: ROOT, timeout: GIT_PROBE_TIMEOUT, maxBuffer: 1024 * 1024 },
+            (err, stdout) => resolve(!err && /\bmain\b/.test(String(stdout || ''))));
+    });
+}
+
+/** 依次试直连和镜像，把远端 main 取到 FETCH_HEAD（不改工作区、不合并）
+ *  顺序：上次成功的源 → 其余源并发探活 → 只对可达的源真正 fetch。
+ *  以前是"每个源死等 20 秒、还试两次"，国内直连和几个镜像全超时就会拖到几分钟。 */
+async function fetchLatest() {
+    const srcs = updateSources();
+    const errors = [];
+    const tryFetch = async (src) => {
+        const res = await runGit(['fetch', '--no-tags', src.url, 'main'], GIT_FETCH_TIMEOUT);
+        if (res.ok) { rememberGoodSource(src.name); return { ok: true, used: src.name }; }
+        const line = (res.err || res.out || '').split('\n').filter(Boolean).pop() || '未知错误';
+        errors.push(`${src.name}：${line.slice(0, 120)}`);
+        return null;
+    };
+
+    // 1) 上次成功的源：直接用，命中就是秒级
+    const known = srcs.find((s) => s.name === goodSource());
+    if (known) {
+        const hit = await tryFetch(known);
+        if (hit) return hit;
+    }
+
+    // 2) 其余源并发探活，先回来且可达的优先试
+    const rest = srcs.filter((s) => s !== known);
+    const reachable = [];
+    await new Promise((resolve) => {
+        let pending = rest.length;
+        if (!pending) return resolve();
+        for (const s of rest) {
+            probeSource(s.url)
+                .then((ok) => { if (ok) reachable.push(s); })
+                .finally(() => { if (--pending === 0) resolve(); });
+        }
+    });
+
+    // 3) 对可达源逐个 fetch（只有一个能成功就够了）
+    for (const src of reachable) {
+        const hit = await tryFetch(src);
+        if (hit) return hit;
+    }
+    return { ok: false, err: errors.slice(-4).join('\n') || '所有更新源都不可达（连 ls-remote 都连不上）' };
 }
 
 /** agent 工具：只看有没有更新、更新了什么（fetch 后对比 FETCH_HEAD，不动代码、不重启） */
