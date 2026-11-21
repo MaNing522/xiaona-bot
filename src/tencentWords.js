@@ -27,6 +27,8 @@ export function maskByWords(text, words, replace) {
   for (const w of words || []) {
     const s = String(w ?? '').trim().toLowerCase();
     if (!s) continue;
+    // 1~3 个字母的英文 / 拼音缩写（c、cnm、mb、sb…）歧义太大，直接放行，不参与替换
+    if (/^[a-z]{1,3}$/.test(s)) continue;
     if (s.length === 1) { singles.add(s); continue; } // 单字只在独立出现时匹配，避免“操作”被打码
     if (!set.has(s)) {
       set.add(s);
