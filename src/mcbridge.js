@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { logger } from './logger.js';
 import { config } from './config.js';
+import { maskForwardText } from './tencentWords.js';
 
 // 配置在 startMcBridge() 时从 process.env + config.json 读取。
 // 不能写在模块顶层：ESM 的 import 会先于 index.js 里的 dotenv.config() 执行，那时 env 还是空的。
@@ -850,8 +851,10 @@ async function toBridgeGroupImage(src) {
 
 async function toBridgeGroup(text) {
     if (!cfg.mcToQq || !cfg.groupId) return;
+    // 游戏 → QQ 也要过滤：玩家在游戏里说的话、名字一样会带脏话，别只过滤 QQ → 游戏那一边
+    const safe = maskForwardText(String(text ?? ''), (config() || {}).filter);
     try {
-        await deps.callApi('send_group_msg', { group_id: cfg.groupId, message: [deps.segText(text)] });
+        await deps.callApi('send_group_msg', { group_id: cfg.groupId, message: [deps.segText(safe)] });
     } catch (e) {
         logger.error('[MC桥] 发送到桥接群失败:', e.message);
     }
