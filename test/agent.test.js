@@ -85,6 +85,28 @@ describe('runAgentLoop（工具调用循环）', () => {
     expect(calls[0].content).toBe('结果(武汉天气)');
   });
 
+  it('工具中途 AI 自己发出去的话会回灌成 assistant 消息（知道自己发过什么）', async () => {
+    const said = [];
+    let call = 0;
+    const seen = [];
+    const chat = async ({ messages }) => {
+      call += 1;
+      if (call === 1) {
+        return { content: '', tool_calls: [{ id: 's', type: 'function', function: { name: 'sing', arguments: '{"lyrics":"啦啦啦"}' } }] };
+      }
+      seen.push(...messages.filter((m) => m.role === 'assistant' && m.content).map((m) => m.content));
+      return { content: '唱完了', tool_calls: null };
+    };
+    const ctx = {
+      ownSaid: said,
+      sing: async () => { said.push('（用语音唱了《小星星》）'); return '唱好了'; },
+    };
+    const out = await runAgentLoop({ messages: [], tools: toolsForRole('guest'), chat, ctx });
+    expect(out).toBe('唱完了');
+    expect(seen).toContain('（用语音唱了《小星星》）');
+    expect(said).toHaveLength(0); // 已回灌并从队列取走，不会重复
+  });
+
   it('没有工具调用时直接返回文本', async () => {
     const chat = async () => ({ content: '在呢～', tool_calls: null });
     const out = await runAgentLoop({ messages: [], tools: toolsForRole('guest'), chat, ctx: {} });
