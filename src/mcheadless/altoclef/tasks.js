@@ -382,16 +382,22 @@ class PickupDroppedItemTask extends Task {
     this._targetCount = targetCount
     this._emptySince = 0
     this._done = false
+    this._checker = new MovementProgressChecker(6, 0.15)
+    this._startedAt = 0
+    this._lastDropKey = ''
   }
 
   onStart () {
     this._emptySince = 0
     this._done = false
+    this._checker.reset()
+    this._startedAt = Date.now()
+    this._lastDropKey = ''
   }
 
   onTick (mod) {
     if (this.isFinished(mod)) return null
-    const drop = mod.findClosestItemEntity(this._itemNames, 24)
+    const drop = mod.findClosestItemEntity(this._itemNames, 16)
     if (!drop) {
       if (!this._emptySince) this._emptySince = Date.now()
       // 掉落物可能还在飞/已被人捡走：4 秒还没有就结束
@@ -400,6 +406,17 @@ class PickupDroppedItemTask extends Task {
       return null
     }
     this._emptySince = 0
+    const key = `${drop.id}:${Math.floor(drop.position.x)},${Math.floor(drop.position.z)}`
+    if (key !== this._lastDropKey) {
+      this._lastDropKey = key
+      this._checker.reset()
+    }
+    // 走不过去的掉落物（被墙/领地挡住）别死追：超过 10 秒没靠近就放弃，回去挖
+    if (!this._checker.check(mod) || Date.now() - this._startedAt > 15000) {
+      this._done = true
+      this.setDebugState('捡不到，放弃')
+      return null
+    }
     mod.setGoal(new goals.GoalFollow(drop, 1.2), true)
     this.setDebugState('捡掉落物')
     return null
@@ -438,6 +455,7 @@ class MineAndCollectTask extends Task {
 
   onStart (mod) {
     mod.stopPath()
+    this._gaveUp = false
     this._mine = new DoToClosestBlockTask(pos => new DestroyBlockTask(pos), {
       blocks: this._blockNames,
       radius: 48,
@@ -448,12 +466,21 @@ class MineAndCollectTask extends Task {
   onTick (mod) {
     if (this.isFinished(mod)) return null
     // 参照 ResourceTask：先看地上有没有目标掉落物
-    if (mod.findClosestItemEntity(this._itemNames, 16)) return this._pickup
+    if (mod.findClosestItemEntity(this._itemNames, 16)) {
+      if (!this._pickup || this._pickup.isFinished(mod)) {
+        this._pickup = new PickupDroppedItemTask(this._itemNames, this._count)
+      }
+      return this._pickup
+    }
+    if (this._mine.isFinished(mod)) {
+      this._gaveUp = true
+      return null
+    }
     return this._mine
   }
 
   isFinished (mod) {
-    return mod.countItems(this._itemNames) >= this._count
+    return this._gaveUp || mod.countItems(this._itemNames) >= this._count
   }
 
   onStop (mod, _interruptTask) {
