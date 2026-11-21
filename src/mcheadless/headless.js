@@ -62,6 +62,9 @@ let wantConnect = AUTO_CONNECT   // false = 已退服/还没 join，断线不重
 let connGen = 0                  // 连接代际：join/leave 后旧实例的回调直接作废
 let reconnectTimer = null
 let reconnectDelay = 7000 // Sonar 默认 rejoin-delay 5s，重连不能太快
+// 最近一次被服务器踢出的原因（{reason, at}）。非空表示被踢：不再自动重连，
+// 由 /state 报给 AI，让它告诉用户而不是自己反复进服。
+let lastKick = null
 let flying = false
 let flyAbort = false
 let patrolTimer = null
@@ -381,16 +384,20 @@ function createBot () {
   bot.on('kicked', reason => {
     const s = typeof reason === 'string' ? reason : JSON.stringify(reason)
     log('kicked:', s)
-    // 旧会话还没在服务端释放时不要高频重连，否则会一直撞“玩家已在线”
-    if (s.includes('playerAlreadyOnline')) {
-      reconnectDelay = 45000
-    } else if (/not registered|please register|未注册|请注册|register/i.test(s)) {
-      // 未注册被踢：重连后会自动走 /register
+    // 未注册被踢属于登录流程的一环：重连后会自动 /register，按"被踢"处理就永远进不去
+    const authSoft = /not registered|please register|未注册|请注册|register/i.test(s)
+    if (authSoft) {
       log('auth: 因未注册被踢，重连后自动注册')
       reconnectDelay = 3000
-    } else {
-      reconnectDelay = 7000
+      lastKick = null
+      return
     }
+    // 真被踢（封禁/管理员/反作弊/白名单…）：记下原因，并且**不再自动重连**，
+    // 由 /state 的 kick 字段告诉 AI，让它转告用户
+    lastKick = { reason: s.slice(0, 300), at: Date.now() }
+    wantConnect = false
+    // 旧会话还没在服务端释放时不要高频重连，否则会一直撞“玩家已在线”
+    reconnectDelay = s.includes('playerAlreadyOnline') ? 45000 : 7000
   })
   bot.on('error', err => log('error:', err.message))
   bot.on('end', reason => {
@@ -469,6 +476,7 @@ function createBot () {
 
 function onSpawn () {
   reconnectDelay = 7000
+  lastKick = null // 成功进服了，之前的踢出记录作废
   stopped = false
   lastHealth = bot.health
   setupMovements()
@@ -3586,6 +3594,7 @@ function joinServer (address, portArg, versionArg) {
   wantConnect = true
   stopped = false
   reconnectDelay = 5000
+  lastKick = null // 明确要求重新进服时，之前的踢出记录清掉
   authState = 'unknown'
   authSeen = false
   regTries = 0
@@ -3667,7 +3676,7 @@ function botState () {
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
   // 界面信息不依赖 spawned：登录/验证码阶段的提示也在这几条通道里
   const hud = { chat: chatLog.slice(-30), title: lastTitle, scoreboard: readScoreboard(), bossBars: readBossBars() }
-  const caps = { captcha, captchaImages: captchaImages.slice() }
+  const caps = { captcha, captchaImages: captchaImages.slice(), kick: lastKick }
   if (!bot || !bot.entity) {
     return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, ...caps, ...hud }
   }

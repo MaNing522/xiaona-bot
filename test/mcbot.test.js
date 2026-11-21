@@ -32,6 +32,18 @@ describe('mcbot 状态文本', () => {
     expect(connecting).toContain('正在连接');
   });
 
+  it('被踢出时写明原因，并明确不要再进服', () => {
+    const kicked = formatStatus({
+      connected: false,
+      spawned: false,
+      server: { host: '1.2.3.4', port: 25565, wantConnect: false },
+      kick: { reason: '你已被服务器踢出', at: Date.now() },
+    });
+    expect(kicked).toContain('被服务器踢出');
+    expect(kicked).toContain('你已被服务器踢出');
+    expect(kicked).toContain('别自己再 mcbot_join');
+  });
+
   it('已进服时输出坐标、血量和背包', () => {
     const text = formatStatus({
       connected: true,
