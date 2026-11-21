@@ -55,6 +55,9 @@ export function formatStatus(st) {
   }
   const lines = [];
   lines.push(`✅ 当前在线：${addr}（已经进服了，不用再 join）`);
+  if (st.auth === 'pending') {
+    lines.push('⚠️ 登录插件状态：认证中（还不能执行任务）；一直卡住就用 mcbot_hud 看服务器提示');
+  }
   lines.push(`坐标：${st.pos.x}, ${st.pos.y}, ${st.pos.z}${st.gamemode ? `（${st.gamemode}）` : ''}`);
   lines.push(`血量：${st.health ?? '?'}　饥饿：${st.food ?? '?'}　鞘翅：${st.elytraFlying ? '飞行中' : '未飞'}`);
   if (st.collect) lines.push(`收集：${st.collect.type} ${st.collect.done}/${st.collect.total}`);

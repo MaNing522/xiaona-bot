@@ -162,6 +162,15 @@ function fmt (p) {
 
 function createBot () {
   const myGen = ++connGen
+  // 每次新建连接（进服/断线重连）才重置登录状态；spawn 事件在传送/重生时也会触发，
+  // 不能在那里重置，否则已经登录成功还会被改回 pending，状态显示和 /login 都会乱
+  authState = 'unknown'
+  authTries = 0
+  authResponded = false
+  authSeen = false
+  regTries = 0
+  captcha = { pending: false, path: null, at: 0, error: '' }
+  global.__regLastAt = 0
   const mine = mineflayer.createBot({
     host: CFG.host,
     port: CFG.port,
@@ -511,17 +520,20 @@ function onSpawn () {
     equipElytra().then(() => glideStart()).catch(() => {})
   }
 
-  // 每次进入游戏都先走登录流程，未登录前不巡逻/不执行指令
-  authState = 'pending'
-  authTries = 0
-  authResponded = false
-  authSeen = false
-  regTries = 0
+  // 每次进入游戏都先走登录流程，未登录前不巡逻/不执行指令。
+  // 已经登录成功后再 spawn（重生、跨维度、插件传送）不要重置状态、也不要再发 /login。
+  if (authState !== 'done') {
+    authState = 'pending'
+    authTries = 0
+    authResponded = false
+    authSeen = false
+    regTries = 0
+    global.__regLastAt = 0
+  }
   captcha = { pending: false, path: null, at: 0, error: '' }
-  global.__regLastAt = 0
   if (patrolTimer) clearTimeout(patrolTimer)
   patrolTimer = null
-  setTimeout(() => tryAuth(), 600)
+  if (authState === 'pending') setTimeout(() => tryAuth(), 600)
 }
 
 // ---------- 登录插件（AuthMe）适配 ----------
@@ -675,7 +687,7 @@ function onAuthMessage (msg) {
   const low = m.toLowerCase()
 
   // 已登录（含注册后自动登录）
-  if (/successful(ly)? (login|logged in|registered)|registered successfully|you are now (logged in|authenticated)|already logged in|登录成功|注册成功|成功注册|认证成功/.test(low)) {
+  if (/successful(ly)? (login|logged in|registered)|registered successfully|you are (now|already) (logged in|authenticated)|already authenticated|already logged in|登录成功|注册成功|成功注册|认证成功/.test(low)) {
     authResponded = true
     authSeen = true
     captcha = { pending: false, path: null, at: 0, error: '' }
