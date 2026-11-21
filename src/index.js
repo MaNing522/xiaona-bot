@@ -802,6 +802,9 @@ async function imageSegToDataUrl(seg) {
 /** 识图子 agent 的系统提示：只做识别，不要人设/寒暄（结果会回灌给主 agent） */
 const VISION_SYSTEM_PROMPT = '你是识图能力。只描述、识别用户给的图片；图中有文字就原样摘出。'
     + '回答简短准确，不寒暄、不反问、不提工具，也不要说自己是谁。';
+// 看自己生成的地图：颜色=方块类型、亮度=高度，红点是机器人、橙点是其他玩家，暗色是还没加载的区域
+const MAP_VISION_PROMPT = '你在看一张 Minecraft 俯视地图：每种颜色代表一类方块，亮度表示高度，红点是机器人自己，橙点是其他玩家，暗色是还没加载的区域。用中文简短描述地形（地貌、水/岩浆、建筑、道路、玩家位置），不要臆测画面里没有的东西。'
+    + '回答简短准确，不寒暄、不反问、不提工具，也不要说自己是谁。';
 
 /**
  * 自定义视觉接口适配器：把和主模型一样的 messages 原样转给它，
@@ -876,6 +879,51 @@ async function analyzeImages(segs, question) {
 }
 
 /**
+ * 让视觉模型看一眼本地生成的图片（目前是 MC 地图），返回简短描述。
+ * 视觉关闭 / 读取失败 / 接口报错都返回空串，调用方按"没看到"处理即可。
+ */
+async function describeGeneratedImage(file) {
+    if (!file) return '';
+    const v = visionSettings();
+    if (v.provider === 'off') return '';
+    let url;
+    try {
+        url = 'data:image/png;base64,' + fs.readFileSync(file).toString('base64');
+    } catch {
+        return '';
+    }
+    const chat = v.provider === 'custom'
+        ? customVisionChat(v)
+        : (body) => chatCompletionRaw({
+            messages: body.messages,
+            temperature: 0.2,
+            maxTokens: 1200,
+            timeoutMs: 90000,
+        });
+    try {
+        const { reply } = await runAgentReply({
+            messages: [
+                { role: 'system', content: MAP_VISION_PROMPT },
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: '描述这张 Minecraft 俯视地图上的地形。' },
+                        { type: 'image_url', image_url: { url } },
+                    ],
+                },
+            ],
+            chat,
+            tools: [],
+            maxSteps: 1,
+        });
+        return String(reply || '').trim();
+    } catch (e) {
+        logger.warn('[地图] 视觉描述失败:', e.message);
+        return '';
+    }
+}
+
+/**
  * read_history 不填条数时默认拉多少条（config.json 的 memory.expectedHistory）。
  * 夹在 1~100，配置写坏了也不至于一次拉爆上下文。
  */
@@ -890,7 +938,7 @@ function expectedHistoryCount() {
  * @param {string} [uid] 好感度主体（QQ 号或游戏ID）；留空则不记录好感度（如网页试用）
  * @param {object} [o]  { images, notify, sendVoice }：本条消息的图片段、"给用户发中间消息"的回调，以及"发一条语音"的回调
  */
-function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null } = {}) {
+function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = null, sendImage = null } = {}) {
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
@@ -921,8 +969,33 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         },
         // 管理员/主人经 AI 执行游戏命令（经桥转发给服务端；白名单由 mod 侧把关）
         runCommand: (cmd) => runMcCommandBridge(cmd),
-        // 小钠自己的 MC 客户端（mineflayer，离线名 xiaona）：进服看看、聊天、走动、挖/放、用物品
+        // 小钠自己的 MC 客户端（headless 子进程，离线名 xiaona）：进服、下指令、看地图
         mcbot: mcBot,
+        // 生成附近地形俯视图：存盘 → 发到当前会话 → 让视觉模型看一眼 → 摘要回给模型
+        mcbotMap: async (radius, look = true) => {
+            let m;
+            try {
+                m = await mcBot.map(radius);
+            } catch (e) {
+                return `地图生成失败：${e.message}`;
+            }
+            let sent = false;
+            if (sendImage && m.path) {
+                try {
+                    await sendImage(m.path);
+                    sent = true;
+                } catch (e) {
+                    logger.warn('[地图] 发送失败:', e.message);
+                }
+            }
+            const parts = [String(m.summary || '地图已生成。').trim()];
+            if (look !== false) {
+                const seen = await describeGeneratedImage(m.path);
+                if (seen) parts.push(`地图画面：${seen}`);
+            }
+            parts.push(sent ? '图片已经发到当前会话。' : '当前场景发不了图片，只能把摘要给你。');
+            return parts.join('\n');
+        },
         // 主人/所有者经 AI 拉取 GitHub 更新（直连+镜像兜底）；重启等这条回复发完再执行
         selfUpdate: async () => {
             const res = await fetchAndApplyUpdate();
@@ -3418,6 +3491,11 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
                     const ids = await sendReply(first.event, text, true, false);
                     if (Array.isArray(ids) && ids.length) voiceSent = true;
                     return ids;
+                },
+                // mcbot_map 用：把生成的图片发到当前 QQ 会话（base64，SnowLuma 在容器里也能取到）
+                sendImage: async (file) => {
+                    if (signal && signal.aborted) return;
+                    await sendReply(first.event, [segImageB64(fs.readFileSync(file))]);
                 },
             }),
         });

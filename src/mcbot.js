@@ -215,6 +215,26 @@ export async function run(command) {
   return sendCmd(c);
 }
 
+/**
+ * 画一张附近地形的俯视图（子进程里同步扫描，通常 1~5 秒）。
+ * 渲染期间控制口会短暂阻塞，/cmd 先回 pending，所以这里按 /state 轮询结果。
+ * @returns {Promise<{path:string, summary:string, radius:number, dim:string, center:{x:number,z:number}}>}
+ */
+export async function map(radius) {
+  const r = Math.max(8, Math.min(Math.round(Number(radius) || 32), 64));
+  await requireOnline();
+  const before = (((await http('/state', { timeout: 3000 })) || {}).map || {}).at || 0;
+  await http('/cmd', { method: 'POST', body: { cmd: `map ${r}` }, timeout: 20000 }).catch(() => {});
+  const t0 = Date.now();
+  while (Date.now() - t0 < 120000) {
+    await new Promise((res) => setTimeout(res, 1000));
+    const st = await http('/state', { timeout: 3000 }).catch(() => null);
+    const m = st && st.map;
+    if (m && m.at > before && m.path) return m;
+  }
+  throw new Error('地图生成超时（120 秒）');
+}
+
 export async function stop() {
   if (!(await alive())) return '小钠当前没有在服务器里。';
   return sendCmd('stop');

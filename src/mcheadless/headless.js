@@ -4,6 +4,7 @@
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const baritone = require('./baritone')
+const { renderMap } = require('./mapRender')
 const { Vec3 } = require('vec3')
 const http = require('http')
 const fs = require('fs')
@@ -65,6 +66,8 @@ let flying = false
 let flyAbort = false
 let patrolTimer = null
 let lastHealth = 20
+// 最近一次生成的地图（控制口 /state 会带出去，供小钠读路径/摘要）
+let lastMap = null
 
 // 登录插件（AuthMe）状态
 const AUTH_PASSWORD = process.env.MC_PASSWORD || fileCfg.password || ''
@@ -3108,6 +3111,7 @@ const CMD_ALIASES = {
   日志: 'logmode', 播报: 'logmode',
   简报: 'quiet', 少说: 'quiet',
   矿透: 'xray', 透视: 'xray',
+  地图: 'map', map: 'map',
   丢垃圾: 'toss', 清理: 'toss', 扔垃圾: 'toss',
   状态: 'status', 汇报: 'status',
   帮助: 'help', 帮: 'help', 指令: 'help', help: 'help'
@@ -3128,7 +3132,7 @@ async function dispatchCommand (username, raw) {
     switch (cmd) {
       case 'help':
         reply('进/出服：！进服 <host> [port] [version] ！退服')
-        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来')
+        reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径]')
         reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
         break
       case 'join': {
@@ -3140,6 +3144,15 @@ async function dispatchCommand (username, raw) {
         leaveServer()
         reply('已退出服务器')
         break
+      case 'map': {
+        // 画一张附近地形的俯视 PNG（同步扫描，几十万次方块查询，通常 1~5 秒）
+        if (!bot || !bot.entity) throw new Error('不在服务器里')
+        const out = renderMap(bot, { radius: Number(args[0]) || 32 })
+        lastMap = { path: out.file, at: out.at, radius: out.radius, center: out.center, dim: out.dim, summary: out.summary }
+        log(`map: ${out.file}（半径 ${out.radius} 格）`)
+        reply(`地图已保存（半径 ${out.radius} 格）`)
+        break
+      }
       case 'srvcmd': {
         if (!rest) throw new Error('用法 srvcmd <服务器命令>')
         if (!bot || !bot.entity) throw new Error('不在服务器里')
@@ -3405,6 +3418,7 @@ function joinServer (address, portArg, versionArg) {
   authState = 'unknown'
   authSeen = false
   regTries = 0
+  lastMap = null // 换服后旧地图作废，避免拿到上一个服的位置
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const old = bot
   connGen++ // 旧实例的 end 回调作废，也不会触发重连
@@ -3423,6 +3437,7 @@ function joinServer (address, portArg, versionArg) {
 function leaveServer () {
   wantConnect = false
   connGen++
+  lastMap = null
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const old = bot
   bot = null
@@ -3442,7 +3457,7 @@ function botState () {
   const connected = Boolean(bot && bot._client && bot._client.state === 'play')
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
   if (!bot || !bot.entity) {
-    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError }
+    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap }
   }
   const p = bot.entity.position
   const players = Object.values(bot.players)
@@ -3478,6 +3493,7 @@ function botState () {
     develop: mode.kind === 'develop' ? { running: DEV.running, tries: DEV.tries } : null,
     lastReply,
     lastError,
+    map: lastMap,
     players,
     inventory,
     offhand,
