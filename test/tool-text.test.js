@@ -36,6 +36,36 @@ describe('extractTextToolCalls（正文里的工具调用还原）', () => {
     expect(JSON.parse(r.tool_calls[0].function.arguments)).toEqual({ address: 'a.b' });
   });
 
+  it('还原 DeepSeek 的 DSML 工具调用，并把标签从正文里清干净', () => {
+    const text = [
+      '我看一下',
+      '<||DSML||tool_calls>',
+      '<||DSML||invoke name="mc_status">',
+      '<||DSML||parameter name="address">lblt.xyz</||DSML||parameter>',
+      '</||DSML||invoke>',
+      '</||DSML||tool_calls>',
+    ].join('\n');
+    const r = extractTextToolCalls(text, tools);
+    expect(r.tool_calls).toHaveLength(1);
+    expect(r.tool_calls[0].function.name).toBe('mc_status');
+    expect(JSON.parse(r.tool_calls[0].function.arguments)).toEqual({ address: 'lblt.xyz' });
+    expect(r.content).toBe('我看一下');
+  });
+
+  it('单竖线的 <|DSML|> 也能认，残留标签不会漏到聊天里', () => {
+    const r = extractTextToolCalls(
+      '<|DSML|invoke name="web_search"><|DSML|parameter name="query">今天天气</|DSML|parameter></|DSML|invoke>',
+      tools,
+    );
+    expect(r.tool_calls[0].function.name).toBe('web_search');
+    expect(JSON.parse(r.tool_calls[0].function.arguments)).toEqual({ query: '今天天气' });
+    expect(r.content).not.toContain('DSML');
+
+    const onlyTag = extractTextToolCalls('好的</||DSML||tool_calls><||DSML||calls>', tools);
+    expect(onlyTag.content).toBe('好的');
+    expect(onlyTag.tool_calls).toBeNull();
+  });
+
   it('不认识的工具名不误判，正文保持原样', () => {
     const text = '<tool_call>{"name":"rm_rf","arguments":{}}</tool_call>';
     const r = extractTextToolCalls(text, tools);
