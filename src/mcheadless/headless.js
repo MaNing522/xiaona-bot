@@ -1816,7 +1816,7 @@ async function runCollect (type, total) {
 }
 
 // ---------- 自主发育：木头 → 石镐 → 铁镐 → 钻石套 ----------
-const DEV = { running: false, cancelled: false, dir: null, steps: 0, tries: 0, axis: null, tgtKey: null, noMove: 0, mineFail: null, caveDir: null }
+const DEV = { running: false, cancelled: false, dir: null, steps: 0, tries: 0, axis: null, tgtKey: null, noMove: 0, mineFail: null, caveDir: null, restartAt: 0 }
 let lastRtpAt = 0 // /rtp 冷却，别刷指令
 let homeSet = false // 工作区 home 是否已设
 const LOG_BLOCKS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log', 'pale_oak_log']
@@ -2107,8 +2107,21 @@ async function pickupDrops (radius = 4) {
   lastPickup = Date.now()
   const before = invTotal()
   for (const it of items.slice(0, 6)) {
-    // 掉落物可能掉在树下/叶子里，允许挖穿过去捡（gotoNoDig 会走不到）
-    try { await goto(it.position.x, it.position.y, it.position.z, 6000, 1) } catch {}
+    if (bot.entity.position.distanceTo(it.position) > 3.2) {
+      // 掉落物可能掉在树下/叶子里，允许挖穿过去捡（gotoNoDig 会走不到）
+      try { await goto(it.position.x, it.position.y, it.position.z, 6000, 1) } catch {}
+    } else {
+      // 短距离别寻路：GoalBlock 常出现“到了却没捡起”，直接朝掉落物走两步就会被服务器吸过去
+      try {
+        await safeLookAt(it.position)
+        bot.setControlState('forward', true)
+        for (let k = 0; k < 16; k++) {
+          if (!bot.entity || bot.entity.position.distanceTo(it.position) < 1.2) break
+          await sleep(50)
+        }
+      } catch {}
+      try { bot.clearControlStates() } catch {}
+    }
     await sleep(120)
   }
   const got = invTotal() - before
@@ -3172,6 +3185,12 @@ async function develop () {
   } finally {
     DEV.running = false
     stopped = false
+    // 解卡判定要求重启：等这个实例彻底退出后再起下一个，杜绝新旧两个 develop 并行
+    if (DEV.restartAt) {
+      const wait = Math.max(0, DEV.restartAt - Date.now())
+      DEV.restartAt = 0
+      setTimeout(() => { if (mode.kind === 'develop') develop().catch(() => {}) }, wait)
+    }
   }
 }
 
@@ -3911,9 +3930,23 @@ async function unstick () {
 let devStall = { at: 0, n: 0, x: 0, y: 0, z: 0 }
 // 主动告诉看门狗“我在忙，不算卡死”
 function touchDevStall () { devStall.at = Date.now() }
+// 正在挖方块 / 寻路器还在走，就算位置没变也是在干活（砍树、挖矿时原地不动是常态）
+function devIsBusy () {
+  try {
+    if (bot.targetDigBlock) return true
+    const pf = bot.pathfinder
+    if (pf && (pf.isMoving?.() || pf.isMining?.() || pf.isBuilding?.())) return true
+  } catch {}
+  return false
+}
 function trackDevelopStall () {
   if (mode.kind !== 'develop' || !DEV.running) { devStall.at = 0; devStall.n = 0; return }
   const p = bot.entity.position
+  // 在挖/在走时位置不变是正常的，别把连续砍树的几十秒当成卡死
+  if (devIsBusy()) {
+    devStall = { at: Date.now(), n: devStall.n, x: p.x, y: p.y, z: p.z }
+    return
+  }
   if (!devStall.at || Math.hypot(p.x - devStall.x, p.y - devStall.y, p.z - devStall.z) > 0.6) {
     devStall = { at: Date.now(), n: devStall.n, x: p.x, y: p.y, z: p.z }
     return
@@ -3955,12 +3988,9 @@ function trackDevelopStall () {
     devStall.n = 0
     log('[dev] 连续解卡无效，重启发育流程')
     DEV.cancelled = true
-    setTimeout(() => {
-      if (mode.kind !== 'develop') return
-      DEV.cancelled = false
-      DEV.running = false
-      develop().catch(() => {})
-    }, 4000)
+    // 不在这里直接起新实例：旧实例可能还卡在 craft/sleep 里，双开只会互相抢背包和方块，
+    // 交给 develop 的 finally 在旧实例真正退出后再重启
+    DEV.restartAt = Date.now() + 4000
   }
 }
 
@@ -3986,7 +4016,7 @@ function startWatchdog () {
       return
     }
     if (mode.kind === 'develop') {
-      if (!DEV.running && Date.now() > (DEV.nextTry || 0)) develop().catch(() => {})
+      if (!DEV.running && !DEV.restartAt && Date.now() > (DEV.nextTry || 0)) develop().catch(() => {})
       return
     }
     if (mode.kind === 'collect') {
