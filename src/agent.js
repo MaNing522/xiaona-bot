@@ -417,6 +417,15 @@ export const AGENT_TOOLS = [
     },
     run: async (args, ctx) => ctx.readHistory(args.count),
   },
+  {
+    minRole: 'guest',
+    function: {
+      name: 'group_notice',
+      description: '读当前群的群公告（群规、活动、注意事项常写在这里）。只有在群聊里能用；私聊/游戏里会说明看不到。有人问「群公告写了什么」「群规是什么」时用。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (args, ctx) => ctx.groupNotice(),
+  },
 ];
 
 /**
