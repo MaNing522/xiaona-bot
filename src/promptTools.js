@@ -20,10 +20,10 @@ const TOOL_HINTS = {
     player_pos: '查某个在线玩家当前的坐标（X/Y/Z）和所在维度',
     mcbot_join: '用你自己的 MC 客户端（离线名 xiaona，Baritone 式寻路/挖矿/飞行）进某个服务器',
     mcbot_leave: '退出当前的 MC 服务器',
-    mcbot_status: '查看自己 MC 客户端的服务器、坐标、血量、背包、附近玩家和任务进度',
+    mcbot_status: '**动手前先看它**：自己的服务器、坐标、血量、背包、附近玩家、任务进度（含有没有任务在跑）',
     mcbot_chat: '在游戏公屏发言',
     mcbot_command: '发送服务器命令（/login、/reg、/spawn 等，自动补 /）',
-    mcbot_cmd: '下任务指令：goto 坐标 / fly 坐标 / collect 方块 [数量] / develop / pvp [玩家] / follow / stop / xray 等',
+    mcbot_cmd: '给 MC 客户端下任务指令（它只是执行器，决策在你）：goto 坐标 / fly 坐标 / collect 方块 [数量] / develop / pvp [玩家] / mace / follow / stop / xray / toss 等',
     mcbot_players: '看渲染范围内玩家的距离',
     mcbot_inventory: '查看自己 MC 客户端的背包',
     ai_balance: '查 AI 服务商账户余额（账务信息）',
@@ -107,6 +107,18 @@ function memorySection(expectedHistory = 20) {
 `;
 }
 
+/**
+ * 自己那台 MC 客户端的用法：客户端只提供"执行 + 状态"，判断与下一步由模型决定。
+ * 写清楚这一点，避免模型以为客户端里有一整套固定流程、或者凭记忆假设状态。
+ */
+function mcClientSection() {
+    return `【自己的 MC 客户端】
+- 它是执行器不是大脑：你通过工具读状态、下指令，看到结果再决定下一步，别凭记忆假设坐标、背包或谁在线。
+- 动手前先 \`mcbot_status\`；任务跑着也可以随时再看进度，想改主意先 \`mcbot_cmd\` 下 \`stop\`，再下新指令。
+- \`develop\` / \`collect\` 这类是一次跑多步的宏，只当起点；效果不对就停掉换做法，没人规定必须按它的流程走。
+`;
+}
+
 /** Minecraft 桥的玩法（群里转发、游戏内私聊、绑定方式、不能主动开口） */
 function mcSection({ bridgeGroup } = {}) {
     if (!bridgeGroup) {
@@ -141,6 +153,7 @@ export function buildToolPrompt({ role = 'guest', caps = {}, serverInfo = '', sc
         toolsSection(ctx),
         identitySection(ctx),
         memorySection(expectedHistory),
+        mcClientSection(),
         mcSection({ bridgeGroup }),
     ].filter(Boolean).join('\n');
 }
