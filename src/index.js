@@ -924,103 +924,8 @@ async function describeGeneratedImage(file, question) {
 }
 
 // ---------- MC 登录验证码（AuthMe 地图验证码） ----------
-// headless 检测到验证码提示会自动导出那张地图；这里读数字、自动 /captcha，
-// 读不出来或提交后仍卡着，就把图发到桥接群找人看一眼。
-let captchaDoneKey = '';
-
-async function sendCaptchaToHuman(file, why) {
-    const gid = Number(MC_BRIDGE_GROUP || 0);
-    if (!gid) {
-        logger.warn(`[MCbot] ${why}（没配 MC_BRIDGE_GROUP，图发不出去）`);
-        return;
-    }
-    const text = `[MC] 小钠卡在登录验证码：${why}。${file ? '图已发，帮它看一眼数字（或直接替它发 /captcha 数字）。' : '没能导出验证码地图。'}`;
-    try {
-        const message = [];
-        if (file) {
-            message.push({ type: 'image', data: { file: 'base64://' + fs.readFileSync(file).toString('base64') } });
-        }
-        message.push({ type: 'text', data: { text } });
-        await callApi('send_group_msg', { group_id: gid, message });
-    } catch (e) {
-        logger.warn('[MCbot] 验证码图发送失败:', e.message);
-    }
-}
-
-/**
- * 让 AI 根据界面信息（聊天/标题/计分板/Boss栏 + 验证码识别结果）判断该发哪条服务器命令。
- * 不写死 /captcha：不同服务器可能要求 /captcha 数字、/register、点对话框、输入别的指令。
- */
-async function askCaptchaCommand(hudText, digits, err) {
-    if (!AI_ENABLED) return '';
-    try {
-        const { reply } = await runAgentReply({
-            messages: [
-                {
-                    role: 'system',
-                    content: '你正在替一个 Minecraft 客户端通过服务器登录/注册/验证码。'
-                        + '根据下面的界面信息判断下一步该发送哪一条服务器命令（例如 /captcha 1234、/register 密码 密码、/code 1234 等）。'
-                        + '只输出这一条命令（以 / 开头，不要解释、不要代码块）；实在判断不出来就只输出 NONE。',
-                },
-                {
-                    role: 'user',
-                    content: [
-                        `界面信息：\n${hudText || '（无）'}`,
-                        digits ? `验证码图片识别结果：${digits}` : '验证码图片没能识别出数字',
-                        err ? `导出验证码地图时的错误：${err}` : '',
-                    ].filter(Boolean).join('\n'),
-                },
-            ],
-            chat: (body) => chatCompletionRaw({ messages: body.messages, temperature: 0.1, maxTokens: 300, timeoutMs: 30000 }),
-            tools: [],
-            maxSteps: 1,
-        });
-        const line = String(reply || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
-        if (/^NONE/i.test(line)) return '';
-        const m = line.match(/\/[A-Za-z][^\s`]*/);
-        return m ? m[0] : '';
-    } catch (e) {
-        logger.warn('[MCbot] 验证码决策失败:', e.message);
-        return '';
-    }
-}
-
-async function resolveCaptcha(c) {
-    const file = c && c.path;
-    logger.info('[MCbot] 服务器要求登录验证码，读取界面信息并决定怎么提交…');
-    let digits = '';
-    if (file) {
-        const seen = await describeGeneratedImage(file, '这是 Minecraft 登录插件的验证码地图，请读出图中验证码的数字（通常 4~6 位），只输出数字，不要解释。');
-        digits = (String(seen).match(/\d{3,8}/) || [])[0] || '';
-    }
-    const hudText = await mcBot.hud().catch(() => '');
-    const cmd = await askCaptchaCommand(hudText, digits, c && c.error);
-    if (cmd) {
-        try {
-            await mcBot.command(cmd.replace(/^\//, ''));
-            logger.info(`[MCbot] 已按 AI 判断提交：${cmd}`);
-            await new Promise((r) => setTimeout(r, 2500));
-            const st = await mcBot.rawState().catch(() => null);
-            if (st && st.captcha && st.captcha.pending) {
-                await sendCaptchaToHuman(file, `按识别结果发了 ${cmd}，但服务器没放行`);
-            }
-            return;
-        } catch (e) {
-            logger.warn('[MCbot] 提交验证码命令失败:', e.message);
-        }
-    }
-    await sendCaptchaToHuman(file, cmd ? `执行 ${cmd} 失败` : '没能判断该发什么命令');
-}
-
-async function watchCaptchaOnce() {
-    const st = await mcBot.rawState().catch(() => null);
-    const c = st && st.captcha;
-    if (!st || !st.spawned || !c || !c.pending) return;
-    const key = `${c.path || ''}:${c.at || 0}`;
-    if (key === captchaDoneKey) return;
-    captchaDoneKey = key;
-    await resolveCaptcha(c);
-}
+// headless 检测到验证码提示会把地图导出并留档（最近 5 张）；
+// AI 通过 mcbot_captcha 取图发到会话，人工确认数字后再用 mcbot_command 提交——不自动猜数字。
 
 /**
  * read_history 不填条数时默认拉多少条（config.json 的 memory.expectedHistory）。
@@ -1111,7 +1016,7 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             }
             return emitMap(m, look);
         },
-        // 登录验证码地图（AuthMe）：导出 → 发到当前会话 → 视觉识别数字
+        // 登录验证码地图（AuthMe）：取最近一张 → 发到当前会话 → 视觉读数字（只作参考，等人工确认）
         mcbotCaptcha: async (look = true) => {
             let c;
             try {
@@ -1119,7 +1024,24 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
             } catch (e) {
                 return `验证码地图导出失败：${e.message}`;
             }
-            return emitMap({ path: c.path, at: c.at, summary: '这是服务器登录验证码地图。' }, look);
+            let sent = false;
+            if (sendImage && c.path) {
+                try {
+                    await sendImage(c.path);
+                    sent = true;
+                } catch (e) {
+                    logger.warn('[MCbot] 验证码图发送失败:', e.message);
+                }
+            }
+            let digits = '';
+            if (look !== false && c.path) {
+                const seen = await describeGeneratedImage(c.path, '这是 Minecraft 登录插件的验证码地图，请读出图中验证码的数字（通常 4~6 位），只输出数字，不要解释。');
+                digits = (String(seen).match(/\d{3,8}/) || [])[0] || '';
+            }
+            const parts = ['验证码地图已就绪' + (sent ? '，图片已发到当前会话' : '') + '。'];
+            parts.push(digits ? `视觉识别（仅供参考，必须让用户确认）：${digits}` : '视觉没能可靠读出数字，请让用户直接看图片确认。');
+            parts.push('等用户告诉你验证码是多少，再用 mcbot_command 发服务器要求的命令（如 /captcha 数字）。不要自己猜数字提交。');
+            return parts.join('\n');
         },
         // 界面信息：最近聊天 / 屏幕标题 / 计分板 / Boss栏
         mcbotHud: () => mcBot.hud(),
@@ -4551,10 +4473,6 @@ if (WEBUI_ENABLED) {
 // 计分板不在这里推：玩家上线时由桥逐人回一条"是否已绑定"（见 mcbridge 的 bindCheck）
 // 连不连、连哪由 config.json 的 bridge.mode 决定（env默认/off/loopback/lan/public），缺配置自动停用
 startMcBridge({ callApi, segText, askAi: askAiFromMc, getBoundIds: getReceivers, getBlacklistedIds: getBlacklistedGameIds, runGameCommand });
-
-// MC 登录验证码看护：headless 检测到验证码提示会自动导出那张地图，
-// 这里定期看一眼，读数字 → 自动 /captcha → 不行就把图发到桥接群求助
-setInterval(() => { watchCaptchaOnce().catch(() => {}); }, 4000).unref();
 
 // 闲时维护：语音缓存清理 + 记忆过期清理。避开工作日高峰（9-12 / 14-18），
 // 高峰期自动推迟到闲时再跑，不跟实时对话抢资源。

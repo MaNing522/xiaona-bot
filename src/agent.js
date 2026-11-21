@@ -173,7 +173,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'mcbot_captcha',
-      description: '导出服务器的登录验证码地图（AuthMe captcha，图上画着数字），发到当前 QQ 会话，并把画面交给视觉模型读数字。小钠进服后卡在验证码、或用户要看验证码时用；读到数字后再用 mcbot_command 发 /captcha <数字>。',
+      description: '取最近的登录验证码地图（AuthMe captcha，图上画着数字），发到当前 QQ 会话，并附视觉识别结果（仅供参考）。把图给用户看，等用户告诉你验证码是多少，再用 mcbot_command 发服务器要求的命令（如 /captcha 数字）；不要自己猜数字提交。',
       parameters: {
         type: 'object',
         properties: {

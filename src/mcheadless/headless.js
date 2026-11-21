@@ -75,6 +75,8 @@ let lastMapId = 0
 // 登录验证码（AuthMe map captcha）：检测到提示就自动把那张地图导出成图片，
 // 由上层（小钠）交给视觉模型读数字；读不出来再把图发到 QQ 找人看。
 let captcha = { pending: false, path: null, at: 0, error: '' }
+// 保留最近 5 张验证码地图，人工要看时随时能取
+const captchaImages = []
 // 界面信息：最近聊天 / 屏幕标题 / 计分板 / Boss栏 —— 都交给上层 AI 按需取用
 // （服务器提示、验证码要求、任务目标这些东西格式五花八门，不写死解析规则）
 const chatLog = []
@@ -3234,9 +3236,18 @@ async function exportMapItem (want = 0) {
   return out
 }
 
+function rememberCaptcha (file) {
+  if (!file) return
+  captchaImages.push({ path: file, at: Date.now() })
+  while (captchaImages.length > 5) {
+    const old = captchaImages.shift()
+    try { if (old && old.path !== file) fs.unlinkSync(old.path) } catch {}
+  }
+}
+
 /**
  * 登录验证码提示 → 自动导出验证码地图。
- * 只负责"把图准备好"，识别数字和提交 /captcha 由上层（小钠）做。
+ * 只负责"把图准备好并留档"，数字由人工确认后再让 AI 提交。
  */
 function maybeCaptcha (msg, gen) {
   const s = String(msg || '')
@@ -3249,6 +3260,7 @@ function maybeCaptcha (msg, gen) {
     exportMapItem(0).then((out) => {
       if (gen !== connGen) return
       captcha = { pending: true, path: out.file, at: Date.now(), error: '' }
+      rememberCaptcha(out.file)
       log(`captcha: 已导出验证码地图 ${out.file}`)
     }).catch((e) => {
       captcha.error = e.message
@@ -3300,9 +3312,10 @@ async function dispatchCommand (username, raw) {
         break
       }
       case 'captcha': {
-        // 手动（或上层）要求导出验证码地图：导出后标记 pending，等着上层识别
+        // 手动（或上层）要求导出验证码地图：导出后标记 pending 并留档
         const out = await exportMapItem(Number(args[0]) || 0)
         captcha = { pending: true, path: out.file, at: Date.now(), error: '' }
+        rememberCaptcha(out.file)
         log(`captcha: 已导出验证码地图 ${out.file}`)
         reply('验证码地图已导出')
         break
@@ -3579,6 +3592,7 @@ function joinServer (address, portArg, versionArg) {
   chatLog.length = 0 // 换服后旧聊天记录会误导判断
   lastTitle = { title: '', subtitle: '', actionBar: '', at: 0 }
   captcha = { pending: false, path: null, at: 0, error: '' }
+  captchaImages.length = 0
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const old = bot
   connGen++ // 旧实例的 end 回调作废，也不会触发重连
@@ -3649,8 +3663,9 @@ function botState () {
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
   // 界面信息不依赖 spawned：登录/验证码阶段的提示也在这几条通道里
   const hud = { chat: chatLog.slice(-30), title: lastTitle, scoreboard: readScoreboard(), bossBars: readBossBars() }
+  const caps = { captcha, captchaImages: captchaImages.slice() }
   if (!bot || !bot.entity) {
-    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, captcha, ...hud }
+    return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, lastReply, lastError, map: lastMap, ...caps, ...hud }
   }
   const p = bot.entity.position
   const players = Object.values(bot.players)
@@ -3687,7 +3702,7 @@ function botState () {
     lastReply,
     lastError,
     map: lastMap,
-    captcha,
+    ...caps,
     ...hud,
     players,
     inventory,
