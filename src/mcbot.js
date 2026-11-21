@@ -1,479 +1,249 @@
 // ============================================================
-// mcbot.js - 小钠自己的 MC 客户端（mineflayer，离线登录，名字固定 xiaona）
+// mcbot.js - 小钠自己的 MC 客户端（headless 子进程 + 本机 HTTP 控制）
 //
-// 桥接 mod 只能看"我们自己的服务器"；这个模块让 AI 能主动连别的服务器去看看：
-// 聊天、看状态/背包、走动、挖方块、放方块、用物品。
-//
-// 所有"动手"类操作都**先转向对象**：
-//   · 移动：先朝移动方向看（走坐标则朝目标），再前进
-//   · 挖掘：先看方块中心
-//   · 放置：先看参照方块朝向目标的那一面
-//   · 使用物品 / 聊天：不需要转向
+// 实际进服的是 src/mcheadless/headless.js（Baritone 式寻路/采矿/飞行），
+// 这个模块只负责：
+//   · 按需拉起子进程（MC_AUTOCONNECT=false，不自动进服）
+//   · 用 HTTP 把 AI 的指令转给它（进服/退服、任务指令、服务器命令）
+//   · 把 /state 整理成中文状态文本
+// 账号密码从 .env 读：MC_BOT_USER（默认 xiaona）、MC_BOT_PASSWORD。
 // ============================================================
-import mineflayer from 'mineflayer';
-import pf from 'mineflayer-pathfinder';
-import vec3 from 'vec3';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { logger } from './logger.js';
+import { ROOT } from './paths.js';
 
-const { pathfinder, Movements, goals } = pf;
-const DEFAULT_PORT = 25565;
-const BOT_NAME = 'xiaona';
-// 小钠专用的辅助登录口令（AuthMe 等登录插件用）：注册/登录都走这一套
-const AUTH_PASSWORD = 'xn123456';
-const CONNECT_TIMEOUT = 30000;
-const MAX_CHAT_LOG = 50;
+const HOST = '127.0.0.1';
+const CTL_PORT = Number(process.env.MC_BOT_CTL_PORT || 2319) || 2319;
+const SCRIPT = path.join(ROOT, 'src', 'mcheadless', 'headless.js');
+const STATE_FILE = path.join(ROOT, 'data', 'mcbot-state.json');
+const START_TIMEOUT_MS = 20000;
 
-let bot = null;
-let joining = false;
-let chatLog = [];
-/** 服务器发来的系统消息（含登录/注册提示），用于自动登录和排查 */
-let sysLog = [];
-const authSent = { login: 0, reg: 0 };
-let meta = { address: '', port: 0, state: 'offline', version: '', error: '', joinedAt: 0 };
+let child = null;
+let starting = null;
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function fmtPos(p) {
-  if (!p) return '未知';
-  return `${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}`;
-}
-
-/** 维度 ID → 中文（主世界/下界/末地），未知维度原样返回 */
-export function dimLabel(dim) {
-  const s = String(dim || '').replace(/^minecraft:/, '');
-  if (s === 'overworld') return '主世界';
-  if (s === 'the_nether') return '下界';
-  if (s === 'the_end') return '末地';
-  return s || '未知';
-}
-
-function requireOnline() {
-  if (!bot || meta.state !== 'online' || !bot.entity) {
-    throw new Error(`小钠现在不在服务器里（${meta.state === 'connecting' ? '正在连接' : '离线'}），先用 mcbot_join 进去`);
+// ---------- 纯函数（方便单测） ----------
+/** "host:port" / "host" + port → { host, port } */
+export function parseTarget(address, port) {
+  let host = String(address || '').trim();
+  if (!host) throw new Error('服务器地址不能为空');
+  host = host.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  let p = Number(port) || 0;
+  const m = host.match(/^([^\s:]+):(\d+)$/);
+  if (m) {
+    host = m[1];
+    p = Number(m[2]);
   }
-  return bot;
+  if (!p) p = 25565;
+  if (!(p >= 1 && p <= 65535)) throw new Error(`端口不合法：${p}`);
+  return { host, port: p };
 }
 
-/** 指南针方向 → MC yaw（弧度）；0 = 南(+Z)，π/2 = 西(-X)，π = 北(-Z)，-π/2 = 东(+X) */
-export function yawOfDirection(dir) {
-  const d = String(dir || '').toLowerCase();
-  if (d === 'south') return 0;
-  if (d === 'west') return Math.PI / 2;
-  if (d === 'north') return Math.PI;
-  if (d === 'east') return -Math.PI / 2;
-  return null;
-}
-
-/** 相对方向（forward/back/left/right）在当前朝向上的 yaw */
-function yawRelative(currentYaw, dir) {
-  if (dir === 'forward') return currentYaw;
-  if (dir === 'back') return currentYaw + Math.PI;
-  if (dir === 'left') return currentYaw - Math.PI / 2;
-  if (dir === 'right') return currentYaw + Math.PI / 2;
-  return null;
-}
-
-/** 记录玩家聊天（最近 50 条，供 AI 回看） */
-function pushChat(username, message) {
-  chatLog.push({ t: Date.now(), user: String(username || ''), text: String(message || '') });
-  if (chatLog.length > MAX_CHAT_LOG) chatLog.shift();
-}
-
-function pushSys(text) {
-  sysLog.push({ t: Date.now(), text: String(text || '') });
-  if (sysLog.length > 40) sysLog.shift();
-}
-
-function safeChat(text) {
-  try {
-    if (bot && meta.state === 'online') bot.chat(text);
-  } catch { /* 连接刚断，忽略 */ }
-}
-
-/**
- * 自动辅助登录：服务器提示"请登录/请注册"时，用固定口令帮小钠登录。
- * 只在小钠进服后生效，同一个动作 15 秒内不重复，防止和服务器提示互相刷屏。
- */
-function maybeAutoAuth(message) {
-  const low = String(message || '').toLowerCase();
-  const now = Date.now();
-  const askReg = /\/reg(ister)?\b|请注册|please register|not registered|未注册/.test(low);
-  const askLogin = /\/login\b|请登录|please (log|sign) ?in|not logged in/.test(low);
-  if (askReg && now - authSent.reg > 15000) {
-    authSent.reg = now;
-    setTimeout(() => safeChat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`), 900);
-    return;
+/** /state 返回的 JSON → 给人看的中文状态 */
+export function formatStatus(st) {
+  if (!st) return 'MC 客户端还没启动；要进服先用 mcbot_join。';
+  const srv = st.server || {};
+  const addr = srv.host ? `${srv.host}:${srv.port}` : '未指定';
+  if (!st.spawned) {
+    if (srv.wantConnect && st.connected) return `正在进入 ${addr}（已连上，等待出生）`;
+    if (srv.wantConnect) return `正在连接 ${addr}（认证：${st.auth || '未知'}）`;
+    return '当前不在服务器里；可用 mcbot_join 进服。';
   }
-  if (askLogin && now - authSent.login > 15000) {
-    authSent.login = now;
-    setTimeout(() => safeChat(`/login ${AUTH_PASSWORD}`), 900);
-  }
-}
-
-export function status() {
-  const b = bot;
   const lines = [];
-  const stateText = { online: '在线', connecting: '连接中', offline: '离线' }[meta.state] || meta.state;
-  lines.push(`状态：${stateText}${meta.address ? `（${meta.address}:${meta.port}）` : ''}`);
-  if (meta.version) lines.push(`协议版本：${meta.version}`);
-  if (meta.error) lines.push(`最近错误：${meta.error}`);
-  if (b && b.entity && meta.state === 'online') {
-    lines.push(`坐标：${fmtPos(b.entity.position)}（维度 ${dimLabel(b.game && b.game.dimension)}）`);
-    lines.push(`血量：${b.health ?? '?'} / 饥饿：${b.food ?? '?'}`);
-    const held = b.heldItem;
-    lines.push(`手持：${held ? `${held.name} ×${held.count}` : '空手'}`);
-    const players = Object.keys(b.players || {});
-    lines.push(`在线玩家（${players.length}）：${players.slice(0, 30).join('、') || '只有我自己'}`);
-    const sys = sysLog.slice(-5).map((s) => s.text);
-    if (sys.length) lines.push(`最近服务器消息：\n${sys.join('\n')}`);
+  lines.push(`服务器：${addr}（${srv.version || '未知版本'}）`);
+  lines.push(`坐标：${st.pos.x}, ${st.pos.y}, ${st.pos.z}${st.gamemode ? `（${st.gamemode}）` : ''}`);
+  lines.push(`血量：${st.health ?? '?'}　饥饿：${st.food ?? '?'}　鞘翅：${st.elytraFlying ? '飞行中' : '未飞'}`);
+  if (st.collect) lines.push(`收集：${st.collect.type} ${st.collect.done}/${st.collect.total}`);
+  if (st.pvp) lines.push(`PvP：${st.pvp}`);
+  if (st.mace) lines.push(`重锤：${st.mace}`);
+  if (st.follow) lines.push(`跟随：${st.follow.name || st.follow.type || '目标'}`);
+  if (st.mode && st.mode.kind) lines.push(`运行模式：${st.mode.kind}`);
+  const inv = st.inventory && Object.keys(st.inventory).length
+    ? Object.entries(st.inventory).slice(0, 15).map(([k, v]) => `${k}x${v}`).join('、')
+    : '空';
+  lines.push(`背包：${inv}`);
+  if (Array.isArray(st.players) && st.players.length) {
+    const list = st.players.slice(0, 10).map((p) => `${p.name}(${Math.round(p.distance)}格)`).join('、');
+    lines.push(`附近玩家（${st.players.length}）：${list}`);
+  } else {
+    lines.push('附近玩家：无');
   }
   return lines.join('\n');
 }
 
-/**
- * 连接服务器（离线登录，名字 xiaona）。
- * @param {string} address 主机名/IP，允许带 :端口
- * @param {number} port 端口（地址里带端口时以地址为准）
- * @param {string} version 可选，如 "1.21.11"；不填自动按服务器 ping 的版本
- */
-export async function join(address, port = DEFAULT_PORT, version = '') {
-  if (joining) throw new Error('上一次连接还没结束，稍等几秒');
-  if (bot) leave();
-  let host = String(address || '').trim();
-  if (!host) throw new Error('服务器地址不能为空');
-  let p = Number(port) || DEFAULT_PORT;
-  if (host.includes(':') && !host.startsWith('[')) {
-    const [h, pp] = host.split(':');
-    host = h;
-    if (pp) p = Number(pp) || p;
-  }
-  if (!/^[A-Za-z0-9.-]+$/.test(host)) throw new Error('服务器地址格式不对（只填域名/IP，不要带 http://）');
-  if (!(p >= 1 && p <= 65535)) throw new Error('端口不对（1-65535）');
+// ---------- 子进程 ----------
+function baseUrl() {
+  return `http://${HOST}:${CTL_PORT}`;
+}
 
-  joining = true;
-  meta = { address: host, port: p, state: 'connecting', version: '', error: '', joinedAt: 0 };
-  const opts = { host, port: p, username: BOT_NAME, auth: 'offline' };
-  const v = String(version || '').trim();
-  opts.version = v || false; // false = 按服务器 ping 自动选协议
-  logger.info(`[MC机器人] 连接 ${host}:${p}（离线名 ${BOT_NAME}${v ? `, 版本 ${v}` : ''}）`);
+async function http(pathname, { method = 'GET', body = null, timeout = 20000 } = {}) {
+  const res = await fetch(baseUrl() + pathname, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeout),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* 非 JSON */ }
+  if (!res.ok) throw new Error((json && (json.error || json.reply)) || `HTTP ${res.status}`);
+  return json || {};
+}
 
-  let b;
+async function alive() {
   try {
-    b = mineflayer.createBot(opts);
-  } catch (e) {
-    joining = false;
-    meta.state = 'offline';
-    meta.error = e.message;
-    throw e;
+    await http('/state', { timeout: 1200 });
+    return true;
+  } catch {
+    return false;
   }
-  bot = b;
-  b.loadPlugin(pathfinder);
-  sysLog = [];
-  authSent.login = 0;
-  authSent.reg = 0;
+}
 
-  b.on('chat', (username, message) => pushChat(username, message));
-  // 系统消息：既用于自动辅助登录（/login、/reg），也留给 AI 排查"为什么没反应"
-  b.on('messagestr', (message) => {
-    pushSys(message);
-    maybeAutoAuth(message);
-  });
-  b.on('kicked', (reason) => {
-    const text = typeof reason === 'string' ? reason : JSON.stringify(reason);
-    meta.error = `被踢出：${String(text).slice(0, 300)}`;
-    logger.warn(`[MC机器人] ${meta.error}`);
-  });
-  b.on('error', (err) => {
-    meta.error = String((err && err.message) || err).slice(0, 300);
-    logger.warn(`[MC机器人] 连接错误：${meta.error}`);
-  });
-  b.on('end', (reason) => {
-    if (bot === b) bot = null;
-    if (meta.state === 'online' || meta.state === 'connecting') {
-      meta.state = 'offline';
-      if (reason) meta.error = String(reason).slice(0, 300);
+function wireChild(c) {
+  const feed = (tag) => (buf) => {
+    for (const line of String(buf).split(/\r?\n/)) {
+      if (line.trim()) logger.info(`[MCbot${tag}] ${line}`);
     }
-    logger.info(`[MC机器人] 已断开（${reason || '连接关闭'}）`);
+  };
+  c.stdout.on('data', feed(''));
+  c.stderr.on('data', feed(':err'));
+  c.on('exit', (code, sig) => {
+    logger.info(`[MCbot] 子进程退出（${sig || code}）`);
+    if (child === c) child = null;
   });
+}
 
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      try { b.quit(); } catch { /* 已经断了 */ }
-      reject(new Error(`连接超时（${CONNECT_TIMEOUT / 1000} 秒），检查地址/端口，或服务器是否在线模式`));
-    }, CONNECT_TIMEOUT);
-    b.once('spawn', () => {
-      clearTimeout(timer);
-      resolve();
+/** 确保 headless 子进程在跑（幂等，并发调用共用同一个启动流程） */
+async function ensureStarted() {
+  if (await alive()) return;
+  if (starting) return starting;
+  starting = (async () => {
+    if (!fs.existsSync(SCRIPT)) throw new Error(`找不到 MC 客户端脚本：${SCRIPT}`);
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    const env = {
+      ...process.env,
+      MC_AUTOCONNECT: 'false', // 进服由 join 指令决定
+      MC_CTL_PORT: String(CTL_PORT),
+      MC_USER: String(process.env.MC_BOT_USER || 'xiaona').trim(),
+      MC_PASSWORD: process.env.MC_BOT_PASSWORD || process.env.MC_PASSWORD || '',
+      MC_STATE_FILE: STATE_FILE,
+    };
+    logger.info(`[MCbot] 启动客户端（用户 ${env.MC_USER}，控制口 ${CTL_PORT}）`);
+    child = spawn(process.execPath, [SCRIPT], {
+      cwd: path.dirname(SCRIPT),
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
-    b.once('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    b.once('end', () => {
-      clearTimeout(timer);
-      reject(new Error(meta.error || '连接被服务器关闭'));
-    });
-  }).catch((e) => {
-    joining = false;
-    meta.state = 'offline';
-    meta.error = String((e && e.message) || e);
-    try { b.quit(); } catch { /* 已经断了 */ }
-    if (bot === b) bot = null;
-    throw new Error(`进服失败：${meta.error}`);
-  });
-
-  joining = false;
-  meta.state = 'online';
-  meta.version = String(b.version || '');
-  meta.joinedAt = Date.now();
-  logger.info(`[MC机器人] 已进入 ${host}:${p}（版本 ${meta.version}）`);
-  return `已进入 ${host}:${p}（离线名 ${BOT_NAME}）。\n${status()}`;
-}
-
-/** 退出服务器（没连上也不报错） */
-export function leave() {
-  const b = bot;
-  bot = null;
-  meta.state = 'offline';
-  chatLog = [];
-  if (b) {
-    try { b.quit(); } catch { /* 已断 */ }
-    return '已退出服务器。';
-  }
-  return '本来就不在服务器里。';
-}
-
-/** 发聊天（不用转向）。空文本时返回最近聊天记录，方便"看看大家在说什么" */
-export function chat(text) {
-  const b = requireOnline();
-  const msg = String(text || '').replace(/[\r\n]+/g, ' ').trim();
-  if (!msg) {
-    const lines = chatLog.slice(-20).map((c) => `${c.user || '系统'}: ${c.text}`);
-    return lines.length ? lines.join('\n') : '最近没有聊天记录。';
-  }
-  if (msg.length > 200) throw new Error('聊天太长（最多 200 字）');
-  b.chat(msg);
-  return `已在游戏里发言：${msg}`;
-}
-
-/** 背包摘要 */
-export function inventory() {
-  const b = requireOnline();
-  const items = b.inventory.items();
-  if (!items.length) return '背包是空的。';
-  const agg = new Map();
-  for (const it of items) agg.set(it.name, (agg.get(it.name) || 0) + it.count);
-  const list = [...agg.entries()].sort((a, b2) => b2[1] - a[1]);
-  const held = b.heldItem;
-  return `手持：${held ? `${held.name} ×${held.count}` : '空手'}\n背包（${list.length} 种）：\n`
-    + list.slice(0, 40).map(([n, c]) => `- ${n} ×${c}`).join('\n');
-}
-
-/**
- * 渲染范围内能看到的玩家（纯客户端信息：坐标、距离、手持、血量如果实体元数据里有）。
- * 不依赖服务器插件/桥，只要客户端加载到了实体就能看。
- */
-export function nearbyPlayers(radius = 64) {
-  const b = requireOnline();
-  const r = Math.min(256, Math.max(8, Number(radius) || 64));
-  const me = b.entity.position;
-  const list = [];
-  for (const e of Object.values(b.entities || {})) {
-    if (!e || e === b.entity) continue;
-    if (e.type !== 'player' && !e.username) continue;
-    let d;
-    try { d = e.position.distanceTo(me); } catch { continue; }
-    if (!Number.isFinite(d) || d > r) continue;
-    let health = null;
-    try { if (e.metadata && typeof e.metadata[9] === 'number') health = e.metadata[9]; } catch { /* 有些版本没有 */ }
-    list.push({ e, d, health });
-  }
-  list.sort((a, b2) => a.d - b2.d);
-  if (!list.length) return `当前维度：${dimLabel(b.game && b.game.dimension)}；渲染范围内（${r} 格）没有其他玩家。`;
-  const lines = list.map(({ e, d, health }) => {
-    const name = e.username || e.name || '(未知)';
-    const held = e.heldItem ? `，手持 ${e.heldItem.name}` : '';
-    const hp = health != null ? `，血量 ${Math.round(health * 2) / 2}` : '';
-    return `- ${name}：${fmtPos(e.position)}，距离 ${Math.round(d)} 格${hp}${held}`;
-  });
-  return `当前维度：${dimLabel(b.game && b.game.dimension)}；渲染范围内（${r} 格）共 ${lines.length} 名玩家：\n${lines.join('\n')}`;
-}
-
-/** 发送任意服务器命令（自动补 /，一条消息一条命令） */
-export function command(cmd) {
-  const b = requireOnline();
-  let s = String(cmd || '').replace(/[\r\n]+/g, ' ').trim();
-  if (!s) throw new Error('命令不能为空');
-  if (!s.startsWith('/')) s = '/' + s;
-  if (s.length > 250) throw new Error('命令太长（最多 250 字符）');
-  b.chat(s);
-  return `已发送命令：${s}`;
-}
-
-/**
- * 辅助登录（AuthMe 等）：固定口令 xn123456。
- * mode=auto 时先 /login，看到"未注册"提示再 /reg；也可以直接指定 register/login。
- */
-export async function login(mode = 'auto') {
-  const b = requireOnline();
-  const m = String(mode || 'auto').toLowerCase();
-  if (m === 'register') {
-    b.chat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`);
-    return `已发送注册命令：/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`;
-  }
-  if (m === 'login') {
-    b.chat(`/login ${AUTH_PASSWORD}`);
-    return `已发送登录命令：/login ${AUTH_PASSWORD}`;
-  }
-  b.chat(`/login ${AUTH_PASSWORD}`);
-  await sleep(1800);
-  const recent = sysLog.slice(-8).map((x) => x.text).join('\n');
-  if (/未注册|not registered|please register|\/reg(ister)?\b|请注册/i.test(recent)) {
-    b.chat(`/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}`);
-    return `服务器提示还没注册，已发送注册命令：/reg ${AUTH_PASSWORD} ${AUTH_PASSWORD}\n最近消息：\n${recent}`;
-  }
-  return `已发送登录命令：/login ${AUTH_PASSWORD}\n最近消息：\n${recent || '（没有新消息）'}`;
-}
-
-/**
- * 按方向走一小段：先转向移动方向，再前进。
- * @param {string} direction forward/back/left/right 或 north/south/east/west
- * @param {number} seconds 1~10 秒
- */
-export async function move(direction = 'forward', seconds = 1) {
-  const b = requireOnline();
-  const dir = String(direction || 'forward').toLowerCase();
-  const sec = Math.min(10, Math.max(0.2, Number(seconds) || 1));
-  const current = b.entity.yaw;
-  const yaw = yawOfDirection(dir) ?? yawRelative(current, dir);
-  if (yaw === null) throw new Error('方向只能是 forward/back/left/right 或 north/south/east/west');
-  await b.look(yaw, 0, true); // 先转向，再走
-  b.setControlState('forward', true);
+    wireChild(child);
+    const t0 = Date.now();
+    while (Date.now() - t0 < START_TIMEOUT_MS) {
+      if (await alive()) return;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    throw new Error('MC 客户端启动超时（20 秒内控制口没起来）');
+  })();
   try {
-    await sleep(sec * 1000);
+    await starting;
   } finally {
-    b.setControlState('forward', false);
+    starting = null;
   }
-  return `朝 ${dir} 走了约 ${sec} 秒，现在在 ${fmtPos(b.entity.position)}`;
 }
 
-/** 走到指定坐标（pathfinder；出发前先朝目标看） */
-export async function walkTo(x, y, z, timeoutMs = 60000) {
-  const b = requireOnline();
-  const tx = Number(x);
-  const ty = Number(y);
-  const tz = Number(z);
-  if (![tx, ty, tz].every(Number.isFinite)) throw new Error('坐标必须是数字');
-  const pos = b.entity.position;
-  await b.look(Math.atan2(-(tx - pos.x), tz - pos.z), 0, true);
-  const movements = new Movements(b);
-  movements.canDig = false; // 不为了抄近路去挖别人建筑
-  b.pathfinder.setMovements(movements);
-  const goal = new goals.GoalBlock(Math.floor(tx), Math.floor(ty), Math.floor(tz));
-  b.pathfinder.setGoal(goal);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      try { b.pathfinder.setGoal(null); } catch { /* 已停 */ }
-      reject(new Error(`走不过去（超时 ${Math.round(timeoutMs / 1000)} 秒），可能被挡住或没有路`));
-    }, timeoutMs);
-    function onGoal() {
-      cleanup();
-      resolve();
-    }
-    function onPath(upd) {
-      if (upd && upd.status === 'noPath') {
-        cleanup();
-        reject(new Error('找不到路（可能太远、被围住或目标在空中）'));
-      }
-    }
-    function cleanup() {
-      clearTimeout(timer);
-      b.removeListener('goal_reached', onGoal);
-      b.removeListener('path_update', onPath);
-    }
-    b.once('goal_reached', onGoal);
-    b.on('path_update', onPath);
+async function sendCmd(cmd) {
+  const r = await http('/cmd', { method: 'POST', body: { cmd }, timeout: 30000 });
+  if (r && r.ok === false) throw new Error(r.error || '执行失败');
+  const reply = String(r.reply || '').trim();
+  if (r.pending) return `${reply || '指令已接受'}（后台执行中，稍后用 mcbot_status 看进度）`;
+  return reply || '完成';
+}
+
+/** 需要已经在游戏里的操作：先看 /state，不在服里直接给出明确提示 */
+async function requireOnline() {
+  if (!(await alive())) throw new Error('小钠还没进服务器，先用 mcbot_join 进去');
+  const st = await http('/state', { timeout: 2000 });
+  if (!st || !st.spawned) throw new Error('小钠现在不在服务器里，先用 mcbot_join 进去');
+  return st;
+}
+
+// ---------- 对外能力 ----------
+export async function join(address, port, version) {
+  const t = parseTarget(address, port);
+  await ensureStarted();
+  const v = String(version || '').trim();
+  const r = await sendCmd(`join ${t.host} ${t.port}${v ? ` ${v}` : ''}`);
+  return `正在进入 ${t.host}:${t.port}：${r}`;
+}
+
+export async function leave() {
+  if (!(await alive())) return '小钠当前没有在服务器里。';
+  const r = await sendCmd('leave');
+  return `已退出服务器：${r}`;
+}
+
+export async function status() {
+  if (!(await alive())) return formatStatus(null);
+  try {
+    const st = await http('/state', { timeout: 2000 });
+    return formatStatus(st);
+  } catch (e) {
+    return `MC 客户端状态读取失败：${e.message}`;
+  }
+}
+
+export async function chat(text) {
+  const msg = String(text || '').trim();
+  if (!msg) throw new Error('要发送的内容不能为空');
+  await requireOnline();
+  const r = await sendCmd(`say ${msg}`);
+  return `已在游戏里发言：${msg}（${r}）`;
+}
+
+export async function command(command) {
+  const c = String(command || '').trim();
+  if (!c) throw new Error('命令不能为空');
+  await requireOnline();
+  return sendCmd(`srvcmd ${c}`);
+}
+
+/** 任务指令：goto / fly / collect / pvp / mace / develop / follow / stop / xray / toss 等 */
+export async function run(command) {
+  const c = String(command || '').trim();
+  if (!c) throw new Error('指令不能为空');
+  await requireOnline();
+  return sendCmd(c);
+}
+
+export async function stop() {
+  if (!(await alive())) return '小钠当前没有在服务器里。';
+  return sendCmd('stop');
+}
+
+export async function nearbyPlayers(radius) {
+  const r = Math.max(1, Math.min(Number(radius) || 64, 256));
+  const st = await requireOnline();
+  const list = (st.players || []).filter((p) => p.distance <= r);
+  if (!list.length) return `${r} 格内没有看到其他玩家。`;
+  return `看到 ${list.length} 名玩家：\n${list
+    .map((p) => `${p.name}：距离 ${Math.round(p.distance)} 格`)
+    .join('\n')}`;
+}
+
+export async function inventory() {
+  const st = await requireOnline();
+  const inv = st.inventory || {};
+  const keys = Object.keys(inv);
+  if (!keys.length) return '背包是空的。';
+  return `背包（${keys.length} 种）：\n${keys.map((k) => `${k} x${inv[k]}`).join('\n')}`;
+}
+
+// 机器人进程退出时把子进程带走，避免留下孤立的 MC 客户端
+process.once('exit', () => {
+  try { child?.kill('SIGKILL'); } catch { /* 已经退出 */ }
+});
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.once(sig, () => {
+    try { child?.kill('SIGTERM'); } catch { /* 已经退出 */ }
   });
-  return `已走到 ${fmtPos(b.entity.position)}（目标 ${Math.round(tx)}, ${Math.round(ty)}, ${Math.round(tz)}）`;
 }
-
-/** 挖一个方块（先看方块中心） */
-export async function breakBlock(x, y, z) {
-  const b = requireOnline();
-  const target = vec3(Math.floor(Number(x)), Math.floor(Number(y)), Math.floor(Number(z)));
-  if (![target.x, target.y, target.z].every(Number.isFinite)) throw new Error('坐标必须是数字');
-  const block = b.blockAt(target);
-  if (!block || block.name === 'air') throw new Error(`那里没有方块（${target.x}, ${target.y}, ${target.z}）`);
-  if (block.name.includes('bedrock') || block.name.includes('barrier')) throw new Error('这个方块挖不动');
-  if (b.entity.position.distanceTo(block.position) > 5.5) throw new Error('太远了，先走近一点（5 格以内）');
-  await b.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
-  await b.dig(block);
-  return `已挖掉 ${block.name}（${target.x}, ${target.y}, ${target.z}）`;
-}
-
-/**
- * 放一个方块（先看参照方块朝向目标的那一面）。
- * @param {number} x,y,z 要放到的位置
- * @param {string} item 可选，方块名（如 dirt / oak_planks）；不填自动从背包挑第一个方块
- */
-export async function placeBlock(x, y, z, item = '') {
-  const b = requireOnline();
-  const target = vec3(Math.floor(Number(x)), Math.floor(Number(y)), Math.floor(Number(z)));
-  if (![target.x, target.y, target.z].every(Number.isFinite)) throw new Error('坐标必须是数字');
-  if (b.entity.position.distanceTo(target) > 5) throw new Error('太远了，先走近一点（5 格以内）');
-  const cur = b.blockAt(target);
-  if (cur && cur.boundingBox !== 'empty') throw new Error(`目标位置已经有方块：${cur.name}`);
-
-  // 找一个相邻的实心方块当参照，face 指向目标
-  const dirs = [vec3(0, -1, 0), vec3(0, 1, 0), vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 0, 1), vec3(0, 0, -1)];
-  let ref = null;
-  let face = null;
-  for (const d of dirs) {
-    const nb = b.blockAt(target.plus(d));
-    if (nb && nb.boundingBox === 'block') {
-      ref = nb;
-      face = d.scaled(-1);
-      break;
-    }
-  }
-  if (!ref) throw new Error('目标旁边没有可依附的实心方块');
-
-  const want = String(item || '').trim().toLowerCase();
-  const items = b.inventory.items();
-  const picked = want
-    ? items.find((it) => it.name === want || it.name === `minecraft:${want}` || it.name.endsWith(`_${want}`))
-    : items.find((it) => { try { return !!b.registry.blocksByName[it.name]; } catch { return false; } });
-  if (!picked) throw new Error(want ? `背包里没有 ${want}` : '背包里没有可放置的方块');
-  await b.equip(picked, 'hand');
-  // 先转向参照方块的这一面，再放
-  const faceCenter = ref.position.offset(0.5, 0.5, 0.5).plus(face.scaled(0.5));
-  await b.lookAt(faceCenter, true);
-  await b.placeBlock(ref, face);
-  return `已用 ${picked.name} 放在 ${target.x}, ${target.y}, ${target.z}`;
-}
-
-/** 使用手持物品/吃东西（不用转向）；item 可选，指定就先装备 */
-export async function useItem(item = '') {
-  const b = requireOnline();
-  const want = String(item || '').trim().toLowerCase();
-  if (want) {
-    const it = b.inventory.items().find((x) => x.name === want || x.name === `minecraft:${want}` || x.name.endsWith(`_${want}`));
-    if (!it) throw new Error(`背包里没有 ${want}`);
-    await b.equip(it, 'hand');
-  }
-  const held = b.heldItem;
-  if (!held) throw new Error('手上没有东西可用');
-  b.activateItem();
-  await sleep(1200); // 吃东西/拉弓都需要按住一会儿
-  b.deactivateItem();
-  return `已使用 ${held.name}`;
-}
-
-/** 供 index.js 注入 AI 上下文 */
-export const mcbot = {
-  join, leave, status, chat, inventory, nearbyPlayers, command, login,
-  move, walkTo, breakBlock, placeBlock, useItem,
-};
