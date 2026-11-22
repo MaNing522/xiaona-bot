@@ -338,6 +338,9 @@ const sendQueues = new Map();
 // 而是在下一次请求模型前作为「引导」追加进当前对话（正常 agent 的 steering）；
 // 别人的消息留在收件箱里，等这一轮结束后按到达顺序处理。
 const aiSessions = new Map();
+// 被打断（超时 / 喊停 / 报错）后记下是谁：这个人 10 分钟内的下一轮自动带上最近对话。
+// 单独存而不是塞进会话对象 —— 喊停会清空收件箱，会话对象紧接着就被回收了。
+const lastInterrupted = new Map();
 
 /**
  * 单轮 AI 的总超时（config.json 的 ai.runTimeoutSec，默认 120 秒）。
@@ -363,7 +366,7 @@ function takeSteerable(s, uid) {
 function submitAiJob(ckey, job) {
     let s = aiSessions.get(ckey);
     if (!s) {
-        s = { ckey, inbox: [], running: false, abort: null, lastInterrupted: null };
+        s = { ckey, inbox: [], running: false, abort: null };
         aiSessions.set(ckey, s);
     }
     s.inbox.push(job);
@@ -405,10 +408,10 @@ async function runAiTurn(s, job) {
     const steered = [];
     // 上一轮被打断（超时 / 喊停 / 报错）后，同一个人这一轮直接把最近对话也给模型，
     // 不指望它自己想起来 read_history —— 用户要的是"接着刚才的说"。
-    const resumeAfterInterrupt = !!(s.lastInterrupted
-        && s.lastInterrupted.uid === String(job.uid)
-        && Date.now() - s.lastInterrupted.at < 10 * 60 * 1000);
-    s.lastInterrupted = null;
+    const uid = String(job.uid);
+    const interruptedAt = lastInterrupted.get(uid) || 0;
+    const resumeAfterInterrupt = interruptedAt > 0 && Date.now() - interruptedAt < 10 * 60 * 1000;
+    lastInterrupted.delete(uid);
     try {
         ticket = await acquire({
             userId: job.uid,
@@ -450,8 +453,11 @@ async function runAiTurn(s, job) {
         await Promise.race([runAI(jobs, steered, ac.signal, steer, { includeHistory: resumeAfterInterrupt }), timedOut]);
     } catch (e) {
         const why = ac.signal.reason && ac.signal.reason.message;
-        // 这一轮被打断：记住是谁，下一轮把最近对话自动带上（见 resumeAfterInterrupt）
-        s.lastInterrupted = { uid: String(job.uid), at: Date.now() };
+        // 这一轮被打断：记住是谁，下一轮把最近对话自动带上（见 resumeAfterInterrupt）；
+        // 顺手清掉超过 10 分钟的旧记录，避免 Map 越堆越大
+        const now = Date.now();
+        for (const [k, t] of lastInterrupted) if (now - t > 10 * 60 * 1000) lastInterrupted.delete(k);
+        lastInterrupted.set(String(job.uid), now);
         if (why === 'SHUTUP') {
             logger.info(`[AI] ${s.ckey} 对方要求别说话，本轮已中止`);
         } else if (ac.signal.aborted) {
