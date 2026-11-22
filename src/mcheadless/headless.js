@@ -372,7 +372,8 @@ function createBot () {
   // 标题 / 动作栏（计分板和 Boss 栏直接读 mineflayer 的结构）
   client.on('packet', (data, meta) => {
     try {
-      if (meta.name === 'set_title_text') lastTitle = { ...lastTitle, title: flattenText(data.text), at: Date.now() }
+      if (meta.name === 'show_dialog') handleDialog(data)
+      else if (meta.name === 'set_title_text') lastTitle = { ...lastTitle, title: flattenText(data.text), at: Date.now() }
       else if (meta.name === 'set_title_subtitle') lastTitle = { ...lastTitle, subtitle: flattenText(data.text), at: Date.now() }
       else if (meta.name === 'set_action_bar_text') lastTitle = { ...lastTitle, actionBar: flattenText(data.text), at: Date.now() }
       else if (meta.name === 'clear_titles') lastTitle = { title: '', subtitle: '', actionBar: '', at: Date.now() }
@@ -3260,6 +3261,9 @@ const CMD_ALIASES = {
   地图: 'map', map: 'map',
   地图物品: 'mapitem', 手上地图: 'mapitem',
   验证码: 'captcha', captcha: 'captcha',
+  界面: 'win', 窗口: 'win', win: 'win',
+  点击: 'click', click: 'click',
+  右键: 'use', 用: 'use', use: 'use',
   丢垃圾: 'toss', 清理: 'toss', 扔垃圾: 'toss',
   状态: 'status', 汇报: 'status',
   帮助: 'help', 帮: 'help', 指令: 'help', help: 'help'
@@ -3313,7 +3317,8 @@ function rememberCaptcha (file) {
  */
 function maybeCaptcha (msg, gen) {
   const s = String(msg || '')
-  if (!/captcha|验证码/i.test(s)) return
+  // 不同服务端措辞不同：AuthMe 的 captcha、lblt.xyz 的「人机验证 / 手中地图上的 5 位数字」
+  if (!/captcha|验证码|人机验证|手中地图|地图上的\s*\d+\s*位数字/i.test(s)) return
   if (captcha.pending) return
   captcha = { pending: true, path: null, at: Date.now(), error: '' }
   log('captcha: 服务器要求验证码，准备导出验证码地图')
@@ -3329,6 +3334,77 @@ function maybeCaptcha (msg, gen) {
       log('captcha: 导出失败:', e.message)
     })
   }, 800)
+}
+
+/**
+ * 26.2 的 show_dialog（lblt.xyz 进服计算题这类）：按钮 action 是 run_command。
+ * 只自动处理 /lbltverify <token> <答案>：解析弹窗里的中文算式，挑出答案对应的按钮执行，
+ * 别的 dialog 一律只记录、不自动点（避免误触服务器菜单）。
+ */
+let lastDialog = { at: 0, text: '', command: '', answered: false }
+const CN_DIGITS = { 零: 0, 一: 1, 壹: 1, 二: 2, 两: 2, 贰: 2, 三: 3, 叁: 3, 四: 4, 肆: 4, 五: 5, 伍: 5, 六: 6, 陆: 6, 七: 7, 柒: 7, 八: 8, 捌: 8, 九: 9, 玖: 9, 十: 10, 拾: 10 }
+
+function collectStrings (node, out, depth = 0) {
+  if (depth > 10 || node == null) return
+  if (typeof node === 'string') { out.push(node); return }
+  if (Array.isArray(node)) { for (const v of node) collectStrings(v, out, depth + 1); return }
+  if (typeof node !== 'object') return
+  for (const k of Object.keys(node)) collectStrings(node[k], out, depth + 1)
+}
+
+function cnToNum (s) {
+  const t = String(s).trim()
+  if (/^-?\d+$/.test(t)) return Number(t)
+  if (t.length === 1 && CN_DIGITS[t] !== undefined) return CN_DIGITS[t]
+  const m = t.match(/^([一二两三四五六七八九])?十([一二三四五六七八九])?$/)
+  if (m) return (m[1] ? CN_DIGITS[m[1]] : 1) * 10 + (m[2] ? CN_DIGITS[m[2]] : 0)
+  return NaN
+}
+
+function solveCnExpr (expr) {
+  const m = String(expr).match(/([一二两三四五六七八九十\d]+)\s*([+\-×x*÷/])\s*([一二两三四五六七八九十\d]+)/)
+  if (!m) return NaN
+  const a = cnToNum(m[1])
+  const b = cnToNum(m[3])
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN
+  if (m[2] === '+') return a + b
+  if (m[2] === '-') return a - b
+  if (m[2] === '×' || m[2] === 'x' || m[2] === '*') return a * b
+  if (m[2] === '÷' || m[2] === '/') return b === 0 ? NaN : a / b
+  return NaN
+}
+
+function handleDialog (data) {
+  try {
+    const strs = []
+    collectStrings(data, strs)
+    const text = strs.join(' ')
+    const cmds = strs
+      .map((s) => s.trim().replace(/^\//, ''))
+      .filter((s) => /^lbltverify\s+\S+\s+-?\d+$/.test(s))
+    lastDialog = { at: Date.now(), text: text.slice(0, 300), command: '', answered: false }
+    if (!cmds.length) return
+
+    const expr = (text.match(/计算[：:]\s*([^\s=？?]+(?:\s*[+\-×x*÷/]\s*[^\s=？?]+)?)/) || [])[1] || ''
+    const answer = solveCnExpr(expr)
+    if (!Number.isFinite(answer)) {
+      log(`dialog: 算式解析失败（${expr || text.slice(0, 80)}），候选 ${cmds.length} 个，需要人工处理`)
+      return
+    }
+    const pick = cmds.find((c) => Number(c.split(/\s+/).pop()) === answer)
+    if (!pick) {
+      log(`dialog: 答案是 ${answer}，但没有对应按钮（${cmds.join(' | ')}）`)
+      return
+    }
+    lastDialog.command = pick
+    lastDialog.answered = true
+    log(`dialog: ${expr.trim()} = ${answer}，自动执行 /${pick}`)
+    setTimeout(() => {
+      try { sendCmd(`/${pick}`) } catch (e) { log('dialog: 执行失败', e.message) }
+    }, 1800)
+  } catch (e) {
+    log('dialog 处理失败:', e.message)
+  }
 }
 
 /**
@@ -3373,6 +3449,7 @@ async function dispatchCommand (username, raw) {
       case 'help':
         reply('进/出服：！进服 <host> [port] [version] ！退服')
         reply('移动/任务：！状态 ！停 ！发育 ！去 x y z ！去 x z ！飞 x y z ！跟随 [玩家] ！收集 <方块> [数量] ！获取 <物品> [数量] ！吃饭 [单位] ！打 [玩家] ！重锤 [玩家] ！过来 ！地图 [半径] ！地图物品')
+        reply('菜单：！界面 ！点击 <槽位> ！右键 <槽位> ｜ 界面/点击用来操作服务器菜单（先 界面 看槽位号）')
         reply('其它：！代发 <内容> ！服务器命令 <cmd> ！矿透 开/关/auto ！丢垃圾 [n] ！验证码 ！静默 ！日志 ！简报 ｜ 私聊直接发指令，回复走私聊，代发仍发公屏')
         break
       case 'join': {
@@ -3406,6 +3483,48 @@ async function dispatchCommand (username, raw) {
         rememberCaptcha(out.file)
         log(`captcha: 已导出验证码地图 ${out.file}`)
         reply('验证码地图已导出')
+        break
+      }
+      case 'win': {
+        if (!bot || !bot.entity) throw new Error('不在服务器里')
+        const w = bot.currentWindow
+        if (!w) { reply('当前没有打开的界面'); break }
+        const items = []
+        let hidden = 0
+        w.slots.forEach((it, i) => {
+          if (!it) return
+          // 服务器菜单习惯用玻璃板填满空位，列出来只会刷屏
+          if (/stained_glass_pane$/.test(it.name) || it.name === 'air') { hidden++; return }
+          const name = it.displayName && it.displayName !== it.name ? `${it.name}（${it.displayName}）` : it.name
+          items.push(`${i}:${name}${it.count > 1 ? '×' + it.count : ''}`)
+        })
+        reply(`界面「${flattenText(w.title)}」共 ${w.slots.length} 槽${hidden ? `（${hidden} 个装饰槽已隐藏）` : ''}：${items.slice(0, 30).join('，')}`)
+        break
+      }
+      case 'click': {
+        if (!bot || !bot.entity) throw new Error('不在服务器里')
+        const w = bot.currentWindow
+        if (!w) throw new Error('当前没有打开的界面')
+        const slot = Number(args[0])
+        if (!Number.isInteger(slot) || slot < 0 || slot >= w.slots.length) throw new Error('用法 click <槽位>（先发 win 查看槽位号）')
+        bot.clickWindow(slot, 0, 0)
+        lastError = null
+        log(`click: 界面槽位 ${slot}`)
+        break
+      }
+      case 'use': {
+        if (!bot || !bot.entity) throw new Error('不在服务器里')
+        const slot = Number(args[0])
+        if (!Number.isInteger(slot)) throw new Error('用法 use <槽位>：36-44（快捷栏 1-9）或 1-9')
+        const hot = slot >= 36 && slot <= 44 ? slot - 36 : slot - 1
+        if (hot < 0 || hot > 8) throw new Error('槽位超出快捷栏范围（36-44 或 1-9）')
+        bot.setQuickBarSlot(hot)
+        await bot.waitForTicks(4)
+        bot.activateItem()
+        await bot.waitForTicks(6)
+        bot.deactivateItem()
+        lastError = null
+        log(`use: 快捷栏 ${hot + 1}（槽位 ${36 + hot}）`)
         break
       }
       case 'srvcmd': {
@@ -3803,7 +3922,7 @@ function botState () {
   const server = { host: CFG.host, port: CFG.port, version: CFG.version, wantConnect }
   // 界面信息不依赖 spawned：登录/验证码阶段的提示也在这几条通道里
   const hud = { chat: chatLog.slice(-30), title: lastTitle, scoreboard: readScoreboard(), bossBars: readBossBars() }
-  const caps = { captcha, captchaImages: captchaImages.slice(), kick: lastKick }
+  const caps = { captcha, captchaImages: captchaImages.slice(), kick: lastKick, dialog: lastDialog }
   if (!bot || !bot.entity) {
     return { connected, server, auth: authState, spawned: false, mode: { kind: mode.kind, updatedAt: mode.updatedAt }, task: alto ? alto.status() : null, lastReply, lastError, map: lastMap, ...caps, ...hud }
   }
