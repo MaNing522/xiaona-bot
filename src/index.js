@@ -1166,6 +1166,16 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
         },
         // 只看不拉：查有没有新提交、更新了什么（不动代码、不重启）
         checkUpdate: () => checkForUpdates(),
+        // 重启自己：回复发完后再执行；PM2 托管时几秒后自动回来，Windows 本地只能手动 restart.bat
+        restartSelf: () => {
+            if (process.env.pm_id === undefined) {
+                logger.info('[重启] 非 PM2 环境，无法自动重启');
+                return '当前不是 PM2 托管，我没法自己重启：Windows 需要手动运行 restart.bat，Linux 需要手动 pm2 restart。';
+            }
+            pendingSelfRestart = true;
+            rememberRestartNotice(key);
+            return '好，这条回复发完我就重启，几秒钟后回来。';
+        },
         // 唱歌：模型给歌词，这里拼上 (唱歌) 标签后合成语音直接发出去（只有 QQ 场景注入了 sendVoice）
         sing: async (lyrics, song = '') => {
             if (!sendVoice) return '这里发不了语音（只有 QQ 聊天里能唱），把歌词用文字发给对方吧。';

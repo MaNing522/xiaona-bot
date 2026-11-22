@@ -38,11 +38,24 @@ export function termSafe(v) {
   return typeof v === 'string' ? v.replace(TERM_UNSAFE, '[表情]') : v;
 }
 
+/**
+ * 昵称、群名片、聊天正文里常混入 Unicode 双向控制符（如 U+2067）和零宽字符，
+ * 终端 / 浏览器会把整行重排，看起来就是"位置错乱"，甚至能把后面的日志伪装成别的内容。
+ * 记日志前统一剔掉；换行、制表、ZWJ（emoji 组合要用）保留，其余控制字符换成占位符。
+ */
+const BIDI_CTRL = /[\u00AD\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
+// 这里就是要匹配控制字符（ANSI 转义等），关掉 no-control-regex 是刻意的
+// eslint-disable-next-line no-control-regex
+const RAW_CTRL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+export function cleanLogText(v) {
+  return typeof v === 'string' ? v.replace(BIDI_CTRL, '').replace(RAW_CTRL, '\uFFFD') : v;
+}
+
 /** 把任意参数拼成一行可读文本（Error 取堆栈，对象取 JSON） */
 function toText(a) {
   return a
     .map((x) => {
-      if (typeof x === 'string') return x;
+      if (typeof x === 'string') return cleanLogText(x);
       if (x instanceof Error) return x.stack || x.message;
       if (x === undefined) return 'undefined';
       if (x === null) return 'null';
