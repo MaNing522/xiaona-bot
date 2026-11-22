@@ -1254,10 +1254,11 @@ async function agentBalance() {
     try {
         const { infos, raw, link } = await fetchBalanceInfos();
         if (link) return '该服务商只有网页版用量面板，打开查看：' + link;
-        if (raw) return '使用情况：' + raw;
+        if (raw) return raw;
+        // 只报剩余余额，不展开充值/赠送/已使用
         return infos.map((b) => {
             const tag = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : `${b.currency || ''} `;
-            return `${tag}${b.total_balance}（充值余 ${tag}${b.topped_up_balance} + 赠金余 ${tag}${b.granted_balance}）`;
+            return `${tag}${b.total_balance}`;
         }).join('；') || '没有余额信息。';
     } catch (e) {
         return '查询余额失败：' + e.message;
@@ -2589,33 +2590,28 @@ async function fetchBalanceInfos() {
  */
 async function doBalance(event, role) {
     if (role !== 'owner' && role !== 'master' && role !== 'admin') {
-        return sendReply(event, '❌ 只有主人/管理员可以查看余额');
+        return sendReply(event, '只有主人/管理员可以查看余额');
     }
     let fetched;
     try {
         fetched = await fetchBalanceInfos();
     } catch (e) {
-        return sendReply(event, '❌ ' + String(e.message).slice(0, 120));
+        return sendReply(event, String(e.message).slice(0, 120));
     }
     const { infos, available, raw, link } = fetched;
-    if (link) return sendReply(event, '📄 该服务商只有网页版用量面板，打开查看：\n' + link);
-    if (raw) return sendReply(event, '📊 AI 使用情况：\n' + raw);
+    if (link) return sendReply(event, '该服务商只有网页版用量面板，打开查看：\n' + link);
+    if (raw) return sendReply(event, raw);
+    // 只报剩余余额（不展示充值/赠送/已使用）
     const multi = infos.length > 1;
     const blocks = infos.map((b) => {
-        const st = trackBalance(b);
+        trackBalance(b); // 仍记录快照（#余额矫正/累计统计用），只是不再展示
         const sym = b.currency === 'CNY' ? '¥' : b.currency === 'USD' ? '$' : '';
-        const tag = sym || ` ${b.currency || ''} `;           // 没有符号的币种直接用代码
+        const tag = sym || ` ${b.currency || ''} `;
         const total = balanceCents(b.total_balance);
-        // 已使用 = 已使用基数（矫正设定）+ 矫正时余额 + 之后的入账 - 当前余额
-        const used = Math.max(0, st.usedBaseCents + st.firstTotalCents + st.inflowCents - total);
-        const head = multi ? `【${b.currency || '?'}】\n` : '';
-        return head
-            + `· 当前余额：${tag}${balanceStr(total)}（充值余 ${tag}${balanceStr(balanceCents(b.topped_up_balance))} + 赠金余 ${tag}${balanceStr(balanceCents(b.granted_balance))}）\n`
-            + `· 累计充值：${tag}${balanceStr(st.rechargeCents)}　累计赠送：${tag}${balanceStr(st.grantedCents)}\n`
-            + `· 已使用（累计）：${tag}${balanceStr(used)}`;
+        return (multi ? `【${b.currency || '?'}】` : '') + `${tag}${balanceStr(total)}`;
     });
-    const head = available ? '💰 AI 账户余额：' : '⚠️ AI 账户余额（当前不可用）：';
-    return sendReply(event, head + '\n' + blocks.join('\n'));
+    const head = available ? 'AI 账户余额：' : 'AI 账户余额（当前不可用）：';
+    return sendReply(event, head + blocks.join('；'));
 }
 
 /**
@@ -2624,10 +2620,10 @@ async function doBalance(event, role) {
  * 之后每笔充值都会在这个设定值的基础上继续累加。
  */
 async function doCorrectBalance(event, role, arg) {
-    if (!['owner', 'master'].includes(role)) return sendReply(event, '❌ 只有主人/所有者可以矫正余额');
+    if (!['owner', 'master'].includes(role)) return sendReply(event, '只有主人/所有者可以矫正余额');
     const parts = arg.split(/\s+/).filter(Boolean);
     if (parts.length < 2) {
-        return sendReply(event, '❌ 用法：#余额矫正 <充值总金额> <已使用> [币种]\n'
+        return sendReply(event, '用法：#余额矫正 <充值总金额> <已使用> [币种]\n'
             + '两个数分别设定"累计充值总金额"和"已使用"（单位：元），之后充值会在该基数上继续累加。\n'
             + '例：#余额矫正 100 30');
     }
@@ -2635,21 +2631,21 @@ async function doCorrectBalance(event, role, arg) {
     const used = Number(parts[1]);
     const cur = (parts[2] || '').toUpperCase();
     if (!Number.isFinite(recharge) || recharge < 0 || !Number.isFinite(used) || used < 0) {
-        return sendReply(event, '❌ 金额要填非负数字（元），例如：#余额矫正 100 30');
+        return sendReply(event, '金额要填非负数字（元），例如：#余额矫正 100 30');
     }
     if (cur && !/^[A-Z]{3}$/.test(cur)) {
-        return sendReply(event, '❌ 币种要填 3 位代码，如 CNY / USD');
+        return sendReply(event, '币种要填 3 位代码，如 CNY / USD');
     }
     let infos;
     try {
         ({ infos } = await fetchBalanceInfos());
     } catch (e) {
-        return sendReply(event, '❌ 矫正失败（需要能查到当前余额才能设定起点）：' + String(e.message).slice(0, 100));
+        return sendReply(event, '矫正失败（需要能查到当前余额才能设定起点）：' + String(e.message).slice(0, 100));
     }
     const targets = cur ? infos.filter((b) => String(b.currency || '').toUpperCase() === cur) : infos;
-    if (!targets.length) return sendReply(event, cur ? `❌ 余额里没有 ${cur} 币种` : '❌ 响应里没有余额信息');
+    if (!targets.length) return sendReply(event, cur ? `余额里没有 ${cur} 币种` : '响应里没有余额信息');
     if (!cur && targets.length > 1) {
-        return sendReply(event, '❌ 该账户有多个币种，请指定：#余额矫正 <充值总金额> <已使用> <币种>');
+        return sendReply(event, '该账户有多个币种，请指定：#余额矫正 <充值总金额> <已使用> <币种>');
     }
     const lines = targets.map((b) => {
         const st = correctBalance(b, balanceCents(recharge), balanceCents(used));
@@ -2657,7 +2653,7 @@ async function doCorrectBalance(event, role, arg) {
         const tag = sym || ` ${b.currency || ''} `;
         return `【${b.currency || '?'}】累计充值 ${tag}${balanceStr(st.rechargeCents)}　已使用 ${tag}${balanceStr(st.usedBaseCents)}`;
     });
-    return sendReply(event, '✅ 余额已矫正，之后充值时会在设定值基础上继续累加：\n' + lines.join('\n'));
+    return sendReply(event, '余额已矫正，之后充值时会在设定值基础上继续累加：\n' + lines.join('\n'));
 }
 
 async function doScreen(event) {

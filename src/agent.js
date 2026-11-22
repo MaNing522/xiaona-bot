@@ -262,7 +262,7 @@ export const AGENT_TOOLS = [
     minRole: 'admin',
     function: {
       name: 'ai_balance',
-      description: '查询 AI 服务商账户余额（还剩多少钱、累计充值、已使用）。属于账务信息。',
+      description: '查询 AI 服务商账户余额（还剩多少钱）。属于账务信息。',
       parameters: { type: 'object', properties: {} },
     },
     run: async (_args, ctx) => ctx.balance(),
