@@ -407,6 +407,15 @@ export const AGENT_TOOLS = [
     run: async (_args, ctx) => (ctx.selfUpdate ? ctx.selfUpdate() : '当前场景不能更新。'),
   },
   {
+    minRole: 'admin',
+    function: {
+      name: 'bot_restart',
+      description: '重启小钠自己（PM2 托管时这条回复发完就重启，几秒后自动回来；非 PM2 环境会说明只能手动重启）。**只在对方明确要求"重启一下 / 重开 / 卡住了重启"时用**，不要自己主动重启，也别拿它当修复一切问题的第一招。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (_args, ctx) => (ctx.restartSelf ? ctx.restartSelf() : '当前场景不能重启。'),
+  },
+  {
     minRole: 'guest',
     function: {
       name: 'read_history',
