@@ -2,29 +2,208 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f0f2f5">
-<title>小钠</title>
+<meta name="theme-color" content="#f3f4f6">
+<title>服务器主页 - 小钠</title>
 <style>
-:root{--bg:#f0f2f5;--txt:#1f2329;--accent:#1677ff}
+:root{
+  --pcl:#ff6b6b;--pcl-dark:#f25555;--pcl-soft:#fff1f1;
+  --bg:#f3f4f6;--card:#ffffff;--txt:#2b2b2b;--sub:#8b8b8b;--line:#e8e8e8;
+  --hint:#eef4ff;--hint-line:#d6e4ff;--ok:#22b573;--bad:#c9c9c9;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1f2124;--card:#2a2d31;--txt:#e8e8e8;--sub:#9a9a9a;--line:#3a3d42;
+    --hint:#23324a;--hint-line:#2f4568;--pcl-soft:#3a2a2a;
+  }
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
-html,body{margin:0;padding:0;min-height:100vh;background:var(--bg);color:var(--txt);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-/* 未登录主页：内容留空，只在右上角放登录入口 */
-.top{position:fixed;top:calc(16px + env(safe-area-inset-top));right:calc(16px + env(safe-area-inset-right));
-  display:flex;gap:10px}
-.tb-auth{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 18px;
-  border:1px solid var(--accent);border-radius:8px;background:#fff;color:var(--accent);
-  font-size:14px;font-weight:500;text-decoration:none;transition:.15s;
-  touch-action:manipulation;-webkit-user-select:none;user-select:none}
-.tb-auth:hover{background:#e6f4ff}
-.tb-auth:active{transform:scale(.97)}
-@media (max-width:520px){.top{top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right))}}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  font-size:14px;line-height:1.5}
+a{color:inherit;text-decoration:none}
+.topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+  gap:12px;padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 10px;
+  border-radius:9px;background:var(--pcl);color:#fff;font-weight:600;font-size:13px;letter-spacing:.5px}
+.brand b{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn-ghost{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 16px;
+  border:1px solid var(--pcl);border-radius:8px;color:var(--pcl);background:transparent;
+  font-size:13px;font-weight:500;transition:.15s;touch-action:manipulation;flex:0 0 auto}
+.btn-ghost:hover{background:var(--pcl-soft)}
+.btn-ghost:active{transform:scale(.97)}
+.wrap{max-width:760px;margin:0 auto;padding:16px 16px 48px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 18px;
+  font-size:15px;font-weight:600;border-bottom:1px solid var(--line)}
+.card-h .meta{font-size:12px;font-weight:400;color:var(--sub);white-space:nowrap}
+.card-b{padding:16px 18px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.addr{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;word-break:break-all}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bad);flex:0 0 auto}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(34,181,115,.15)}
+.kv{display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:14px}
+.kv div{font-size:13px;color:var(--sub)}
+.kv b{display:block;font-size:19px;color:var(--txt);font-weight:600;margin-top:2px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+  background:var(--pcl-soft);color:var(--pcl);font-size:13px}
+.chip i{font-style:normal;font-size:11px;opacity:.75}
+.empty{color:var(--sub);font-size:13px}
+.hint{display:flex;gap:9px;padding:11px 13px;border:1px solid var(--hint-line);background:var(--hint);
+  border-radius:8px;font-size:13px;line-height:1.6;color:var(--txt)}
+.hint::before{content:"";width:3px;border-radius:2px;background:var(--pcl);flex:0 0 auto}
+.item{display:flex;align-items:center;gap:12px;padding:13px 2px;border-bottom:1px solid var(--line);
+  transition:.15s;touch-action:manipulation}
+.item:last-child{border-bottom:0}
+.item:hover{padding-left:8px;background:var(--pcl-soft);border-radius:8px}
+.item .t{font-size:14px;font-weight:500}
+.item .d{font-size:12px;color:var(--sub);margin-top:2px}
+.item .go{margin-left:auto;color:var(--sub);font-size:18px;flex:0 0 auto}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 18px;border:0;
+  border-radius:8px;background:var(--pcl);color:#fff;font-size:13px;font-weight:500;cursor:pointer;
+  transition:.15s;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+.btn:hover{background:var(--pcl-dark)}
+.btn:active{transform:scale(.97)}
+.btn-sm{min-height:32px;padding:0 13px;font-size:12px}
+.foot{text-align:center;color:var(--sub);font-size:12px;margin-top:8px}
+@media (max-width:520px){
+  .topbar{padding:12px 14px}
+  .wrap{padding:12px 12px 40px}
+  .card-b{padding:14px}
+  .kv b{font-size:17px}
+}
 </style>
 </head>
 <body>
-<div class="top"><a class="tb-auth" href="/login">登录</a></div>
+<div class="topbar">
+  <div class="brand"><span class="logo">小钠</span><b id="title">服务器主页</b></div>
+  <a class="btn-ghost" href="/login">登录</a>
+</div>
+
+<main class="wrap">
+  <section class="card">
+    <div class="card-h"><span>服务器状态</span><span class="meta" id="ts">加载中…</span></div>
+    <div class="card-b">
+      <div class="row">
+        <span class="state"><i class="dot" id="dot"></i><span id="stateText">正在获取状态</span></span>
+        <span class="addr" id="addr">—</span>
+      </div>
+      <div class="kv">
+        <div>在线人数<b id="online">—</b></div>
+        <div>桥接状态<b id="bridge">—</b></div>
+      </div>
+      <div class="chips" id="players"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h"><span>快速入口</span></div>
+    <div class="card-b" style="padding-top:4px;padding-bottom:6px">
+      <a class="item" href="/login">
+        <div><div class="t">网页控制面板</div><div class="d">管理会话、全局设置与小钠的能力</div></div>
+        <span class="go">›</span>
+      </a>
+      <a class="item" href="/me">
+        <div><div class="t">我的账号</div><div class="d">绑定游戏 ID、改密码、查看我的位置热力图</div></div>
+        <span class="go">›</span>
+      </a>
+      <a class="item" href="/heatmap">
+        <div><div class="t">位置热力图</div><div class="d">查看自己走过的区块（需登录）</div></div>
+        <span class="go">›</span>
+      </a>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h"><span>PCL 启动器主页</span></div>
+    <div class="card-b">
+      <div class="hint">下载 Homepage.xaml 放进 PCL 目录即可作为自定义主页；也可以在 PCL 的「设置 → 主页 → 自定义主页下载地址」里填 <code id="xamlUrl">/pcl/Homepage.xaml</code>，PCL 会自动拉取。</div>
+      <div class="row" style="margin-top:14px">
+        <a class="btn" href="/pcl/Homepage.xaml" download="Homepage.xaml">下载 Homepage.xaml</a>
+        <button class="btn btn-sm" id="copyXaml" type="button">复制下载地址</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h"><span>进服须知</span></div>
+    <div class="card-b" style="padding-top:6px">
+      <div class="hint" style="margin-bottom:12px">第一次进服前，先在 QQ 群里找小钠绑定游戏 ID。没绑定的玩家会被白名单挡在门外。</div>
+      <div class="item"><div><div class="t">绑定游戏 ID</div><div class="d">私聊或群里发「#绑定 你的游戏ID」，按提示完成验证</div></div></div>
+      <div class="item"><div><div class="t">游戏内指令</div><div class="d">在游戏里发「#帮助」可以看小钠能做的事</div></div></div>
+      <div class="item"><div><div class="t">语音与图片</div><div class="d">群聊里可以直接发语音或截图给小钠</div></div></div>
+    </div>
+  </section>
+
+  <div class="foot">小钠 · <span id="footAddr">—</span></div>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var last = null;
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function ago(ms){
+    if (!ms) return '';
+    var d = Math.max(0, Date.now() - ms);
+    if (d < 5000) return '刚刚更新';
+    if (d < 60000) return Math.round(d/1000) + ' 秒前更新';
+    return Math.round(d/60000) + ' 分钟前更新';
+  }
+  function render(j){
+    last = j;
+    $('title').textContent = (j.name || '服务器') + ' · 主页';
+    $('addr').textContent = j.address || '未配置服务器';
+    $('footAddr').textContent = j.address || '未配置服务器';
+    $('online').textContent = j.connected ? String(j.online || 0) : '—';
+    $('bridge').textContent = j.connected ? '已连接' : (j.configured ? '未连接' : '未配置');
+    $('dot').className = 'dot' + (j.connected ? ' on' : '');
+    $('stateText').textContent = j.connected ? '服务器在线' : (j.configured ? '服务器离线' : '还没有配置 MC 桥');
+    $('ts').textContent = ago(j.ts);
+    var box = $('players');
+    var ps = Array.isArray(j.players) ? j.players : [];
+    if (!ps.length){
+      box.innerHTML = '<span class="empty">' + (j.connected ? '现在没有玩家在线' : '') + '</span>';
+      return;
+    }
+    box.innerHTML = ps.map(function(p){
+      var dim = p.dim ? '<i>' + esc(p.dim) + '</i>' : '';
+      return '<span class="chip">' + esc(p.name) + dim + '</span>';
+    }).join('');
+  }
+  function load(){
+    fetch('/api/home', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(render)
+      .catch(function(){
+        $('stateText').textContent = '状态获取失败';
+        $('ts').textContent = '稍后自动重试';
+      });
+  }
+  $('xamlUrl').textContent = location.origin + '/pcl/Homepage.xaml';
+  $('copyXaml').onclick = function(){
+    var url = location.origin + '/pcl/Homepage.xaml';
+    var done = function(){ var b = $('copyXaml'); b.textContent = '已复制'; setTimeout(function(){ b.textContent = '复制下载地址'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, done);
+    else {
+      var t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); } catch(e){}
+      document.body.removeChild(t); done();
+    }
+  };
+  load();
+  setInterval(load, 10000);
+  // 页面从后台切回来时立刻刷新一次
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) load(); });
+})();
+</script>
 </body>
 </html>
