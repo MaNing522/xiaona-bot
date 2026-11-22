@@ -2128,6 +2128,97 @@ async function listConversations() {
   return { owner, listOk: fx.ok, groups, friends, pinned: chatCfg.pinnedKeys() };
 }
 
+// ---------- 服务器主页（公开）----------
+// 只给玩家/PCL 看在线状态与玩家名，密钥、群号、坐标一律不出这个接口
+const DIM_NAMES = {
+  'minecraft:overworld': '主世界', 'minecraft:the_nether': '下界', 'minecraft:the_end': '末地',
+  overworld: '主世界', the_nether: '下界', the_end: '末地',
+};
+function dimLabel(d) {
+  const v = String(d || '');
+  return DIM_NAMES[v] || (v ? v.replace(/^minecraft:/, '') : '');
+}
+
+async function homeSummary() {
+  let base = '';
+  try { base = String(getBridgeTarget().base || ''); } catch {}
+  const address = base.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const configured = isMcConfigured();
+  const connected = isMcConnected();
+  let players = [];
+  if (connected) {
+    try {
+      const list = await Promise.race([
+        getPlayers(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('超时')), 3000)),
+      ]);
+      players = (list || [])
+        .map((p) => ({ name: String(p.name || ''), dim: dimLabel(p.dim) }))
+        .filter((p) => p.name);
+    } catch (e) {
+      logger.error('[主页] 读取在线玩家失败：' + e.message);
+    }
+  }
+  return {
+    ok: true,
+    name: String(process.env.MC_SERVER_NAME || '').trim() || '服务器',
+    address,
+    configured,
+    connected,
+    online: players.length,
+    players,
+    ts: Date.now(),
+  };
+}
+
+function escXml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  })[c]);
+}
+
+/** PCL 自定义主页（WPF XAML）。PCL 不支持内嵌 HTML，这里只放卡片与跳转按钮。 */
+function pclHomepageXaml(base) {
+  let addr = '';
+  try { addr = String(getBridgeTarget().base || '').replace(/^https?:\/\//i, '').replace(/\/+$/, ''); } catch {}
+  const name = String(process.env.MC_SERVER_NAME || '').trim() || '服务器';
+  const b = base || 'http://127.0.0.1';
+  const e = escXml;
+  return `<!-- 小钠 · PCL 自定义主页（由 ${e(b)}/pcl/Homepage.xaml 生成）
+     用法一：保存为 PCL 目录下的 Homepage.xaml，然后在「设置 → 主页」选择「自定义」
+     用法二：在「设置 → 主页 → 自定义主页下载地址」填 ${e(b)}/pcl/Homepage.xaml
+     注意：PCL 主页不能实时刷新，在线人数与玩家列表请点开网页主页查看。 -->
+<StackPanel Margin="25,40,23,15">
+  <TextBlock TextWrapping="Wrap" Margin="0,0,0,4" FontSize="31" Text="欢迎来到${e(name)}" />
+  <TextBlock TextWrapping="Wrap" Margin="0,0,0,12" Text="服务器地址：${e(addr || '未配置')}" />
+  <local:MyHint IsWarn="False" Text="进服前请先在 QQ 群里找小钠绑定游戏 ID，白名单放行后才能进入。" />
+
+  <local:MyCard Title="服务器状态" Margin="0,15,0,15" CanSwap="True" IsSwaped="False">
+    <StackPanel Margin="25,40,23,15">
+      <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" Text="PCL 主页不能实时刷新数据，在线人数与玩家列表请打开网页主页查看。" />
+      <local:MyListItem Title="打开服务器主页" Info="在线状态、在线玩家、进服须知" Type="Clickable" EventType="打开网页" EventData="${e(b)}/home" />
+    </StackPanel>
+  </local:MyCard>
+
+  <local:MyCard Title="常用入口" Margin="0,0,0,15" CanSwap="True" IsSwaped="False">
+    <StackPanel Margin="25,40,23,15">
+      <local:MyListItem Title="网页控制面板" Info="登录后管理会话与全局设置" Type="Clickable" EventType="打开网页" EventData="${e(b)}/login" />
+      <local:MyListItem Title="我的账号" Info="绑定游戏 ID、改密码、查看位置热力图" Type="Clickable" EventType="打开网页" EventData="${e(b)}/me" />
+      <local:MyListItem Title="位置热力图" Info="看看自己走过的区块（需登录）" Type="Clickable" EventType="打开网页" EventData="${e(b)}/heatmap" />
+    </StackPanel>
+  </local:MyCard>
+
+  <local:MyCard Title="进服须知" Margin="0,0,0,15" CanSwap="True" IsSwaped="True">
+    <StackPanel Margin="25,40,23,15">
+      <local:MyListItem Title="绑定游戏 ID" Info="群里发「#绑定 你的游戏ID」，按提示完成验证" />
+      <local:MyListItem Title="游戏内指令" Info="在游戏里发「#帮助」查看小钠能做的事" />
+      <local:MyListItem Title="语音与图片" Info="群聊里可以直接发语音或截图给小钠" />
+    </StackPanel>
+  </local:MyCard>
+</StackPanel>
+`;
+}
+
 // ---------- 路由 ----------
 async function route(req, res, url) {
   sweepAuth();
@@ -2435,6 +2526,32 @@ async function route(req, res, url) {
       logger.warn(`[网页直聊] 这轮没回成：${reason}`);
       return sendJSON(res, 502, { ok: false, error: reason });
     }
+  }
+
+  // 公开的服务器主页：给玩家和 PCL 用，不需要登录（只暴露在线状态与玩家名）
+  if (url.pathname === '/home' || url.pathname === '/home.html') {
+    if (!fs.existsSync(HOME_FILE)) return sendJSON(res, 500, { error: '缺少 web/home.html' });
+    return sendHtml(res, 200, fs.readFileSync(HOME_FILE));
+  }
+
+  // 公开数据：服务器主页轮询用。不返回密钥、群号、坐标等敏感信息。
+  if (url.pathname === '/api/home' && req.method === 'GET') {
+    return sendJSON(res, 200, await homeSummary());
+  }
+
+  // 公开的 PCL 自定义主页（Homepage.xaml）：按请求地址生成，PCL 可直接当下载地址
+  if (url.pathname === '/pcl/Homepage.xaml') {
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
+    // 只接受正常的主机名 / IPv4 / [IPv6]:端口，防止把 Host 头原样塞进 XAML
+    const okHost = /^[\w.-]+(:\d+)?$/.test(host) || /^\[[0-9a-fA-F:]+\](:\d+)?$/.test(host);
+    const base = okHost ? `${proto}://${host}` : '';
+    res.writeHead(200, {
+      'Content-Type': 'application/xml; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Disposition': 'inline; filename="Homepage.xaml"',
+    });
+    return res.end(pclHomepageXaml(base));
   }
 
   // 直聊会话不落盘：浏览器关闭时前端用 beacon 打到这，丢弃本客户端的内存历史
