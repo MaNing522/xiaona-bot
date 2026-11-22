@@ -6,17 +6,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f3f4f6">
 <title>服务器主页 - 小钠</title>
+<script>
+// 与控制面板一致：优先 localStorage，没设过就跟随系统，尽早写入避免闪白
+(function(){
+  var t='';
+  try{t=localStorage.getItem('xiaona-theme')||''}catch(e){}
+  if(t!=='light'&&t!=='dark'){
+    t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+  }
+  document.documentElement.setAttribute('data-theme',t);
+})();
+</script>
 <style>
 :root{
   --pcl:#ff6b6b;--pcl-dark:#f25555;--pcl-soft:#fff1f1;
   --bg:#f3f4f6;--card:#ffffff;--txt:#2b2b2b;--sub:#8b8b8b;--line:#e8e8e8;
   --hint:#eef4ff;--hint-line:#d6e4ff;--ok:#22b573;--bad:#c9c9c9;
 }
-@media (prefers-color-scheme: dark){
-  :root{
-    --bg:#1f2124;--card:#2a2d31;--txt:#e8e8e8;--sub:#9a9a9a;--line:#3a3d42;
-    --hint:#23324a;--hint-line:#2f4568;--pcl-soft:#3a2a2a;
-  }
+html[data-theme="dark"]{
+  --bg:#1f2124;--card:#2a2d31;--txt:#e8e8e8;--sub:#9a9a9a;--line:#3a3d42;
+  --hint:#23324a;--hint-line:#2f4568;--pcl-soft:#3a2a2a;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
@@ -32,17 +41,22 @@ a{color:inherit;text-decoration:none}
 .brand b{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .btn-ghost{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 16px;
   border:1px solid var(--pcl);border-radius:8px;color:var(--pcl);background:transparent;
-  font-size:13px;font-weight:500;transition:.15s;touch-action:manipulation;flex:0 0 auto}
+  font-size:13px;font-weight:500;transition:.15s;touch-action:manipulation;flex:0 0 auto;cursor:pointer}
 .btn-ghost:hover{background:var(--pcl-soft)}
 .btn-ghost:active{transform:scale(.97)}
-.wrap{max-width:760px;margin:0 auto;padding:16px 16px 48px}
+.acts{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.acts .btn-ghost{min-width:52px}
+.wrap{width:90%;margin:0 auto;padding:16px 0 48px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
 .card-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 18px;
   font-size:15px;font-weight:600;border-bottom:1px solid var(--line)}
 .card-h .meta{font-size:12px;font-weight:400;color:var(--sub);white-space:nowrap}
 .card-b{padding:16px 18px}
 .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.addr{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;word-break:break-all}
+.addr{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;word-break:break-all;
+  cursor:pointer;border-bottom:1px dashed transparent;transition:.15s}
+.addr:hover{border-bottom-color:var(--sub)}
+.addr:active{opacity:.6}
 .state{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--bad);flex:0 0 auto}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(34,181,115,.15)}
@@ -73,7 +87,7 @@ a{color:inherit;text-decoration:none}
 .foot{text-align:center;color:var(--sub);font-size:12px;margin-top:8px}
 @media (max-width:520px){
   .topbar{padding:12px 14px}
-  .wrap{padding:12px 12px 40px}
+  .wrap{padding:12px 0 40px}
   .card-b{padding:14px}
   .kv b{font-size:17px}
 }
@@ -82,7 +96,10 @@ a{color:inherit;text-decoration:none}
 <body>
 <div class="topbar">
   <div class="brand"><span class="logo">小钠</span><b id="title">服务器主页</b></div>
-  <a class="btn-ghost" href="/login">登录</a>
+  <div class="acts">
+    <button class="btn-ghost" id="theme" type="button">暗色</button>
+    <a class="btn-ghost" href="/login">登录</a>
+  </div>
 </div>
 
 <main class="wrap">
@@ -91,7 +108,7 @@ a{color:inherit;text-decoration:none}
     <div class="card-b">
       <div class="row">
         <span class="state"><i class="dot" id="dot"></i><span id="stateText">正在获取状态</span></span>
-        <span class="addr" id="addr">—</span>
+        <span class="addr" id="addr" title="点击复制服务器地址">—</span>
       </div>
       <div class="kv">
         <div>在线人数<b id="online">—</b></div>
@@ -147,6 +164,43 @@ a{color:inherit;text-decoration:none}
 (function(){
   var $ = function(id){ return document.getElementById(id); };
   var last = null;
+  var currentAddr = '';
+
+  // 复制文本：优先 Clipboard API，旧浏览器/非安全上下文退回 textarea
+  function copyText(text, done){
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done){
+    var t = document.createElement('textarea');
+    t.value = text;
+    t.style.position = 'fixed';
+    t.style.opacity = '0';
+    document.body.appendChild(t);
+    t.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(t);
+    if (done) done();
+  }
+
+  // 明暗切换：和控制面板共用 localStorage['xiaona-theme']
+  var themeBtn = $('theme');
+  function syncThemeLabel(){
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    themeBtn.textContent = dark ? '亮色' : '暗色';
+  }
+  themeBtn.onclick = function(){
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var next = dark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('xiaona-theme', next); } catch (e) {}
+    syncThemeLabel();
+  };
+  syncThemeLabel();
 
   function esc(s){
     return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
@@ -163,7 +217,9 @@ a{color:inherit;text-decoration:none}
   function render(j){
     last = j;
     $('title').textContent = (j.name || '服务器') + ' · 主页';
-    $('addr').textContent = j.address || '未配置服务器';
+    currentAddr = j.address || '';
+    $('addr').textContent = currentAddr || '未配置服务器';
+    $('addr').title = currentAddr ? '点击复制服务器地址' : '未配置服务器';
     $('footAddr').textContent = j.address || '未配置服务器';
     $('online').textContent = j.connected ? String(j.online || 0) : '—';
     $('bridge').textContent = j.connected ? '已连接' : (j.configured ? '未连接' : '未配置');
@@ -188,16 +244,24 @@ a{color:inherit;text-decoration:none}
         $('ts').textContent = '稍后自动重试';
       });
   }
-  $('xamlUrl').textContent = location.origin + '/pcl/Homepage.xaml';
+  var xamlUrl = location.origin + '/pcl/Homepage.xaml';
+  $('xamlUrl').textContent = xamlUrl;
   $('copyXaml').onclick = function(){
-    var url = location.origin + '/pcl/Homepage.xaml';
-    var done = function(){ var b = $('copyXaml'); b.textContent = '已复制'; setTimeout(function(){ b.textContent = '复制下载地址'; }, 1500); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, done);
-    else {
-      var t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select();
-      try { document.execCommand('copy'); } catch(e){}
-      document.body.removeChild(t); done();
-    }
+    copyText(xamlUrl, function(){
+      var b = $('copyXaml');
+      b.textContent = '已复制';
+      setTimeout(function(){ b.textContent = '复制下载地址'; }, 1500);
+    });
+  };
+  // 点服务器地址直接复制，成功后原地提示
+  $('addr').onclick = function(){
+    if (!currentAddr) return;
+    copyText(currentAddr, function(){
+      var el = $('addr');
+      el.textContent = '已复制：' + currentAddr;
+      clearTimeout(el._copied);
+      el._copied = setTimeout(function(){ el.textContent = currentAddr; }, 1200);
+    });
   };
   load();
   setInterval(load, 10000);
