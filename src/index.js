@@ -363,7 +363,7 @@ function takeSteerable(s, uid) {
 function submitAiJob(ckey, job) {
     let s = aiSessions.get(ckey);
     if (!s) {
-        s = { ckey, inbox: [], running: false, abort: null };
+        s = { ckey, inbox: [], running: false, abort: null, lastInterrupted: null };
         aiSessions.set(ckey, s);
     }
     s.inbox.push(job);
@@ -403,6 +403,12 @@ async function runAiTurn(s, job) {
     // 本轮消息 / 被引导进来的消息（既追加给模型，也留一份给 runAI 写记忆）
     let jobs = [job];
     const steered = [];
+    // 上一轮被打断（超时 / 喊停 / 报错）后，同一个人这一轮直接把最近对话也给模型，
+    // 不指望它自己想起来 read_history —— 用户要的是"接着刚才的说"。
+    const resumeAfterInterrupt = !!(s.lastInterrupted
+        && s.lastInterrupted.uid === String(job.uid)
+        && Date.now() - s.lastInterrupted.at < 10 * 60 * 1000);
+    s.lastInterrupted = null;
     try {
         ticket = await acquire({
             userId: job.uid,
@@ -441,9 +447,11 @@ async function runAiTurn(s, job) {
         const timedOut = new Promise((_, reject) => {
             ac.signal.addEventListener('abort', () => reject(new Error('AI_RUN_TIMEOUT')), { once: true });
         });
-        await Promise.race([runAI(jobs, steered, ac.signal, steer), timedOut]);
+        await Promise.race([runAI(jobs, steered, ac.signal, steer, { includeHistory: resumeAfterInterrupt }), timedOut]);
     } catch (e) {
         const why = ac.signal.reason && ac.signal.reason.message;
+        // 这一轮被打断：记住是谁，下一轮把最近对话自动带上（见 resumeAfterInterrupt）
+        s.lastInterrupted = { uid: String(job.uid), at: Date.now() };
         if (why === 'SHUTUP') {
             logger.info(`[AI] ${s.ckey} 对方要求别说话，本轮已中止`);
         } else if (ac.signal.aborted) {
@@ -3643,9 +3651,10 @@ async function onMessage(event) {
 /**
  * 把一条 QQ 消息整理成 AI 需要的上下文（昵称 / 元数据行 / 记忆键 / 图片）。
  * 正常消息和运行中被「引导」进来的消息都走这里，保证模型看到的信息一致。
+ * @param {object} [opts] { withHistory }：上一轮被打断过时，把「最近对话」一起注入
  * @returns {Promise<object|null>} null = 这条不该参与 AI（如对方是机器人）
  */
-async function prepareAiJob(job) {
+async function prepareAiJob(job, { withHistory = false } = {}) {
     const { event, userInput } = job;
     const meta = await getMemberMeta(event);
     // 对方是机器人：默认不接话（两个机器人互相刷屏没意义，也容易被判刷屏）。BOT_REPLY=true 可放开
@@ -3666,7 +3675,7 @@ async function prepareAiJob(job) {
         metaLine,
         memKey,
         memScene: memorySceneOf(event),
-        mem: memoryContext(memKey, undefined, { withHistory: false }),
+        mem: memoryContext(memKey, undefined, { withHistory }),
         // 本条消息里的图片：交给 AI 自主决定是否调用 analyze_image 识别
         imgs: imageSegmentsOf(event.message),
     };
@@ -3674,18 +3683,49 @@ async function prepareAiJob(job) {
 
 // AI 回复主流程（含搜索/语音/多条回复）
 // jobs：本轮要处理的消息（首条 + 同一个人连发的几条）；steered：运行中被引导进来的消息
-async function runAI(jobs, steered = [], signal = null, steer = null) {
+// opts.includeHistory：上一轮被打断过，这次把「最近对话」一并注入（默认不注入，靠 AI 自己 read_history）
+async function runAI(jobs, steered = [], signal = null, steer = null, { includeHistory = false } = {}) {
     // 没配 AI_API_KEY：AI 对话整体停用（启动时已提示，这里静默跳过，不在群里刷屏）
     if (!AI_ENABLED) return;
     if (signal && signal.aborted) return;
     const first = jobs[0];
     // 会话设置（语音开关 / 补充提示词）；未传入时回退到该会话的生效值
     const cs = first.cset || chatCfg.getEffective(convKey(first.event));
+    // 本轮真正交给模型的消息（首条 + 同一人连发 + 运行中引导进来的）；提前声明，
+    // 让任何退出路径都能把它们记进记忆。
+    const prepared = [];
+    // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
+    let voiceSent = false;
+    // 本轮 AI 自己发出去的内容（唱歌/图片/旁白）：ownSaid 给 agent 循环回灌，
+    // saidNow 留一份写进记忆，保证它下一轮也知道自己发过什么
+    const saidNow = [];
+    const ownSaid = [];
+    // 被打断（超时 / 对方喊停 / 报错）时也要把这一轮说过的话写进记忆：
+    // 否则用户下一句问"刚才那个呢"，read_history 里一片空白，上下文就断了。
+    const rememberUsers = (items) => {
+        for (const p of items) {
+            recordMessage(p.memKey, 'user', p.userInput, {
+                name: p.meta.name, qq: String(p.event.user_id), isBot: p.meta.isRobot, scene: p.memScene,
+            });
+        }
+    };
+    let aiMemSaved = false;
+    const saveAiSaid = () => {
+        if (aiMemSaved || !saidNow.length || !prepared.length) return;
+        aiMemSaved = true;
+        recordMessage(prepared[0].memKey, 'ai', saidNow.join('\n'), { scene: prepared[0].memScene });
+    };
+    // 被打断时补记：喊停/报错会把排队消息清掉或丢弃，这一轮看到的消息全记；
+    // 超时则会把引导/连发的消息放回收件箱重跑，只补记首条，免得记忆里重复。
+    const saveAbortedUsers = () => {
+        const why = signal && signal.reason;
+        const shutup = !!(why && (why.name === 'ShutUp' || why.message === 'SHUTUP'));
+        rememberUsers(shutup ? [...prepared, ...steered] : prepared.slice(0, 1));
+    };
     try {
         logger.info('🤖 AI 决策中...');
-        const prepared = [];
         for (const j of jobs) {
-            const p = await prepareAiJob(j);
+            const p = await prepareAiJob(j, { withHistory: includeHistory && !prepared.length });
             if (p) prepared.push(p);
         }
         if (!prepared.length) return;
@@ -3695,12 +3735,6 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         bumpConvStat(convKey(first.event), 'wake');
         // 同一轮里只要有一条是明确在叫它，整轮就不能跳过
         const allowSkip = prepared.every((p) => p.allowSkip);
-        // sing 工具自己会把歌声发出去；记一下，模型若没再给文字就不必补"没听懂"的兜底
-        let voiceSent = false;
-        // 本轮 AI 自己发出去的内容（唱歌/图片/旁白）：ownSaid 给 agent 循环回灌，
-        // saidNow 留一份写进记忆，保证它下一轮也知道自己发过什么
-        const saidNow = [];
-        const ownSaid = [];
         const result = await aiReply({
             metaLine: prepared[0].metaLine,
             memory: prepared[0].mem,
@@ -3745,6 +3779,9 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         let { reply, wantVoice } = result;
         // 本轮已被整轮超时/打断取消：不要再发迟到的回复（避免和后面消息的回答串在一起）
         if (signal && signal.aborted) {
+            // 这一轮说过的话照样进记忆，不然下一句就接不上刚才的话题了
+            saveAbortedUsers();
+            saveAiSaid();
             logger.info('[AI] 本轮已取消，丢弃迟到的生成结果');
             return;
         }
@@ -3758,14 +3795,10 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
         if (!cs.voice) wantVoice = false;
 
         // 真正触发回复的这几条才进记忆（含被引导进来的；带上当时所在的群 / 私聊）
-        for (const p of [...prepared, ...steered]) {
-            recordMessage(p.memKey, 'user', p.userInput, {
-                name: p.meta.name, qq: String(p.event.user_id), isBot: p.meta.isRobot, scene: p.memScene,
-            });
-        }
+        rememberUsers([...prepared, ...steered]);
 
         // AI 中途自己发出去的内容（唱歌、地图、旁白）也进记忆，否则下一轮它不知道自己发过什么
-        if (saidNow.length) recordMessage(prepared[0].memKey, 'ai', saidNow.join('\n'), { scene: prepared[0].memScene });
+        saveAiSaid();
 
         // 拆分 AI 输出的多条（不再按方括号过滤：正常内容含方括号/代码也照常发）
         let parts = splitReplies(reply)
@@ -3801,10 +3834,16 @@ async function runAI(jobs, steered = [], signal = null, steer = null) {
     } catch (err) {
         // 整轮超时被取消：外层会提示"想太久卡住了"，这里不刷"技术问题"
         if (signal && signal.aborted) {
+            // 被打断也要把这一轮的话留下，下一句才接得上
+            saveAbortedUsers();
+            saveAiSaid();
             logger.warn('[AI] 本轮已被取消（超时/打断），跳过错误回复');
             restartAfterUpdateIfNeeded();
             return;
         }
+        // 报错回复失败，但对方确实说过这些：照样记进记忆，别因为一次异常就断片
+        rememberUsers([...prepared, ...steered]);
+        saveAiSaid();
         // 只记一句人话，别把整个 retcode JSON 连同堆栈刷出来
         logger.error('❌ 处理异常:', briefApiErr(err));
         // 群消息发送失败多半是被禁言，这时「稍后再试」也发不出去，就别白试了
