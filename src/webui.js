@@ -620,7 +620,7 @@ html[data-theme="dark"]{
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
   background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.card{width:90%;max-width:100%;padding:28px 26px;border-radius:var(--radius);
+.card{width:360px;max-width:100%;padding:28px 26px;border-radius:var(--radius);
   background:var(--card);border:1px solid var(--line);box-shadow:0 2px 12px rgba(0,0,0,.06)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;flex:0 0 auto;
