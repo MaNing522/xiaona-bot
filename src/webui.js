@@ -1519,10 +1519,10 @@ function drawOne(d){
   if(!cv)return;
   var dpr=window.devicePixelRatio||1;
   var w=Math.max(300,wrap.clientWidth-2);
-  // 单张地图全屏时铺满窗口，否则按宽度取一个舒服的高度
+  // 单张地图全屏时铺满窗口，否则按宽度取一个舒服的高度（比原来高 150%）
   var card=document.querySelector('.mapcard[data-card="'+d.cid+'"]');
   var single=!!(card&&card.classList.contains('fsnow'));
-  var h=single?Math.max(200,window.innerHeight-58):Math.max(300,Math.min(470,Math.round(w*0.55)));
+  var h=single?Math.max(200,window.innerHeight-58):Math.max(450,Math.min(705,Math.round(w*0.825)));
   cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
   cv.style.height=h+'px';
   var ctx=cv.getContext('2d');
