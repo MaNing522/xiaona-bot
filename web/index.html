@@ -75,7 +75,7 @@ h1{font-size:17px;margin:0}
 .span2{grid-column:1/-1}
 
 /* ---------- 布局：左侧栏 + 顶栏 + 右内容 ---------- */
-.app{display:flex;gap:16px;align-items:flex-start;margin:0 auto}
+.app{display:flex;gap:16px;align-items:flex-start;width:90%;margin:0 auto}
 .side{position:sticky;top:16px;flex:0 0 232px;width:232px;padding:16px;
   background:var(--card);border:1px solid var(--card-line);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
@@ -523,7 +523,7 @@ function setAuth(on){
     location.href='/';};
 }
 async function api(p,o){const r=await fetch(p,Object.assign({'Content-Type':'application/json'},o||{}));
-  if(r.status===401){xnLoggedIn=false;location.href='/';throw new Error('未登录');}
+  if(r.status===401){xnLoggedIn=false;location.href='/login';throw new Error('未登录');}
   const d=await r.json().catch(()=>({}));if(d.error)throw new Error(d.error);
   if(xnLoggedIn!==true)setAuth(true);
   return d;}

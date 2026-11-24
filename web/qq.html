@@ -51,7 +51,7 @@ body{
 }
 /* 应用窗口：仿 QQ NT 的圆角卡片 */
 .app{
-  width:min(1080px,96vw);height:min(760px,92vh);
+  width:90%;height:min(760px,92vh);
   display:grid;grid-template-columns:264px 1fr;
   background:var(--card);border-radius:14px;overflow:hidden;
   box-shadow:0 24px 60px rgba(23,43,77,.18),0 2px 8px rgba(23,43,77,.08);
@@ -184,7 +184,7 @@ body{
         <div class="me-name">小钠</div>
         <div class="me-sub">已登录 · 网页 QQ</div>
       </div>
-      <button class="icon-btn" title="控制面板" onclick="location.href='/'">
+      <button class="icon-btn" title="控制面板" onclick="location.href='/console'">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
       </button>
     </div>
@@ -214,7 +214,7 @@ body{
         </div>
       </div>
       <div class="head-actions">
-        <a class="head-link" href="/">控制面板</a>
+        <a class="head-link" href="/console">控制面板</a>
       </div>
     </header>
 

@@ -620,7 +620,7 @@ html[data-theme="dark"]{
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
   background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.card{width:360px;max-width:100%;padding:28px 26px;border-radius:var(--radius);
+.card{width:90%;max-width:100%;padding:28px 26px;border-radius:var(--radius);
   background:var(--card);border:1px solid var(--line);box-shadow:0 2px 12px rgba(0,0,0,.06)}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;flex:0 0 auto;
@@ -762,9 +762,9 @@ function post(url, body, cb) {
   xhr.send(JSON.stringify(body || {}));
 }
 function done(j) {
-  if (j.role === 'owner') { location.href = '/'; return; }
-  if (j.role === 'master' || j.role === 'admin') { location.href = '/admin'; return; }
-  location.href = '/me' + (j.needSetPassword ? '?setpwd=1' : '');
+  // 登录后统一回主页（右上角按钮变成「进入控制台」）；首次登录仍引导去设密码
+  if (j.needSetPassword) { location.href = '/me?setpwd=1'; return; }
+  location.href = '/';
 }
 
 // 密码登录
@@ -835,7 +835,7 @@ html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:560px;margin:0 auto}
+.wrap{width:90%;margin:0 auto}
 .head{display:flex;align-items:center;gap:12px;margin-bottom:16px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
   background:linear-gradient(135deg,#1677ff,#4096ff)}
@@ -1004,7 +1004,7 @@ html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:760px;margin:0 auto}
+.wrap{width:90%;margin:0 auto}
 .head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
   background:linear-gradient(135deg,#1677ff,#4096ff)}
@@ -1144,7 +1144,7 @@ function heatmapPage(sess) {
   const subText = isOwner
     ? '玩家走过的区块 · 颜色=玩家 / 深浅=走过次数 · 多人走过时颜色叠加（最后走的在上层）· 拖动移动 / 滚轮缩放'
     : '你绑定游戏账号走过的区块 · 颜色=账号 / 深浅=走过次数 · 拖动移动 / 滚轮缩放';
-  const backHref = isOwner ? '/' : '/me';
+  const backHref = isOwner ? '/console' : '/me';
   const backText = isOwner ? '← 返回控制面板' : '← 我的账号';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -1161,7 +1161,7 @@ html[data-theme="dark"]{--bg:#141619;--card:#1c1f24;--line:#2c313a;--txt:#e6e8eb
 *{box-sizing:border-box}
 body{margin:0;padding:22px 16px 40px;background:var(--bg);color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:1440px;margin:0 auto}
+.wrap{width:90%;margin:0 auto}
 .head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;font-size:20px;
   background:linear-gradient(135deg,#1677ff,#4096ff)}
@@ -2226,19 +2226,32 @@ async function route(req, res, url) {
   // 健康检查：放在一切鉴权之前（探活工具不该需要登录），且不返回任何敏感信息
   if (url.pathname === '/health') return handleHealth(res);
 
-  // 主页：未登录给空白主页（只有右上角登录入口），登录后才给控制面板
-  if (url.pathname === '/' || url.pathname === '/index.html') {
+  // 主页：所有人都给同一个公开主页（未登录右上角是「登录」，登录后变成「进入控制台」）
+  if (url.pathname === '/' || url.pathname === '/home' || url.pathname === '/home.html') {
+    if (!fs.existsSync(HOME_FILE)) return sendJSON(res, 500, { error: '缺少 web/home.html' });
+    return sendHtml(res, 200, fs.readFileSync(HOME_FILE));
+  }
+
+  // 控制面板：所有者专属；管理员 / 普通玩家按身份跳转
+  if (url.pathname === '/console' || url.pathname === '/console.html') {
     const s = sessionOf(req);
-    // 非所有者不配进管理面板：管理员去 /admin，普通玩家去「我的账号」
-    if (s && s.role !== 'owner') {
+    if (!s) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (s.role !== 'owner') {
       res.writeHead(302, { Location: canAdmin(s.role) ? '/admin' : '/me', 'Cache-Control': 'no-store' });
       return res.end();
     }
-    const file = s ? WEB_DIR : HOME_FILE;
-    if (!fs.existsSync(file)) return sendJSON(res, 500, { error: `缺少 ${path.relative(ROOT, file)}` });
-    const html = fs.readFileSync(file);
+    if (!fs.existsSync(WEB_DIR)) return sendJSON(res, 500, { error: '缺少 web/index.html' });
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return res.end(html);
+    return res.end(fs.readFileSync(WEB_DIR));
+  }
+
+  // 旧地址兼容：/index.html 直接跳控制面板
+  if (url.pathname === '/index.html') {
+    res.writeHead(302, { Location: '/console', 'Cache-Control': 'no-store' });
+    return res.end();
   }
 
   // 我的账号：非所有者登录后的唯一入口
@@ -2264,7 +2277,7 @@ async function route(req, res, url) {
     }
     // 所有者直接用主面板里的「账户管理」内嵌页，不再单独开一个页面
     if (s.role === 'owner') {
-      res.writeHead(302, { Location: '/#accounts', 'Cache-Control': 'no-store' });
+      res.writeHead(302, { Location: '/console#accounts', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, adminPage(s));
@@ -2284,7 +2297,7 @@ async function route(req, res, url) {
   if (url.pathname === '/login' || url.pathname === '/login.html') {
     const s = sessionOf(req);
     if (s) {
-      res.writeHead(302, { Location: s.role === 'owner' ? '/' : (canAdmin(s.role) ? '/admin' : '/me'), 'Cache-Control': 'no-store' });
+      res.writeHead(302, { Location: s.role === 'owner' ? '/console' : (canAdmin(s.role) ? '/admin' : '/me'), 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, loginPage('', captchaNeeded(clientIp(req))));
@@ -2526,12 +2539,6 @@ async function route(req, res, url) {
       logger.warn(`[网页直聊] 这轮没回成：${reason}`);
       return sendJSON(res, 502, { ok: false, error: reason });
     }
-  }
-
-  // 公开的服务器主页：给玩家和 PCL 用，不需要登录（只暴露在线状态与玩家名）
-  if (url.pathname === '/home' || url.pathname === '/home.html') {
-    if (!fs.existsSync(HOME_FILE)) return sendJSON(res, 500, { error: '缺少 web/home.html' });
-    return sendHtml(res, 200, fs.readFileSync(HOME_FILE));
   }
 
   // 公开数据：服务器主页轮询用。不返回密钥、群号、坐标等敏感信息。

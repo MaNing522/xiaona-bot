@@ -98,7 +98,7 @@ a{color:inherit;text-decoration:none}
   <div class="brand"><span class="logo">小钠</span><b id="title">服务器主页</b></div>
   <div class="acts">
     <button class="btn-ghost" id="theme" type="button">暗色</button>
-    <a class="btn-ghost" href="/login">登录</a>
+    <a class="btn-ghost" id="entry" href="/login">登录</a>
   </div>
 </div>
 
@@ -121,7 +121,7 @@ a{color:inherit;text-decoration:none}
   <section class="card">
     <div class="card-h"><span>快速入口</span></div>
     <div class="card-b" style="padding-top:4px;padding-bottom:6px">
-      <a class="item" href="/login">
+      <a class="item" href="/console">
         <div><div class="t">网页控制面板</div><div class="d">管理会话、全局设置与小钠的能力</div></div>
         <span class="go">›</span>
       </a>
@@ -267,6 +267,17 @@ a{color:inherit;text-decoration:none}
   setInterval(load, 10000);
   // 页面从后台切回来时立刻刷新一次
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) load(); });
+
+  // 登录后仍留在主页：右上角「登录」换成「进入控制台」（按身份跳转）
+  fetch('/api/session', { cache: 'no-store' }).then(function(r){
+    return r.ok ? r.json() : null;
+  }).then(function(j){
+    if (!j) return;
+    var el = $('entry');
+    if (!el) return;
+    el.textContent = '进入控制台';
+    el.href = j.role === 'owner' ? '/console' : (j.role === 'admin' || j.role === 'master' ? '/admin' : '/me');
+  }).catch(function(){});
 })();
 </script>
 </body>
