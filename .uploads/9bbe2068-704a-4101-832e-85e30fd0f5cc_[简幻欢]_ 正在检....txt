@@ -1,0 +1,720 @@
+[简幻欢]: 正在检查磁盘占用情况，请稍等...
+[简幻欢]: 已自动更新服务器端口等信息！
+[简幻欢]: 正在拉取docker镜像，请稍等...
+[简幻欢]: 已完成docker镜像拉取！
+使用 Java21 启动
+最大堆内存: 15360M
+核心文件: fabric-server-mc.1.21.11-loader.0.19.0-launcher.1.1.1.jar
+[2026-11-24 08:36:45] 正在启动服务器...
+Starting net.fabricmc.loader.impl.game.minecraft.BundlerClassPathCapture
+[08:36:46] [main/INFO]: Loading Minecraft 1.21.11 with Fabric Loader 0.19.0
+[08:36:46] [ForkJoinPool-1-worker-1/WARN]: Mod paradigm uses the version 2.4.2b which isn't compatible with Loader's extended semantic version format (Could not parse version number component '2b'!), SemVer is recommended for reliably evaluating dependencies and prioritizing newer version
+[08:36:47] [main/INFO]: Loading 208 mods:
+	- adventure-platform-fabric 6.8.0
+	   |-- net_kyori_adventure-platform-api 4.4.1
+	   |-- net_kyori_adventure-platform-mod-shared-fabric-repack 6.8.0
+	   |-- net_kyori_adventure-text-serializer-ansi 4.25.0
+	   |-- net_kyori_adventure-text-serializer-gson 4.25.0
+	   |-- net_kyori_adventure-text-serializer-json 4.25.0
+	   |-- net_kyori_adventure-text-serializer-plain 4.25.0
+	   |-- net_kyori_ansi 1.1.1
+	   |-- net_kyori_examination-api 1.3.0
+	   |-- net_kyori_examination-string 1.3.0
+	   \-- net_kyori_option 1.1.0
+	- appleskin 3.0.8+mc1.21.11
+	- architectury 19.0.1
+	- better-fabric-console 1.2.9
+	   |-- io_leangen_geantyref_geantyref 1.3.16
+	   |-- net_fabricmc_mapping-io 0.8.0
+	   |-- org_fusesource_jansi_jansi 2.4.2
+	   |-- org_jline_jline 3.30.6
+	   |-- org_jline_jline-terminal-jansi 3.30.6
+	   |-- org_spongepowered_configurate-core 4.2.0
+	   \-- org_spongepowered_configurate-hocon 4.2.0
+	- c2me 0.3.6.0.0+1.21.11
+	   |-- c2me-base 0.3.6.0.0+1.21.11
+	   |-- c2me-client-uncapvd 0.3.6.0.0+1.21.11
+	   |-- c2me-fixes-chunkio-threading-issues 0.3.6.0.0+1.21.11
+	   |-- c2me-fixes-general-threading-issues 0.3.6.0.0+1.21.11
+	   |-- c2me-fixes-worldgen-threading-issues 0.3.6.0.0+1.21.11
+	   |-- c2me-fixes-worldgen-vanilla-bugs 0.3.6.0.0+1.21.11
+	   |-- c2me-notickvd 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-allocs 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-chunkio 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-dfc 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-math 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-scheduling 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-worldgen-general 0.3.6.0.0+1.21.11
+	   |-- c2me-opts-worldgen-vanilla 0.3.6.0.0+1.21.11
+	   |-- c2me-rewrites-chunk-serializer 0.3.6.0.0+1.21.11
+	   |-- c2me-rewrites-chunk-system 0.3.6.0.0+1.21.11
+	   |-- c2me-rewrites-chunkio 0.3.6.0.0+1.21.11
+	   |-- c2me-server-utils 0.3.6.0.0+1.21.11
+	   |-- c2me-threading-lighting 0.3.6.0.0+1.21.11
+	   |-- com_electronwill_night-config_core 3.6.5
+	   |-- com_electronwill_night-config_toml 3.6.5
+	   |-- com_ibm_async_asyncutil 0.1.0
+	   |-- io_reactivex_rxjava3_rxjava 3.1.12
+	   |-- mixinsquared 0.2.0-beta.6
+	   |-- net_objecthunter_exp4j 0.4.8
+	   |-- org_jctools_jctools-core 4.0.5
+	   \-- org_reactivestreams_reactive-streams 1.0.4
+	- carpet 1.4.194+v251223
+	- carpet-ams-addition 26.1.4-beta.3
+	   |-- annotationtoolbox 0.3
+	   \-- top_1024byteeeee_tiny_yaml 1.0.3
+	- carpet-extra 1.4.185
+	- carpet-igny-addition 1.8.4
+	   |-- conditional-mixin 0.6.4
+	   |-- mixinextras 0.5.3
+	   |-- net_fabricmc_tiny-mappings-parser 0.3.0+build.17
+	   \-- ryansrenderingkit 1.2.0
+	- carpet-org-addition 1.41.5
+	- carpet-sdk-addition 0.3+build.37
+	   \-- jep_jep 2.24
+	- carpet-tis-addition 1.79.0
+	   \-- conditional-mixin 0.6.4
+	- cca 1.12.5+mc1.21.11
+	   \-- conditional-mixin 0.6.4
+	- easyauth 3.4.4
+	   |-- at_favre_lib_bcrypt 0.10.2
+	   |-- at_favre_lib_bytes 1.6.1
+	   |-- com_mysql_mysql-connector-j 9.2.0
+	   |-- de_mkammerer_argon2-jvm 2.12
+	   |-- de_mkammerer_argon2-jvm-nolibs 2.12
+	   |-- net_java_dev_jna_jna 5.16.0
+	   |-- org_iq80_leveldb_leveldb 0.12
+	   |-- org_iq80_leveldb_leveldb-api 0.12
+	   |-- org_postgresql_postgresql 42.7.10
+	   |-- org_xerial_sqlite-jdbc 3.49.1.0
+	   \-- server_translations_api 2.5.2+1.21.9-pre3
+	        \-- packet_tweaker 0.6.0-pre.1+1.21.2-pre3
+	- fabric-api 0.141.3+1.21.11
+	   |-- fabric-api-base 1.0.5+4ebb5c083e
+	   |-- fabric-api-lookup-api-v1 1.6.114+20dc27073e
+	   |-- fabric-biome-api-v1 17.1.1+4fc5413f3e
+	   |-- fabric-block-api-v1 1.1.10+4ebb5c083e
+	   |-- fabric-block-view-api-v2 1.0.39+4ebb5c083e
+	   |-- fabric-command-api-v2 2.4.7+6b42a6003e
+	   |-- fabric-content-registries-v0 10.2.14+4fc5413f3e
+	   |-- fabric-convention-tags-v1 2.1.55+7f945d5b3e
+	   |-- fabric-convention-tags-v2 2.17.3+8ef948ba3e
+	   |-- fabric-crash-report-info-v1 0.3.23+4ebb5c083e
+	   |-- fabric-data-attachment-api-v1 1.8.47+eed0806f3e
+	   |-- fabric-data-generation-api-v1 23.4.0+69974c4e3e
+	   |-- fabric-dimensions-v1 4.0.28+4fc5413f3e
+	   |-- fabric-entity-events-v1 3.1.1+1d0ab4303e
+	   |-- fabric-events-interaction-v0 4.1.0+3b89ecf63e
+	   |-- fabric-game-rule-api-v1 2.0.3+4fc5413f3e
+	   |-- fabric-item-api-v1 11.5.20+d0c46b9e3e
+	   |-- fabric-item-group-api-v1 4.2.36+4fc5413f3e
+	   |-- fabric-key-binding-api-v1 1.1.7+4fc5413f3e
+	   |-- fabric-lifecycle-events-v1 2.6.15+4ebb5c083e
+	   |-- fabric-loot-api-v2 3.0.73+3f89f5a53e
+	   |-- fabric-loot-api-v3 2.0.20+78c8b4663e
+	   |-- fabric-message-api-v1 6.1.12+4ebb5c083e
+	   |-- fabric-model-loading-api-v1 6.0.15+4fc5413f3e
+	   |-- fabric-object-builder-api-v1 21.1.39+4fc5413f3e
+	   |-- fabric-particles-v1 4.2.11+4fc5413f3e
+	   |-- fabric-recipe-api-v1 8.2.3+4ebb5c083e
+	   |-- fabric-registry-sync-v0 6.2.5+1718722b3e
+	   |-- fabric-renderer-api-v1 8.0.3+f4ffd2e53e
+	   |-- fabric-renderer-indigo 5.0.3+f4ffd2e53e
+	   |-- fabric-rendering-fluids-v1 3.1.43+4ebb5c083e
+	   |-- fabric-rendering-v1 16.2.10+0290ad933e
+	   |-- fabric-resource-conditions-api-v1 5.0.35+4fc5413f3e
+	   |-- fabric-resource-loader-v0 3.3.4+4fc5413f3e
+	   |-- fabric-resource-loader-v1 1.0.10+78c8b4663e
+	   |-- fabric-screen-api-v1 3.1.7+4ebb5c083e
+	   |-- fabric-screen-handler-api-v1 1.3.161+4fc5413f3e
+	   |-- fabric-serialization-api-v1 1.0.5+4ebb5c083e
+	   |-- fabric-sound-api-v1 1.0.51+4fc5413f3e
+	   |-- fabric-tag-api-v1 1.2.20+4fc5413f3e
+	   |-- fabric-transfer-api-v1 6.0.25+4fc5413f3e
+	   \-- fabric-transitive-access-wideners-v1 7.1.0+014c8cec3e
+	- fabric-language-kotlin 1.13.12+kotlin.2.4.0
+	   |-- org_jetbrains_kotlin_kotlin-reflect 2.4.0
+	   |-- org_jetbrains_kotlin_kotlin-stdlib 2.4.0
+	   |-- org_jetbrains_kotlin_kotlin-stdlib-jdk7 2.4.0
+	   |-- org_jetbrains_kotlin_kotlin-stdlib-jdk8 2.4.0
+	   |-- org_jetbrains_kotlinx_atomicfu-jvm 0.33.0
+	   |-- org_jetbrains_kotlinx_kotlinx-coroutines-core-jvm 1.11.0
+	   |-- org_jetbrains_kotlinx_kotlinx-coroutines-jdk8 1.11.0
+	   |-- org_jetbrains_kotlinx_kotlinx-datetime-jvm 0.8.0
+	   |-- org_jetbrains_kotlinx_kotlinx-io-bytestring-jvm 0.9.0
+	   |-- org_jetbrains_kotlinx_kotlinx-io-core-jvm 0.9.0
+	   |-- org_jetbrains_kotlinx_kotlinx-serialization-cbor-jvm 1.11.0
+	   |-- org_jetbrains_kotlinx_kotlinx-serialization-core-jvm 1.11.0
+	   \-- org_jetbrains_kotlinx_kotlinx-serialization-json-jvm 1.11.0
+	- fabricloader 0.19.0
+	   \-- mixinextras 0.5.3
+	- ferritecore 8.2.0
+	- fuji 14.10.0
+	   |-- com_jayway_jsonpath_json-path 2.9.0
+	   |-- common-economy-api 1.1.1
+	   |-- fuji_evaluator 14.10.0-e22ce07ff0-mc1.21.11
+	   |-- net_luckperms_api 5.4
+	   |-- org_quartz-scheduler_quartz 2.5.0
+	   \-- sgui 1.11.0+1.21.9
+	- gca_wrapper 1.0.6
+	   \-- gca 2.12.8-mc1.21.11+build.97
+	- grieflogger 19.1.1
+	- grimac 2.3.75-9bc9b3f
+	   |-- ac_grim_grimac_shared 2.3.75-9bc9b3f
+	   |-- grimac-fabric-intermediary 2.3.75-9bc9b3f
+	   |    |-- ac_grim_grimac_common 2.3.75-9bc9b3f
+	   |    |-- ac_grim_grimac_grim-internal 1.6.0.13
+	   |    |-- ac_grim_grimac_grimapi 1.6.0.13
+	   |    |-- ac_grim_grimac_shared 2.3.75-9bc9b3f
+	   |    |-- cloud 2.0.0-beta.15
+	   |    |    |-- org_incendo_cloud-brigadier 2.0.0-beta.14
+	   |    |    |-- org_incendo_cloud-core 2.0.0
+	   |    |    |-- org_incendo_cloud-minecraft-modded-common-fabric-repack 2.0.0-beta.15
+	   |    |    \-- org_incendo_cloud-services 2.0.0
+	   |    |-- com_github_alexheretic_dynamics 4.0
+	   |    |-- com_github_alexheretic_fluent 2.0
+	   |    |-- com_googlecode_json-simple_json-simple 1.1.1
+	   |    |-- com_lmax_disruptor 3.4.4
+	   |    |-- com_zaxxer_hikaricp 7.0.2
+	   |    |-- github_scarsz_configuralize_slim 1.4.1
+	   |    |-- grimac-mc1161 2.3.75-9bc9b3f
+	   |    |-- grimac-mc1171 2.3.75-9bc9b3f
+	   |    |-- grimac-mc1194 2.3.75-9bc9b3f
+	   |    |-- grimac-mc1205 2.3.75-9bc9b3f
+	   |    |-- grimac-mc1215 2.3.75-9bc9b3f
+	   |    |-- net_kyori_adventure-api 4.26.1
+	   |    |-- net_kyori_adventure-key 4.26.1
+	   |    |-- net_kyori_adventure-text-minimessage 4.26.1
+	   |    |-- org_incendo_cloud-annotations 2.0.0
+	   |    |-- org_incendo_cloud-processors-requirements 1.0.0-rc.1
+	   |    |-- org_slf4j_slf4j-api 2.0.17
+	   |    \-- org_slf4j_slf4j-jdk14 2.0.17
+	   \-- packetevents 2.14.1+addb80e-SNAPSHOT
+	        |-- com_github_retrooper_api 2.14.1+addb80e-SNAPSHOT
+	        |-- com_github_retrooper_fabric-common 2.14.1+addb80e-SNAPSHOT
+	        |-- com_github_retrooper_netty-common 2.14.1+addb80e-SNAPSHOT
+	        |-- net_kyori_adventure-api 4.26.1
+	        |-- net_kyori_adventure-key 4.26.1
+	        |-- net_kyori_adventure-nbt 4.26.1
+	        |-- net_kyori_adventure-text-logger-slf4j 4.26.1
+	        \-- packetevents-fabric-intermediary 2.14.1+addb80e-SNAPSHOT
+	             |-- packetevents-mc1140 2.14.1+addb80e-SNAPSHOT
+	             |-- packetevents-mc1194 2.14.1+addb80e-SNAPSHOT
+	             |-- packetevents-mc1202 2.14.1+addb80e-SNAPSHOT
+	             |-- packetevents-mc1211 2.14.1+addb80e-SNAPSHOT
+	             \-- packetevents-mc1216 2.14.1+addb80e-SNAPSHOT
+	- java 21
+	- lithium 0.21.4+mc1.21.11
+	- luckperms 5.5.21
+	   \-- fabric-permissions-api-v0 0.6.1
+	- maykeshs-secure-server-mod 1.0.32
+	- minecraft 1.21.11
+	- minitweaks 1.5.6
+	- paradigm 2.4.2b
+	   \-- eu_avalanche7_common 2.4.2-b
+	- plan 5.7+build.3306
+	- playerbatch 2.0.1-mc1.21.11
+	- remscarpetaddition 1.3.14
+	   |-- annotationtoolbox 0.3
+	   \-- com_esotericsoftware_yamlbeans_yamlbeans 1.17
+	- scalablelux 0.1.6+fabric.c25518a
+	- servercore 1.5.15+1.21.11
+	   |-- org_yaml_snakeyaml 2.5
+	   |-- placeholder-api 2.8.1+1.21.10
+	   |-- space_arim_dazzleconf_dazzleconf-core 1.3.0-M2
+	   \-- space_arim_dazzleconf_dazzleconf-ext-snakeyaml 1.3.0-M2
+	- servux 0.9.9
+	   |-- fabric-networking-api-v1 5.1.6+6b6d71a53e
+	   \-- fabric-permissions-api-v0 0.6.1
+	- skinsrestorer 15.11.0
+	   |-- cloud 2.0.0-beta.15
+	   |    |-- org_incendo_cloud-brigadier 2.0.0-beta.14
+	   |    |-- org_incendo_cloud-core 2.0.0
+	   |    |-- org_incendo_cloud-minecraft-modded-common-fabric-repack 2.0.0-beta.15
+	   |    \-- org_incendo_cloud-services 2.0.0
+	   \-- fabric-permissions-api-v0 0.6.1
+	- textformattingeverywhere 2.0.4
+	- uilib 19.1.0
+	- viafabric 0.4.22+184-1.14-1.21
+	   |-- cotton-client-commands 1.1.0+1.15.2
+	   \-- viafabric-mc12111 0.4.22+184-1.14-1.21
+	- viaversion 5.12.2
+	- xiaona 2.13.0
+	- yamlconfig 19.1.2
+[08:36:47] [main/INFO]: SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/home/container/libraries/net/fabricmc/sponge-mixin/0.17.1+mixin.0.8.7/sponge-mixin-0.17.1+mixin.0.8.7.jar Service=Knot/Fabric Env=SERVER
+[08:36:47] [main/INFO]: Compatibility level set to JAVA_21
+SLF4J(W): Class path contains multiple SLF4J providers.
+SLF4J(W): Found provider [org.apache.logging.slf4j.SLF4JServiceProvider@50d68830]
+SLF4J(W): Found provider [org.slf4j.jul.JULServiceProvider@1e53135d]
+SLF4J(W): See https://www.slf4j.org/codes.html#multiple_bindings for an explanation.
+SLF4J(I): Actual provider is of type [org.apache.logging.slf4j.SLF4JServiceProvider@50d68830]
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.base.mixin
+[08:36:48] [main/INFO]: Global Executor Parallelism: 3 configured, 3 evaluated, 3 default evaluated
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.fixes.chunkio.threading_issues.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.fixes.general.threading_issues.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.fixes.worldgen.threading_issues.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.fixes.worldgen.vanilla_bugs.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.notickvd.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.allocs.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.chunkio.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.dfc.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.math.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.scheduling.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.worldgen.general.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.opts.worldgen.vanilla.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.rewrites.chunk_serializer.mixin
+[08:36:48] [main/INFO]: Disabling config ioSystem.gcFreeChunkSerializer: Incompatible with architectury@19.0.1 (*) (defined in c2me)
+[08:36:48] [main/INFO]: Disabling com.ishland.c2me.rewrites.chunk_serializer.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.rewrites.chunksystem.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.rewrites.chunkio.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.server.utils.mixin
+[08:36:48] [main/INFO]: Initializing com.ishland.c2me.threading.lighting.mixin
+[08:36:48] [main/WARN]: Reference map 'easyauth-mc1.21.11-refmap.json' for easyauth.mixins.json could not be read. If this is a development environment you can ignore this message
+[08:36:48] [main/INFO]: Loaded configuration file for Lithium: 171 options available, 1 override(s) found.
+[08:36:48] [main/ERROR]: Failed reading REFMAP JSON from : java.lang.NullPointerException Cannot invoke "org.spongepowered.asm.mixin.refmap.ReferenceMapper.setResourceName(String)" because "mapper" is null
+[08:36:48] [main/WARN]: Reference map '' for packetevents-mc1140.mixins.json could not be read. If this is a development environment you can ignore this message
+[08:36:48] [main/ERROR]: Failed reading REFMAP JSON from : java.lang.NullPointerException Cannot invoke "org.spongepowered.asm.mixin.refmap.ReferenceMapper.setResourceName(String)" because "mapper" is null
+[08:36:48] [main/WARN]: Reference map '' for packetevents-mc1914.mixins.json could not be read. If this is a development environment you can ignore this message
+[08:36:48] [main/ERROR]: Failed reading REFMAP JSON from : java.lang.NullPointerException Cannot invoke "org.spongepowered.asm.mixin.refmap.ReferenceMapper.setResourceName(String)" because "mapper" is null
+[08:36:48] [main/WARN]: Reference map '' for packetevents-mc1202.mixins.json could not be read. If this is a development environment you can ignore this message
+[08:36:48] [main/WARN]: Error loading class: net/minecraft/world/level/dimension/end/DragonRespawnStage$3 (java.lang.ClassNotFoundException: net/minecraft/world/level/dimension/end/DragonRespawnStage$3)
+[08:36:48] [main/WARN]: @Mixin target net/minecraft/world/level/dimension/end/DragonRespawnStage$3 was not found carpetamsaddition.mixins.json:rule.preventEndSpikeRespawn.DragonRespawnStageMixin from mod carpet-ams-addition
+[08:36:49] [main/INFO]: Force-disabling mixin 'world.block_entity_ticking.sleeping.furnace.AbstractFurnaceBlockEntityMixin' as rule 'mixin.world.block_entity_ticking.sleeping.furnace' (added by mods [carpet-igny-addition]) disables it and children
+[08:36:49] [main/INFO]: Initializing Better Fabric Console...
+[08:36:49] [main/INFO]: Initializing Better Fabric Console mappings...
+[08:36:49] [main/INFO]: Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.3).
+[08:36:50] [main/INFO]: Reading mappings...
+[08:36:50] [main/INFO]: Done in 0.1280 seconds.
+[08:36:50 INFO] [main]: [packetevents] Loading packetevents...
+[08:36:51 INFO] [main]: [packetevents] Loading block mappings for V_26_3/23...
+[08:36:51 INFO] [main]: [packetevents] Finished loading block mappings for V_26_3/23 in 362.720503ms
+[08:36:52 INFO] [main]: [packetevents] Loaded packetevents v2.14.1+addb80e-SNAPSHOT
+[08:36:54 WARN] [main]: [FabricLoader/Mixin] Method overwrite conflict for getClimateSettings in architectury.mixins.json:BiomeAccessor from mod architectury, previously written by carpet.mixins.Biome_scarpetMixin. Skipping method.
+[08:36:58 ERROR] [main]: [FabricLoader/Mixin] Mixin apply for mod plan failed plan.mixins.json:CommandSourceStackMixin from mod plan -> net.minecraft.class_2168: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.lambda$static$5(ServerMessageEvents.java:84)
+	at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.update(ArrayBackedEvent.java:54)
+	at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.<init>(ArrayBackedEvent.java:50)
+	at knot//net.fabricmc.fabric.impl.base.event.EventFactoryImpl.createArrayBacked(EventFactoryImpl.java:47)
+	at knot//net.fabricmc.fabric.api.event.EventFactory.createArrayBacked(EventFactory.java:44)
+	at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.<clinit>(ServerMessageEvents.java:84)
+	at knot//dev.architectury.event.fabric.EventHandlerImpl.registerCommon(EventHandlerImpl.java:93)
+	at knot//dev.architectury.event.EventHandler.registerCommon(EventHandler.java)
+	at knot//dev.architectury.event.EventHandler.init(EventHandler.java:37)
+	at knot//dev.architectury.utils.fabric.GameInstanceImpl.init(GameInstanceImpl.java:44)
+	at java.base@21.0.2/java.lang.invoke.MethodHandleProxies$1.invoke(MethodHandleProxies.java:199)
+	at jdk.proxy3/com.sun.proxy.jdk.proxy3.$Proxy46.onInitialize(Unknown Source)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+[08:36:58 INFO] [main]: [EasyAuth] [EasyAuth]: EasyAuth mod by NikitaCartes
+[08:36:58 INFO] [TISCM Mapping]: [OnlineMappingProvider] Yarn mapping file yarn-1.21.11+build.4-v2.tiny loaded
+[08:36:59 ERROR] [main]: [FabricLoader/Mixin] Mixin apply for mod plan failed plan.mixins.json:CommandSourceStackMixin from mod plan -> net.minecraft.class_2168: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethods0(Native Method)
+	at java.base@21.0.2/java.lang.Class.privateGetDeclaredMethods(Class.java:3578)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethod(Class.java:2846)
+	at knot//mod.fuji.core.event.injector.StaticEventConsumerInjector.injectOne(StaticEventConsumerInjector.java:59)
+	at java.base@21.0.2/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at knot//mod.fuji.core.event.injector.StaticEventConsumerInjector.injectAll(StaticEventConsumerInjector.java:29)
+	at knot//mod.fuji.core.event.EventManager.onInitialize(EventManager.java:23)
+	at knot//mod.fuji.Fuji.onInitialize(Fuji.java:36)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+[08:36:59 ERROR] [main]: [FabricLoader/Mixin] Mixin apply for mod plan failed plan.mixins.json:CommandSourceStackMixin from mod plan -> net.minecraft.class_2168: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at knot//org.incendo.cloud.minecraft.modded.internal.ModdedExceptionHandler.registerDefaults(ModdedExceptionHandler.java:99)
+	at knot//org.incendo.cloud.fabric.FabricServerCommandManager.<init>(FabricServerCommandManager.java:100)
+	at knot//ac.grim.grimac.platform.fabric.command.FabricCommandServiceFactory.create(FabricCommandServiceFactory.java:22)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.createPlatformCommandService(AbstractGrimACFabricLoaderPlugin.java:157)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.createCommandService(AbstractGrimACFabricLoaderPlugin.java:141)
+	at knot//ac.grim.grimac.utils.lazy.SimpleLazyHolder.get(LazyHolder.java:56)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.getCommandService(AbstractGrimACFabricLoaderPlugin.java:102)
+	at knot//ac.grim.grimac.GrimAPI.getCommandService(GrimAPI.java:144)
+	at knot//ac.grim.grimac.manager.InitManager.<init>(InitManager.java:51)
+	at knot//ac.grim.grimac.GrimAPI.load(GrimAPI.java:85)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricEntryPoint.initialize(AbstractGrimACFabricEntryPoint.java:48)
+	at knot//ac.grim.grimac.platform.fabric.GrimACFabricIntermediaryEntryPoint.onInitialize(GrimACFabricIntermediaryEntryPoint.java:14)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+[08:36:59 WARN] [main]: [GrimAC] IMPORTANT: Command Framework failed to load (Missing Cloud Library?). 
+Grim will run without commands enabled!
+[08:36:59 ERROR] [main]: [GrimAC] java.lang.BootstrapMethodError: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+	at knot//org.incendo.cloud.minecraft.modded.internal.ModdedExceptionHandler.registerDefaults(ModdedExceptionHandler.java:99)
+	at knot//org.incendo.cloud.fabric.FabricServerCommandManager.<init>(FabricServerCommandManager.java:100)
+	at knot//ac.grim.grimac.platform.fabric.command.FabricCommandServiceFactory.create(FabricCommandServiceFactory.java:22)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.createPlatformCommandService(AbstractGrimACFabricLoaderPlugin.java:157)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.createCommandService(AbstractGrimACFabricLoaderPlugin.java:141)
+	at knot//ac.grim.grimac.utils.lazy.SimpleLazyHolder.get(LazyHolder.java:56)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricLoaderPlugin.getCommandService(AbstractGrimACFabricLoaderPlugin.java:102)
+	at knot//ac.grim.grimac.GrimAPI.getCommandService(GrimAPI.java:144)
+	at knot//ac.grim.grimac.manager.InitManager.<init>(InitManager.java:51)
+	at knot//ac.grim.grimac.GrimAPI.load(GrimAPI.java:85)
+	at knot//ac.grim.grimac.platform.fabric.AbstractGrimACFabricEntryPoint.initialize(AbstractGrimACFabricEntryPoint.java:48)
+	at knot//ac.grim.grimac.platform.fabric.GrimACFabricIntermediaryEntryPoint.onInitialize(GrimACFabricIntermediaryEntryPoint.java:14)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+Caused by: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:440)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	... 20 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError: An unexpected critical error was encountered
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:380)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	... 24 more
+Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError: Mixin [plan.mixins.json:CommandSourceStackMixin from mod plan] from phase [DEFAULT] in config [plan.mixins.json] FAILED during APPLY
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinError(MixinProcessor.java:685)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinApplyError(MixinProcessor.java:636)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:367)
+	... 27 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	... 27 more
+
+[08:36:59 INFO] [main]: [GrimAC] Loading PacketEvents...
+[08:36:59 INFO] [pool-6-thread-1]: [packetevents] Loading block mappings for V_1_21_9/20...
+11月 24, 2026 8:36:59 上午 ac.grim.grimac.manager.config.update.ConfigUpdater updateSingle
+信息: [grim-config-updater] mysql.yml migrated v1 → v2 (flavor V2, backup at mysql.yml.v1.bak)
+11月 24, 2026 8:36:59 上午 ac.grim.grimac.manager.config.update.ConfigUpdater updateSingle
+信息: [grim-config-updater] postgres.yml migrated v1 → v2 (flavor V2, backup at postgres.yml.v1.bak)
+[08:36:59 INFO] [main]: [maykeshs-secure-server-mod] Initializing Maykesh's Secure Server Mod v1.0.32 (Military Grade Security)
+[08:36:59 INFO] [main]: [maykeshs-secure-server-mod] Security Systems Active.
+[08:36:59 INFO] [main]: [playerbatch] Loaded PlayerBatch config with maxSummonCount=256, maxSpawnsPerTick=4, debugEnabled=false
+[08:36:59 INFO] [main]: [playerbatch] Loaded 0 PlayerBatch extensions
+[08:36:59 INFO] [main]: [playerbatch] Registered playerbatch as a Carpet extension
+[08:36:59 INFO] [main]: [ServerCore] [ServerCore] Loaded V1.5.15+1.21.11!
+[08:36:59 INFO] [pool-6-thread-1]: [packetevents] Finished loading block mappings for V_1_21_9/20 in 242.333489ms
+[08:37:00 ERROR] [main]: [FabricLoader/Mixin] Mixin apply for mod plan failed plan.mixins.json:CommandSourceStackMixin from mod plan -> net.minecraft.class_2168: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethods0(Native Method)
+	at java.base@21.0.2/java.lang.Class.privateGetDeclaredMethods(Class.java:3578)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethods(Class.java:2676)
+	at knot//ch.jalu.injector.utils.ReflectionUtils.safeGetDeclaredMethods(ReflectionUtils.java:165)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.validateHasNoInjectMethods(StandardInjectionProvider.java:156)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.validateInjection(StandardInjectionProvider.java:142)
+	at knot//ch.jalu.injector.handlers.instantiation.DefaultInjectionProvider.validateInjection(DefaultInjectionProvider.java:37)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.safeGet(StandardInjectionProvider.java:43)
+	at knot//ch.jalu.injector.handlers.instantiation.DefaultInjectionProvider.safeGet(DefaultInjectionProvider.java:32)
+	at knot//ch.jalu.injector.handlers.instantiation.DirectInstantiationProvider.resolve(DirectInstantiationProvider.java:19)
+	at knot//ch.jalu.injector.InjectorImpl.findResolutionOrFail(InjectorImpl.java:227)
+	at knot//ch.jalu.injector.InjectorImpl.resolveContext(InjectorImpl.java:153)
+	at knot//ch.jalu.injector.InjectorImpl.resolveDependencies(InjectorImpl.java:186)
+	at knot//ch.jalu.injector.InjectorImpl.resolveContext(InjectorImpl.java:158)
+	at knot//ch.jalu.injector.InjectorImpl.resolve(InjectorImpl.java:133)
+	at knot//ch.jalu.injector.InjectorImpl.newInstance(InjectorImpl.java:77)
+	at knot//net.skinsrestorer.shared.plugin.SRPlugin.startup(SRPlugin.java:363)
+	at knot//net.skinsrestorer.shared.plugin.SRBootstrapper.startPlugin(SRBootstrapper.java:62)
+	at knot//net.skinsrestorer.mod.SRMod.init(SRMod.java:33)
+	at knot//net.skinsrestorer.mod.fabric.SRFabricMod.onInitialize(SRFabricMod.java:26)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+[08:37:00 ERROR] [main]: [skinsrestorer] An unexpected error occurred while starting the plugin. Please check the console for more details.
+ch.jalu.injector.exceptions.InjectorException: An error occurred (see cause)
+	at knot//ch.jalu.injector.utils.InjectorUtils.rethrowException(InjectorUtils.java:56)
+	at knot//ch.jalu.injector.InjectorImpl.findResolutionOrFail(InjectorImpl.java:233)
+	at knot//ch.jalu.injector.InjectorImpl.resolveContext(InjectorImpl.java:153)
+	at knot//ch.jalu.injector.InjectorImpl.resolveDependencies(InjectorImpl.java:186)
+	at knot//ch.jalu.injector.InjectorImpl.resolveContext(InjectorImpl.java:158)
+	at knot//ch.jalu.injector.InjectorImpl.resolve(InjectorImpl.java:133)
+	at knot//ch.jalu.injector.InjectorImpl.newInstance(InjectorImpl.java:77)
+	at knot//net.skinsrestorer.shared.plugin.SRPlugin.startup(SRPlugin.java:363)
+	at knot//net.skinsrestorer.shared.plugin.SRBootstrapper.startPlugin(SRBootstrapper.java:62)
+	at knot//net.skinsrestorer.mod.SRMod.init(SRMod.java:33)
+	at knot//net.skinsrestorer.mod.fabric.SRFabricMod.onInitialize(SRFabricMod.java:26)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+Caused by: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:440)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethods0(Native Method)
+	at java.base@21.0.2/java.lang.Class.privateGetDeclaredMethods(Class.java:3578)
+	at java.base@21.0.2/java.lang.Class.getDeclaredMethods(Class.java:2676)
+	at knot//ch.jalu.injector.utils.ReflectionUtils.safeGetDeclaredMethods(ReflectionUtils.java:165)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.validateHasNoInjectMethods(StandardInjectionProvider.java:156)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.validateInjection(StandardInjectionProvider.java:142)
+	at knot//ch.jalu.injector.handlers.instantiation.DefaultInjectionProvider.validateInjection(DefaultInjectionProvider.java:37)
+	at knot//ch.jalu.injector.handlers.instantiation.StandardInjectionProvider.safeGet(StandardInjectionProvider.java:43)
+	at knot//ch.jalu.injector.handlers.instantiation.DefaultInjectionProvider.safeGet(DefaultInjectionProvider.java:32)
+	at knot//ch.jalu.injector.handlers.instantiation.DirectInstantiationProvider.resolve(DirectInstantiationProvider.java:19)
+	at knot//ch.jalu.injector.InjectorImpl.findResolutionOrFail(InjectorImpl.java:227)
+	... 17 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError: An unexpected critical error was encountered
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:380)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	... 32 more
+Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError: Mixin [plan.mixins.json:CommandSourceStackMixin from mod plan] from phase [DEFAULT] in config [plan.mixins.json] FAILED during APPLY
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinError(MixinProcessor.java:685)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinApplyError(MixinProcessor.java:636)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:367)
+	... 35 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	... 35 more
+[08:37:00 WARN] [main]: [skinsrestorer] Updater was not initialized, a error occurred while starting the plugin. Forcing updater to initialize.
+[08:37:00 INFO] [main]: [skinsrestorer] [SkinsRestorer] Auto updater was manually disabled. This is not recommended, as it will prevent the plugin from updating automatically. See why at: https://skinsrestorer.net/docs/configuration/auto-update
+[08:37:00 INFO] [main]: [ViaVersion] ViaVersion detected server version: 1.21.11 (774)
+[08:37:00 INFO] [ViaFabric-2]: [ViaVersion] Finished mapping loading, shutting down loader executor.
+[08:37:00 INFO] [main]: [LoggedPrintStream] [STDOUT]: [Xiaona] 小钠桥 mod 初始化中 ...
+[08:37:00 INFO] [main]: [LoggedPrintStream] [STDOUT]: [Xiaona] 🔀 已占住对外端口 43733、预备内部端口 25565：若 MC 端口被固定在 43733，会自动把 MC 改绑到 25565，玩家照旧用原地址进服。
+[08:37:00 ERROR] [main]: [Main] Failed to start the minecraft server
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to errors, provided by 'architectury' at 'dev.architectury.utils.fabric.GameInstanceImpl::init'!
+	at net.fabricmc.loader.impl.FabricLoaderImpl.lambda$invokeEntrypoints$0(FabricLoaderImpl.java:409)
+	at net.fabricmc.loader.impl.util.ExceptionUtil.gatherExceptions(ExceptionUtil.java:33)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:407)
+	at net.fabricmc.loader.impl.game.minecraft.Hooks.startServer(Hooks.java:63)
+	at knot//net.minecraft.server.Main.main(Main.java:112)
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:514)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotServer.main(KnotServer.java:23)
+	at net.fabricmc.loader.impl.launch.server.FabricServerLauncher.main(FabricServerLauncher.java:69)
+	at app//net.fabricmc.installer.ServerLauncher.main(ServerLauncher.java:69)
+	Suppressed: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+		at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:440)
+		at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+		at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+		at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+		at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+		at java.base@21.0.2/java.lang.Class.getDeclaredMethods0(Native Method)
+		at java.base@21.0.2/java.lang.Class.privateGetDeclaredMethods(Class.java:3578)
+		at java.base@21.0.2/java.lang.Class.getDeclaredMethod(Class.java:2846)
+		at knot//mod.fuji.core.event.injector.StaticEventConsumerInjector.injectOne(StaticEventConsumerInjector.java:59)
+		at java.base@21.0.2/java.util.ArrayList.forEach(ArrayList.java:1596)
+		at knot//mod.fuji.core.event.injector.StaticEventConsumerInjector.injectAll(StaticEventConsumerInjector.java:29)
+		at knot//mod.fuji.core.event.EventManager.onInitialize(EventManager.java:23)
+		at knot//mod.fuji.Fuji.onInitialize(Fuji.java:36)
+		at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+		... 7 more
+	Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError: An unexpected critical error was encountered
+		at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:380)
+		at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+		at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+		at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+		... 20 more
+	Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError: Mixin [plan.mixins.json:CommandSourceStackMixin from mod plan] from phase [DEFAULT] in config [plan.mixins.json] FAILED during APPLY
+		at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinError(MixinProcessor.java:685)
+		at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinApplyError(MixinProcessor.java:636)
+		at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:367)
+		... 23 more
+	Caused by: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+		at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+		at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+		at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+		at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+		at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+		at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+		at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+		at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+		at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+		at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+		... 23 more
+	Suppressed: java.lang.NoClassDefFoundError: Could not initialize class net.fabricmc.fabric.api.message.v1.ServerMessageEvents
+		at knot//com.xiaona.XiaonaMod.onInitialize(XiaonaMod.java:99)
+		at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+		... 7 more
+	Caused by: java.lang.ExceptionInInitializerError: Exception java.lang.BootstrapMethodError: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed [in thread "main"]
+		at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.lambda$static$5(ServerMessageEvents.java:84)
+		at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.update(ArrayBackedEvent.java:54)
+		at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.<init>(ArrayBackedEvent.java:50)
+		at knot//net.fabricmc.fabric.impl.base.event.EventFactoryImpl.createArrayBacked(EventFactoryImpl.java:47)
+		at knot//net.fabricmc.fabric.api.event.EventFactory.createArrayBacked(EventFactory.java:44)
+		at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.<clinit>(ServerMessageEvents.java:84)
+		at knot//dev.architectury.event.fabric.EventHandlerImpl.registerCommon(EventHandlerImpl.java:93)
+		at knot//dev.architectury.event.EventHandler.registerCommon(EventHandler.java)
+		at knot//dev.architectury.event.EventHandler.init(EventHandler.java:37)
+		at knot//dev.architectury.utils.fabric.GameInstanceImpl.init(GameInstanceImpl.java:44)
+		at java.base@21.0.2/java.lang.invoke.MethodHandleProxies$1.invoke(MethodHandleProxies.java:199)
+		at jdk.proxy3/com.sun.proxy.jdk.proxy3.$Proxy46.onInitialize(Unknown Source)
+		... 8 more
+Caused by: java.lang.BootstrapMethodError: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+	at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.lambda$static$5(ServerMessageEvents.java:84)
+	at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.update(ArrayBackedEvent.java:54)
+	at knot//net.fabricmc.fabric.impl.base.event.ArrayBackedEvent.<init>(ArrayBackedEvent.java:50)
+	at knot//net.fabricmc.fabric.impl.base.event.EventFactoryImpl.createArrayBacked(EventFactoryImpl.java:47)
+	at knot//net.fabricmc.fabric.api.event.EventFactory.createArrayBacked(EventFactory.java:44)
+	at knot//net.fabricmc.fabric.api.message.v1.ServerMessageEvents.<clinit>(ServerMessageEvents.java:84)
+	at knot//dev.architectury.event.fabric.EventHandlerImpl.registerCommon(EventHandlerImpl.java:93)
+	at knot//dev.architectury.event.EventHandler.registerCommon(EventHandler.java)
+	at knot//dev.architectury.event.EventHandler.init(EventHandler.java:37)
+	at knot//dev.architectury.utils.fabric.GameInstanceImpl.init(GameInstanceImpl.java:44)
+	at java.base@21.0.2/java.lang.invoke.MethodHandleProxies$1.invoke(MethodHandleProxies.java:199)
+	at jdk.proxy3/com.sun.proxy.jdk.proxy3.$Proxy46.onInitialize(Unknown Source)
+	at net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:405)
+	... 7 more
+Caused by: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:440)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:336)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.loadClass(KnotClassDelegate.java:231)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassLoader.loadClass(KnotClassLoader.java:119)
+	at java.base@21.0.2/java.lang.ClassLoader.loadClass(ClassLoader.java:526)
+	... 20 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError: An unexpected critical error was encountered
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:380)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClass(MixinTransformer.java:237)
+	at org.spongepowered.asm.mixin.transformer.MixinTransformer.transformClassBytes(MixinTransformer.java:202)
+	at net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:435)
+	... 24 more
+Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError: Mixin [plan.mixins.json:CommandSourceStackMixin from mod plan] from phase [DEFAULT] in config [plan.mixins.json] FAILED during APPLY
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinError(MixinProcessor.java:685)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.handleMixinApplyError(MixinProcessor.java:636)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:367)
+	... 27 more
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.conformVisibility(MixinPreProcessorStandard.java:493)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethod(MixinPreProcessorStandard.java:604)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attachMethods(MixinPreProcessorStandard.java:365)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.attach(MixinPreProcessorStandard.java:308)
+	at org.spongepowered.asm.mixin.transformer.MixinPreProcessorStandard.createContextFor(MixinPreProcessorStandard.java:286)
+	at org.spongepowered.asm.mixin.transformer.MixinInfo.createContextFor(MixinInfo.java:1321)
+	at org.spongepowered.asm.mixin.transformer.MixinApplicatorStandard.apply(MixinApplicatorStandard.java:214)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.apply(TargetClassContext.java:437)
+	at org.spongepowered.asm.mixin.transformer.TargetClassContext.applyMixins(TargetClassContext.java:418)
+	at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:351)
+	... 27 more
+[08:37:00 WARN] [main]: [Fuji] [doctor] 
+[Server Crash Analyzer]
+◉ Cause Chain
+[5] org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException: PRIVATE overwrite method isConsole in plan.mixins.json:CommandSourceStackMixin from mod plan cannot reduce visibiliy of PUBLIC target method
+[4] org.spongepowered.asm.mixin.throwables.MixinApplyError: Mixin [plan.mixins.json:CommandSourceStackMixin from mod plan] from phase [DEFAULT] in config [plan.mixins.json] FAILED during APPLY
+[3] org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError: An unexpected critical error was encountered
+[2] java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+[1] java.lang.BootstrapMethodError: java.lang.RuntimeException: Mixin transformation of net.minecraft.class_2168 failed
+[0] java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to errors, provided by 'architectury' at 'dev.architectury.utils.fabric.GameInstanceImpl::init'!
+Time Order: [0] -> [1] -> [2] -> [3] -> [4] -> [5]
+◉ Diagnosis
+- [Reason] Failed to apply the mixin 'CommandSourceStackMixin' from mod 'plan'.
+- [Reason] Failed to apply the mixin 'CommandSourceStackMixin' from mod 'plan'.
+----- Server Program Terminated Here -----
+
+[2026-11-24 08:37:01] 服务器已停止，退出码: 0
+[简幻欢]: 服务器已停止运行，请检查启动脚本和服务端配置文件
