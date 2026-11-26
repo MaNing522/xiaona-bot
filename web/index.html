@@ -411,6 +411,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
         <button class="btn ghost" id="aiProvReset" style="width:auto">清空表单</button>
         <span class="hint" id="aiProvMsg" style="margin:0"></span>
       </div>
+      <div class="hint" id="aiProvEnv" style="margin:0"></div>
       <div class="hint">接口列表存在 data/ai-providers.json（不进 git）。选「自动」时仍按 .env 主接口＋备用兜底；选定自定义接口后，它挂了会自动切 .env 的备用。</div>
     </div>
     <div class="card span2">
@@ -701,8 +702,11 @@ const NUM_LABELS={
   engage:{ttlMs:'会话有效期(ms)',initiatorLeft:'唤起人额度',otherLeft:'其他人额度'},
   bind:{maxPerQQ:'每QQ绑定上限(个)',unbindRetainDays:'解绑记录保留(天)'},
 };
-// 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）
-const CV_NUM_KEYS={
+// 数值项在 .env 里已有的同名键：有就优先显示 .env 的值（保存会写回 .env，见后端 ENV_BACKED）
+const GC_ENV={
+  rateLimit:{userCooldownMs:'RL_USER_COOLDOWN_MS',userPerMinute:'RL_USER_PER_MINUTE',userPerHour:'RL_USER_PER_HOUR',userPerDay:'RL_USER_PER_DAY',groupPerMinute:'RL_GROUP_PER_MINUTE',groupPerHour:'RL_GROUP_PER_HOUR',globalMaxConcurrent:'RL_GLOBAL_CONCURRENT',globalPerMinute:'RL_GLOBAL_PER_MINUTE',queueMax:'RL_QUEUE_MAX',queueTimeoutMs:'RL_QUEUE_TIMEOUT_MS',violationsToCooldown:'RL_VIOLATIONS_TO_COOLDOWN',penaltyCooldownMs:'RL_PENALTY_COOLDOWN_MS',floodWindowMs:'RL_FLOOD_WINDOW_MS',floodCount:'RL_FLOOD_COUNT',penaltyMuteMs:'RL_PENALTY_MUTE_MS'},
+};
+// 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）const CV_NUM_KEYS={
   rateLimit:['userCooldownMs','userPerMinute','userPerHour','userPerDay','groupPerMinute','groupPerHour'],
   cooldown:['pokeMs','shakeMs','forwardMs','forwardDelayMs'],
   engage:['ttlMs','initiatorLeft','otherLeft'],
@@ -717,6 +721,9 @@ const BRIDGE_NAMES={'':'.env 地址','off':'无连接','loopback':'本地回环'
 // 全局设置表单（config.json）
 function gcRender(){
   const c=cvGlobal||{}; const ch=c.chat||{};
+  // .env 里已经写了的同名项优先显示 .env 的值（保存时也会写回 .env）
+  const env=cvEnv||{};
+  const envHas=k=>Object.prototype.hasOwnProperty.call(env,k);
   $('gcfgChat').innerHTML=
     '<div class="row">'+
     '<div><label>AI 是否回复</label><select id="gcReply"><option value="true">回复</option><option value="false">不回复（静音）</option></select></div>'+
@@ -744,7 +751,9 @@ function gcRender(){
     html+='<h2 style="font-size:14px;margin:18px 0 4px">'+SEGNAME[seg]+'</h2><div class="row" style="grid-template-columns:1fr 1fr 1fr">';
     for(const k of Object.keys(NUM_LABELS[seg])){
       if(!NUM_LABELS[seg][k]) continue;
-      html+='<div><label>'+NUM_LABELS[seg][k]+'</label><input data-gc="'+seg+'.'+k+'" type="number" min="0" step="any" value="'+((c[seg]||{})[k]??'')+'"></div>';
+      const ek=GC_ENV[seg]&&GC_ENV[seg][k];
+      const val=(ek&&envHas(ek))?env[ek]:((c[seg]||{})[k]??'');
+      html+='<div><label>'+NUM_LABELS[seg][k]+'</label><input data-gc="'+seg+'.'+k+'" type="number" min="0" step="any" value="'+val+'"></div>';
     }
     html+='</div>';
   }
@@ -752,9 +761,6 @@ function gcRender(){
   // 功能后端：联网搜索 / 图像识别 / MC 服务器连接模式
   const s=c.search||{}, v=c.vision||{}, b=c.bridge||{}, ai=c.ai||{}, mem=c.memory||{};
   const tts=c.tts||{}, asr=c.asr||{};
-  // .env 里已经写了的同名项优先显示 .env 的值（保存时也会写回 .env）
-  const env=cvEnv||{};
-  const envHas=k=>Object.prototype.hasOwnProperty.call(env,k);
   const ttsProv=envHas('TTS_PROVIDER')?String(env.TTS_PROVIDER||''):String(tts.provider||'');
   const ttsXv=envHas('TTS_XIAOMI_VOICE')?String(env.TTS_XIAOMI_VOICE||''):(tts.xiaomiVoice||'');
   const ttsEv=envHas('TTS_VOICE')?String(env.TTS_VOICE||''):(tts.voice||'');
@@ -799,7 +805,7 @@ function gcRender(){
     '<div class="row"><div><label>连接模式</label><select id="gcBridge"><option value="">.env 地址（默认）</option><option value="off">无连接</option><option value="loopback">本地回环</option><option value="lan">局域网</option><option value="public">公网地址</option></select></div>'+
     '<div><label>端口（回环 / 局域网用）</label><input id="gcBridgePort" type="number" min="1" max="65535" step="1" value="'+((Number(b.port)>=1&&Number(b.port)<=65535)?Number(b.port):'')+'" placeholder="25565"></div></div>'+
     '<label>服务器局域网地址（仅局域网模式）</label><input id="gcBridgeLan" type="text" value="'+esc(b.lanHost||'')+'" placeholder="192.168.1.x 或主机名">'+
-    '<label>公网完整地址（仅公网模式，含 http:// 与端口）</label><input id="gcBridgePub" type="text" value="'+esc(b.publicUrl||'')+'" placeholder="http://1.2.3.4:43733">'+
+    '<label>公网完整地址（仅公网模式，含 http:// 与端口）</label><input id="gcBridgePub" type="text" value="'+esc(b.publicUrl||'')+'" placeholder="'+esc(envHas('MC_BRIDGE_URL')&&env.MC_BRIDGE_URL?env.MC_BRIDGE_URL:'http://1.2.3.4:43733')+'">'+
     '<div class="hint">密钥（MC_BRIDGE_SECRET）与桥接群（MC_BRIDGE_GROUP）仍在 .env 里配置。切换模式保存后约 1 秒生效并自动重连。</div>'+
     '<h2 style="font-size:14px;margin:18px 0 4px">AI 模型</h2>'+
     '<div class="row">'+
@@ -964,10 +970,18 @@ let aiProvEdit=null;
 let aiProvData=[];
 function aiProvRender(){
   const sel=$('aiProvSel');
-  sel.innerHTML='<option value="">自动（.env 主接口 → 备用兜底）</option>'+
+  const e=cvEnv||{};
+  const envModel=e.AI_MODEL?('：'+e.AI_MODEL):'';
+  sel.innerHTML='<option value="">自动（.env 主接口'+esc(envModel)+' → 备用兜底）</option>'+
     '<option value="fallback">官方备用（.env 的 AI_FALLBACK_*）</option>'+
     aiProvData.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name)+'（'+esc(p.model)+'）</option>').join('');
   sel.value=aiProvActive||'';
+  const envBits=[];
+  if(e.AI_PROVIDER)envBits.push('provider='+e.AI_PROVIDER);
+  if(e.AI_MODEL)envBits.push('model='+e.AI_MODEL);
+  if(e.AI_API_URL)envBits.push('url='+e.AI_API_URL);
+  if(e.AI_FALLBACK_MODEL)envBits.push('备用='+e.AI_FALLBACK_MODEL);
+  if($('aiProvEnv'))$('aiProvEnv').textContent=envBits.length?('当前 .env 主接口：'+envBits.join(' · ')):'';
   $('aiProvList').innerHTML=aiProvData.length?aiProvData.map(p=>'<div class="cmd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><b>'+esc(p.name)+'</b><span class="hint" style="margin-left:8px">'+esc(p.model)+' · '+esc(p.url)+' · 密钥 '+(p.hasKey?esc(p.keyHint):'未设置')+'</span></div>'+
     '<button class="btn ghost" data-aiprov-edit="'+esc(p.id)+'" style="width:auto;min-height:30px;padding:0 12px;font-size:12px;margin:0">编辑</button>'+
     '<button class="btn ghost" data-aiprov-del="'+esc(p.id)+'" style="width:auto;min-height:30px;padding:0 12px;font-size:12px;margin:0">删除</button></div>').join(''):'<span class="hint">还没有自定义接口</span>';

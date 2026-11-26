@@ -4,7 +4,9 @@
 // 与 .env 的分工：
 //   · .env         —— 密钥、账号、开关等"部署相关"的东西
 //   · config.json  —— 数值类可调项（冷却、限流、超时…），本模块负责读它
-// 两者互相独立：这里**不读 process.env**（只有 BOT_CONFIG 例外，用于指定配置文件路径）。
+// 两者互相独立：这里基本**不读 process.env**（例外：BOT_CONFIG 指定配置文件路径；
+// rateLimit 的 RL_* —— 网页保存时会把值写回 .env 并清空 config.json 对应字段，
+// 所以 .env 里存在 RL_* 时以 .env 为准，见 ENV_NUM_KEYS）。
 //
 // config.json 支持 // 行注释与 /* */ 块注释；缺字段用 DEFAULTS 兜底；
 // 数值必须是 ≥ 0 的数字，非法值忽略并回退默认。
@@ -221,6 +223,44 @@ function applyOverrides(base, over) {
 }
 
 /**
+ * .env 里存在就优先使用的数值键（网页「全局设置」保存时会把值写回 .env 并清空 config.json 对应字段，
+ * 所以这里必须让 .env 覆盖 config.json，否则网页改完会被默认值盖回去）。
+ * 只覆盖 rateLimit —— 其余数值项在 .env 里没有对应键。
+ */
+const ENV_NUM_KEYS = {
+    rateLimit: {
+        userCooldownMs: 'RL_USER_COOLDOWN_MS',
+        userPerMinute: 'RL_USER_PER_MINUTE',
+        userPerHour: 'RL_USER_PER_HOUR',
+        userPerDay: 'RL_USER_PER_DAY',
+        groupPerMinute: 'RL_GROUP_PER_MINUTE',
+        groupPerHour: 'RL_GROUP_PER_HOUR',
+        globalMaxConcurrent: 'RL_GLOBAL_CONCURRENT',
+        globalPerMinute: 'RL_GLOBAL_PER_MINUTE',
+        queueMax: 'RL_QUEUE_MAX',
+        queueTimeoutMs: 'RL_QUEUE_TIMEOUT_MS',
+        violationsToCooldown: 'RL_VIOLATIONS_TO_COOLDOWN',
+        penaltyCooldownMs: 'RL_PENALTY_COOLDOWN_MS',
+        floodWindowMs: 'RL_FLOOD_WINDOW_MS',
+        floodCount: 'RL_FLOOD_COUNT',
+        penaltyMuteMs: 'RL_PENALTY_MUTE_MS',
+    },
+};
+
+/** 用 .env 里已有的 RL_* 覆盖 rateLimit（非法值忽略） */
+function applyEnvOverrides(cfg) {
+    for (const [seg, map] of Object.entries(ENV_NUM_KEYS)) {
+        if (!cfg[seg]) continue;
+        for (const [field, key] of Object.entries(map)) {
+            if (!Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+            const n = Number(process.env[key]);
+            if (Number.isFinite(n) && n >= 0) cfg[seg][field] = n;
+        }
+    }
+    return cfg;
+}
+
+/**
  * 从指定文件读取配置并与默认值合并（纯函数式，便于单测直接给定路径）。
  * 文件不存在或解析失败 → 返回一份默认值副本。
  */
@@ -236,7 +276,7 @@ export function loadConfig(filePath = CONFIG_PATH) {
         logger.error(`[配置] 解析 ${filePath} 失败，改用默认值：${e.message}`);
         over = {};
     }
-    return applyOverrides(structuredClone(DEFAULTS), over);
+    return applyEnvOverrides(applyOverrides(structuredClone(DEFAULTS), over));
 }
 
 let current = loadConfig();
@@ -264,7 +304,7 @@ export function reloadConfig(filePath = CONFIG_PATH) {
         logger.error(`[配置] 热重载失败，保留当前配置：${e.message}`);
         return current;
     }
-    const next = applyOverrides(structuredClone(DEFAULTS), over);
+    const next = applyEnvOverrides(applyOverrides(structuredClone(DEFAULTS), over));
     // 原地替换：删掉已移除的键，再覆盖新值（保持 current 引用不变）
     for (const k of Object.keys(current)) if (!(k in next)) delete current[k];
     Object.assign(current, next);
