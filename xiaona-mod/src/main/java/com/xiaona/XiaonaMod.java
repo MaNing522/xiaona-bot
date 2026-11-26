@@ -49,6 +49,7 @@ public class XiaonaMod implements ModInitializer {
                 return;
             }
             toggles = new RuntimeToggles(config);
+            FakePlayerLimit.init(config.carpet);
             events = new McEvents(config.bridge.queueSize);
             events.setTagColor(config.bridge.prefixColor);
             // 白名单模式：弃用计分板（改用服务器白名单把门），所以不再创建计分板

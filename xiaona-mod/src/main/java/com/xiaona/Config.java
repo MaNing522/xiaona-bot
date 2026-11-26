@@ -23,6 +23,16 @@ public class Config {
     public Board board = new Board();
     public Whitelist whitelist = new Whitelist();
     public Heatmap heatmap = new Heatmap();
+    public Carpet carpet = new Carpet();
+
+    /**
+     * carpet 假人限制：非 OP 玩家执行 {@code /player <名字> spawn} 时，名下同时存活的假人不能超过上限。
+     * 服务端没装 carpet（没有 /player 命令）时整段逻辑不介入。
+     */
+    public static class Carpet {
+        public boolean limitFakePlayers = true;
+        public int maxFakePlayersPerPlayer = 5;   // 1~64
+    }
 
     /**
      * 位置热力图：记录每个玩家"加载过的区块"（永久保存在 config/xiaona-heatmap.json），
@@ -202,5 +212,8 @@ public class Config {
 
         if (heatmap == null) heatmap = new Heatmap();
         heatmap.saveSec = Math.min(3600, Math.max(5, heatmap.saveSec));
+
+        if (carpet == null) carpet = new Carpet();
+        carpet.maxFakePlayersPerPlayer = Math.min(64, Math.max(1, carpet.maxFakePlayersPerPlayer));
     }
 }
