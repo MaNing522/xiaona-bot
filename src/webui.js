@@ -315,6 +315,23 @@ function normalizeAsr(raw) {
 // 这些配置项如果已经在 .env 里写了（键存在），网页就显示 .env 的值、保存时写回 .env；
 // .env 里没有对应键的，仍然按原方案存 config.json。
 const ENV_BACKED = {
+  rateLimit: {
+    userCooldownMs: 'RL_USER_COOLDOWN_MS',
+    userPerMinute: 'RL_USER_PER_MINUTE',
+    userPerHour: 'RL_USER_PER_HOUR',
+    userPerDay: 'RL_USER_PER_DAY',
+    groupPerMinute: 'RL_GROUP_PER_MINUTE',
+    groupPerHour: 'RL_GROUP_PER_HOUR',
+    globalMaxConcurrent: 'RL_GLOBAL_CONCURRENT',
+    globalPerMinute: 'RL_GLOBAL_PER_MINUTE',
+    queueMax: 'RL_QUEUE_MAX',
+    queueTimeoutMs: 'RL_QUEUE_TIMEOUT_MS',
+    violationsToCooldown: 'RL_VIOLATIONS_TO_COOLDOWN',
+    penaltyCooldownMs: 'RL_PENALTY_COOLDOWN_MS',
+    floodWindowMs: 'RL_FLOOD_WINDOW_MS',
+    floodCount: 'RL_FLOOD_COUNT',
+    penaltyMuteMs: 'RL_PENALTY_MUTE_MS',
+  },
   tts: {
     provider: 'TTS_PROVIDER',
     xiaomiVoice: 'TTS_XIAOMI_VOICE',
