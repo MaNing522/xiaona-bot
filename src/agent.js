@@ -315,6 +315,15 @@ export const AGENT_TOOLS = [
   {
     minRole: 'guest',
     function: {
+      name: 'send_reward_qr',
+      description: '把服务器的赞赏码（收款二维码）图片发到当前聊天。用户问怎么赞助/打赏/支持服务器、或要赞赏码时用；要说明它是**收款用的赞赏码**，不是登录码、验证码或加群码。',
+      parameters: { type: 'object', properties: {} },
+    },
+    run: async (args, ctx) => (ctx.sendReward ? ctx.sendReward() : '当前场景发不了图片，让对方在 QQ 群里发「#赞助」。'),
+  },
+  {
+    minRole: 'guest',
+    function: {
       name: 'remember',
       description: '把一条值得长期记住的信息存入记忆（以后对话会用到）。仅当对方明确要求记住、或确实值得长期保存时使用。',
       parameters: {
