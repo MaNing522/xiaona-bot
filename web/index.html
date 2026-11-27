@@ -431,7 +431,7 @@ footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:10px}
         <div><label>最大字数</label><input id="qzMaxLen" type="number" min="20" max="500" step="10"></div>
       </div>
       <label>内容风格（追加给 AI，可留空）</label>
-      <textarea id="qzStyle" style="width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;color:#1f2329;font:inherit;font-size:15px;resize:vertical"></textarea>
+      <textarea id="qzStyle" style="width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--card);color:var(--txt);font:inherit;font-size:15px;resize:vertical"></textarea>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
         <button class="btn ghost" id="qzPostNow" style="width:auto">立即发一条（测试）</button>
         <div class="hint" id="qzStatus" style="margin:0">…</div>
@@ -712,7 +712,7 @@ const CV_NUM_KEYS={
   cooldown:['pokeMs','shakeMs','forwardMs','forwardDelayMs'],
   engage:['ttlMs','initiatorLeft','otherLeft'],
 };
-const TA_STYLE='width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;color:#1f2329;font:inherit;font-size:15px;resize:vertical';
+const TA_STYLE='width:100%;min-height:64px;margin-top:10px;padding:10px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--card);color:var(--txt);font:inherit;font-size:15px;resize:vertical';
 
 // 搜索 / 图像识别 / MC 桥的名称（供状态页与全局设置显示）
 const SEARCH_NAMES={off:'已关闭',baidu:'百度智能搜索',deepseek:'DeepSeek 搜索',custom:'自定义接口'};
