@@ -153,6 +153,17 @@ label{font-size:13.5px;color:var(--sub)}
 .qr{text-align:center}
 .qr img{width:min(280px,68vw);height:min(280px,68vw);border-radius:10px;image-rendering:pixelated;border:1px solid var(--line)}
 .hint{font-size:13px;color:var(--sub);margin-top:10px;line-height:1.7}
+/* 站内确认弹窗（替代浏览器 confirm） */
+.xn-mask{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  padding:20px;background:rgba(0,0,0,.35);opacity:0;transition:opacity .16s}
+.xn-mask.on{opacity:1}
+.xn-dlg{width:100%;max-width:420px;padding:18px;border-radius:12px;background:var(--card);color:var(--txt);
+  border:1px solid var(--line);box-shadow:0 12px 40px var(--shadow-hover);
+  transform:translateY(8px);transition:transform .16s}
+.xn-mask.on .xn-dlg{transform:none}
+.xn-msg{font-size:14.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.xn-acts{display:flex;gap:10px;margin-top:16px}
+.xn-acts .btn{margin:0}
 .cmd{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:13px;margin-bottom:10px}
 .cmd b{color:var(--accent);font-size:14.5px}
 .log{background:var(--log-bg);border:1px solid var(--line);border-radius:8px;padding:12px;
@@ -530,6 +541,38 @@ async function api(p,o){const r=await fetch(p,Object.assign({'Content-Type':'app
   if(xnLoggedIn!==true)setAuth(true);
   return d;}
 const set=($id,s,c)=>{const el=$($id);el.textContent=s;el.className='pill '+c;};
+
+// 站内确认弹窗：替代浏览器原生 confirm（原生弹窗样式无法跟随站点主题）
+function xnConfirm(msg,opt){
+  opt=opt||{};
+  return new Promise(function(res){
+    const mask=document.createElement('div'); mask.className='xn-mask';
+    const dlg=document.createElement('div'); dlg.className='xn-dlg';
+    const p=document.createElement('div'); p.className='xn-msg'; p.textContent=String(msg==null?'':msg);
+    const acts=document.createElement('div'); acts.className='xn-acts';
+    const no=document.createElement('button'); no.type='button'; no.className='btn ghost'; no.textContent=opt.cancelText||'取消';
+    const ok=document.createElement('button'); ok.type='button'; ok.className='btn'+(opt.danger?' red':''); ok.textContent=opt.okText||'确定';
+    acts.appendChild(no); acts.appendChild(ok); dlg.appendChild(p); dlg.appendChild(acts); mask.appendChild(dlg);
+    document.body.appendChild(mask);
+    requestAnimationFrame(()=>mask.classList.add('on'));
+    let done=false;
+    function close(v){
+      if(done)return; done=true;
+      mask.classList.remove('on');
+      document.removeEventListener('keydown',onKey);
+      setTimeout(()=>mask.remove(),160);
+      res(!!v);
+    }
+    function onKey(e){
+      if(e.key==='Escape')close(false);
+      else if(e.key==='Enter')close(true);
+    }
+    no.onclick=()=>close(false); ok.onclick=()=>close(true);
+    mask.onclick=(e)=>{ if(e.target===mask)close(false); };
+    document.addEventListener('keydown',onKey);
+    ok.focus();
+  });
+}
 
 // ---------- 动效小工具 ----------
 // 点击水波纹：给 .btn / .nav-item 在点击位置生成一圈扩散
@@ -993,7 +1036,7 @@ function aiProvRender(){
   });
   document.querySelectorAll('#aiProvList [data-aiprov-del]').forEach(b=>b.onclick=async()=>{
     const p=aiProvData.find(x=>x.id===b.dataset.aiprovDel); if(!p)return;
-    if(!confirm('确认删除接口「'+p.name+'」？'))return;
+    if(!await xnConfirm('确认删除接口「'+p.name+'」？'))return;
     try{ await api('/api/ai-providers',{method:'POST',body:JSON.stringify({action:'delete',id:p.id})}); aiProvLoad(); }
     catch(err){ alert('删除失败: '+err.message); }
   });
@@ -1324,20 +1367,20 @@ async function bindLoad(){
     document.querySelectorAll('#bdBound [data-ban-game-id]').forEach(a=>a.onclick=async(e)=>{
     e.preventDefault();
     const player=a.dataset.banGameId;
-    if(!confirm('确认在游戏内永久封禁 '+player+' ？（只封这个游戏ID，不影响绑定）'))return;
+    if(!await xnConfirm('确认在游戏内永久封禁 '+player+' ？（只封这个游戏ID，不影响绑定）'))return;
     try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'banGame',player,reason:'网页单独封禁'})}); bindLoad(); }
     catch(err){ alert('封禁失败: '+err.message); }
   });
   document.querySelectorAll('#bdBound [data-unbind]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.unbind, gid=a.dataset.gid;
-      if(!confirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
+      if(!await xnConfirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
       try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unbind',qq,gameId:gid})}); bindLoad(); }
       catch(err){ alert('解绑失败: '+err.message); }
     });
     document.querySelectorAll('#bdBound [data-unbind-all]').forEach(b=>b.onclick=async()=>{
       const qq=b.dataset.unbindAll;
-      if(!confirm('确认解绑 QQ '+qq+' 的全部绑定？'))return;
+      if(!await xnConfirm('确认解绑 QQ '+qq+' 的全部绑定？'))return;
       try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unbind',qq})}); bindLoad(); }
       catch(err){ alert('解绑失败: '+err.message); }
     });
@@ -1359,7 +1402,7 @@ async function bindLoad(){
     document.querySelectorAll('#bdQqBans [data-unban-qq]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.unbanQq;
-      if(!confirm('确认解封 QQ '+qq+' 并解除其游戏内封禁？（被封时解绑的账号不会自动恢复绑定）'))return;
+      if(!await xnConfirm('确认解封 QQ '+qq+' 并解除其游戏内封禁？（被封时解绑的账号不会自动恢复绑定）'))return;
       try{
         const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unban',qq})});
         if(r.lifted&&r.lifted.length)alert('已解封 QQ '+qq+'\n已解除游戏内封禁：'+r.lifted.join('、'));
@@ -1371,7 +1414,7 @@ async function bindLoad(){
     document.querySelectorAll('#bdGameBans [data-revoke-punishment]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const id=a.dataset.revokePunishment;
-      if(!confirm('确认按惩罚ID撤销 '+id+' ？（只撤销这一条惩罚）'))return;
+      if(!await xnConfirm('确认按惩罚ID撤销 '+id+' ？（只撤销这一条惩罚）'))return;
       try{
         const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'revokeGame',id})});
         if(r.failed&&r.failed.length)alert('⚠️ 撤销失败：'+r.failed.join('、'));
@@ -1382,21 +1425,21 @@ async function bindLoad(){
     document.querySelectorAll('#bdGameBans [data-unban-game]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const player=a.dataset.unbanGame;
-      if(!confirm('确认解封游戏ID '+player+' ？'))return;
+      if(!await xnConfirm('确认解封游戏ID '+player+' ？'))return;
       try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'unbanGame',player})}); bindLoad(); }
       catch(err){ alert('解封失败: '+err.message); }
     });
     document.querySelectorAll('#bdUnbind [data-ru-qq]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.ruQq, gid=a.dataset.ruGid, at=a.dataset.ruAt;
-      if(!confirm('撤销解绑：把 QQ '+qq+' 重新绑定到 '+gid+' ？'))return;
+      if(!await xnConfirm('撤销解绑：把 QQ '+qq+' 重新绑定到 '+gid+' ？'))return;
       try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'restoreUnbind',qq,gameId:gid,at:Number(at)})}); bindLoad(); }
       catch(err){ alert('恢复失败: '+err.message); }
     });
     document.querySelectorAll('#bdUnbind [data-del-qq]').forEach(a=>a.onclick=async(e)=>{
       e.preventDefault();
       const qq=a.dataset.delQq, gid=a.dataset.delGid, at=a.dataset.delAt;
-      if(!confirm('删除这条解绑记录？'))return;
+      if(!await xnConfirm('删除这条解绑记录？'))return;
       try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'deleteUnbind',qq,gameId:gid,at:Number(at)})}); bindLoad(); }
       catch(err){ alert('删除失败: '+err.message); }
     });
@@ -1407,7 +1450,7 @@ $('bdBanQqBtn').onclick=async()=>{
   const time=$('bdBanTime').value.trim();
   const reason=$('bdBanReason').value.trim();
   if(!/^\d{5,14}$/.test(qq))return alert('QQ 号格式不对（5-14 位数字）');
-  if(!confirm('确认封禁 QQ '+qq+' ？'+(time?'（时长 '+time+'）':'（永久）')))return;
+  if(!await xnConfirm('确认封禁 QQ '+qq+' ？'+(time?'（时长 '+time+'）':'（永久）')))return;
   try{
     const r=await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'ban',qq,time,reason})});
     if(r.synced&&r.synced.length)alert('已同步封禁游戏ID：'+r.synced.join('、'));
@@ -1418,14 +1461,14 @@ $('bdBanGameBtn').onclick=async()=>{
   const player=$('bdBanPlayer').value.trim();
   const reason=$('bdBanGameReason').value.trim();
   if(!/^[A-Za-z0-9_]{3,16}$/.test(player))return alert('游戏ID 只能是 3-16 位字母、数字或下划线');
-  if(!confirm('确认在游戏内永久封禁 '+player+' ？'))return;
+  if(!await xnConfirm('确认在游戏内永久封禁 '+player+' ？'))return;
   try{
     await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'banGame',player,reason})});
     $('bdBanPlayer').value='';$('bdBanGameReason').value='';bindLoad();
   }catch(err){ alert('封禁失败: '+err.message); }
 };
 $('bdClearUnbinds').onclick=async()=>{
-  if(!confirm('确认清除全部解绑记录？'))return;
+  if(!await xnConfirm('确认清除全部解绑记录？'))return;
   try{ await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'clearUnbinds'})}); bindLoad(); }
   catch(e){ alert('清除失败: '+e.message); }
 };
@@ -1464,7 +1507,7 @@ function acRender(){
   document.querySelectorAll('#acList [data-ac-unbind]').forEach(a=>a.onclick=async(e)=>{
     e.preventDefault();
     const qq=a.dataset.acUnbind, gid=a.dataset.acId;
-    if(!confirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
+    if(!await xnConfirm('确认解绑 QQ '+qq+' 的 '+gid+' ？'))return;
     try{ await api('/api/admin/unbind',{method:'POST',body:JSON.stringify({qq,gameId:gid})}); acLoad(); }
     catch(err){ alert('解绑失败: '+err.message); }
   });
@@ -1480,7 +1523,7 @@ function acRender(){
   });
   document.querySelectorAll('#acList [data-ac-pwd]').forEach(b=>b.onclick=async()=>{
     const qq=b.dataset.acPwd;
-    if(!confirm('清除 QQ '+qq+' 的网页密码？对方之后要用验证码登录重设。'))return;
+    if(!await xnConfirm('清除 QQ '+qq+' 的网页密码？对方之后要用验证码登录重设。'))return;
     try{ await api('/api/admin/password/clear',{method:'POST',body:JSON.stringify({qq})}); $('acMsg').textContent='已清除 QQ '+qq+' 的密码'; acLoad(); }
     catch(err){ alert('清除失败: '+err.message); }
   });

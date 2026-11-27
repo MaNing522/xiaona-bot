@@ -62,6 +62,49 @@ const THEME_BOOT = `<script>
 })();
 </script>`;
 
+// 站内确认弹窗（替代浏览器原生 confirm，样式跟随主题）
+const XN_CONFIRM_CSS = `
+.xn-mask{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  padding:20px;background:rgba(0,0,0,.35);opacity:0;transition:opacity .16s}
+.xn-mask.on{opacity:1}
+.xn-dlg{width:100%;max-width:420px;padding:18px;border-radius:12px;background:var(--card);color:var(--txt);
+  border:1px solid var(--line,var(--line-strong));box-shadow:0 12px 40px rgba(0,0,0,.28);
+  transform:translateY(8px);transition:transform .16s}
+.xn-mask.on .xn-dlg{transform:none}
+.xn-msg{font-size:14.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.xn-acts{display:flex;gap:10px;margin-top:16px}
+.xn-acts button{flex:1;margin:0}
+`;
+const XN_CONFIRM_JS = `
+function xnConfirm(msg,opt){
+  opt=opt||{};
+  return new Promise(function(res){
+    var mask=document.createElement('div');mask.className='xn-mask';
+    var dlg=document.createElement('div');dlg.className='xn-dlg';
+    var p=document.createElement('div');p.className='xn-msg';p.textContent=String(msg==null?'':msg);
+    var acts=document.createElement('div');acts.className='xn-acts';
+    var no=document.createElement('button');no.type='button';no.className='ghost';no.textContent=opt.cancelText||'取消';
+    var ok=document.createElement('button');ok.type='button';ok.textContent=opt.okText||'确定';
+    acts.appendChild(no);acts.appendChild(ok);dlg.appendChild(p);dlg.appendChild(acts);mask.appendChild(dlg);
+    document.body.appendChild(mask);
+    requestAnimationFrame(function(){mask.classList.add('on')});
+    var done=false;
+    function close(v){
+      if(done)return;done=true;
+      mask.classList.remove('on');
+      document.removeEventListener('keydown',onKey);
+      setTimeout(function(){mask.remove()},160);
+      res(!!v);
+    }
+    function onKey(e){if(e.key==='Escape')close(false);else if(e.key==='Enter')close(true)}
+    no.onclick=function(){close(false)};ok.onclick=function(){close(true)};
+    mask.onclick=function(e){if(e.target===mask)close(false)};
+    document.addEventListener('keydown',onKey);
+    ok.focus();
+  });
+}
+`;
+
 // ---------- 热力图标记：按登录 QQ 分开存，互不可见 ----------
 function loadHeatMarks() {
   const all = readJsonSafe(HEAT_MARKS_FILE, {});
@@ -877,9 +920,11 @@ button:disabled{opacity:.55;cursor:default}
 .ok{color:#16a34a}
 #capimg{height:52px;border:1px solid var(--line-strong);border-radius:8px;background:var(--card)}
 @media (max-width:720px){input,select,textarea{font-size:16px}}
+${XN_CONFIRM_CSS}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🤖</div><div><h1>我的账号</h1>
-  <div class="sub">QQ ${qq}${isOwner ? ' · 所有者' : ''}</div></div></div>
+  <div class="sub">QQ ${qq}${isOwner ? ' · 所有者' : ''}</div></div>
+  ${isOwner ? '<a href="/console/advanced" style="margin-left:auto;text-decoration:none"><button type="button">高级 →</button></a>' : ''}</div>
 
 <div class="card">
   <h2>我的游戏绑定</h2>
@@ -924,6 +969,7 @@ button:disabled{opacity:.55;cursor:default}
 </div>
 </div>
 <script>
+${XN_CONFIRM_JS}
 var $=function(i){return document.getElementById(i)};
 function post(url,body,cb){
   var xhr=new XMLHttpRequest();xhr.open('POST',url,true);
@@ -948,8 +994,8 @@ function load(){
       return '<div class="item"><b>'+b.id+'</b><button class="ghost" data-id="'+b.id+'" style="min-height:32px;padding:0 12px;font-size:12px">解绑</button></div>'
     }).join(''):'<span class="hint">还没有绑定任何游戏ID</span>';
     Array.prototype.forEach.call(document.querySelectorAll('#list [data-id]'),function(btn){
-      btn.onclick=function(){
-        if(!confirm('确认解绑 '+btn.dataset.id+' ？'))return;
+      btn.onclick=async function(){
+        if(!await xnConfirm('确认解绑 '+btn.dataset.id+' ？'))return;
         post('/api/me/unbind',{gameId:btn.dataset.id},function(s,r){
           if(!r.ok){alert(r.error||'解绑失败');return}
           load();
@@ -1049,6 +1095,7 @@ button:disabled{opacity:.55;cursor:default}
 .err{color:var(--danger);font-size:12px;min-height:16px;margin-top:6px;white-space:pre-wrap}
 .ok{color:#16a34a}
 @media (max-width:720px){input,select,textarea{font-size:16px}}
+${XN_CONFIRM_CSS}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🛠️</div><div><h1>管理中心</h1>
   <div class="sub">${roleName} ${qq} · 管理所有人的账户与游戏绑定</div></div></div>
@@ -1070,6 +1117,7 @@ button:disabled{opacity:.55;cursor:default}
 </div>
 </div>
 <script>
+${XN_CONFIRM_JS}
 var $=function(i){return document.getElementById(i)};
 var USERS=[];
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -1118,8 +1166,8 @@ function render(){
       +'</div></div>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('[data-unbind]'),function(b){
-    b.onclick=function(){
-      if(!confirm('确认解绑 QQ '+b.dataset.unbind+' 的 '+b.dataset.id+' ？'))return;
+    b.onclick=async function(){
+      if(!await xnConfirm('确认解绑 QQ '+b.dataset.unbind+' 的 '+b.dataset.id+' ？'))return;
       post('/api/admin/unbind',{qq:b.dataset.unbind,gameId:b.dataset.id},function(st,r){
         flash(r.ok?('已解绑 '+b.dataset.id):(r.error||'解绑失败'),!!r.ok);if(r.ok)load();
       });
@@ -1139,8 +1187,8 @@ function render(){
     };
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-pwd]'),function(b){
-    b.onclick=function(){
-      if(!confirm('清除 QQ '+b.dataset.pwd+' 的网页密码？对方之后要用验证码登录重设。'))return;
+    b.onclick=async function(){
+      if(!await xnConfirm('清除 QQ '+b.dataset.pwd+' 的网页密码？对方之后要用验证码登录重设。'))return;
       post('/api/admin/password/clear',{qq:b.dataset.pwd},function(st,r){
         flash(r.ok?'已清除密码':(r.error||'清除失败'),!!r.ok);if(r.ok)load();
       });
@@ -1162,7 +1210,7 @@ function heatmapPage(sess) {
     ? '玩家走过的区块 · 颜色=玩家 / 深浅=走过次数 · 多人走过时颜色叠加（最后走的在上层）· 拖动移动 / 滚轮缩放'
     : '你绑定游戏账号走过的区块 · 颜色=账号 / 深浅=走过次数 · 拖动移动 / 滚轮缩放';
   const backHref = isOwner ? '/console' : '/me';
-  const backText = isOwner ? '← 返回控制面板' : '← 我的账号';
+  const backText = '← 我的账号';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 ${THEME_BOOT}
@@ -1247,6 +1295,7 @@ body.fsmode #fsExit{display:block}
 .meta{color:var(--sub);font-size:12px}
 a{color:var(--accent);text-decoration:none}
 @media (max-width:720px){input,select,textarea{font-size:16px}}
+${XN_CONFIRM_CSS}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🗺️</div><div><h1>${pageTitle}</h1>
   <div class="sub">${subText}</div></div></div>
@@ -1315,6 +1364,14 @@ a{color:var(--accent);text-decoration:none}
 
   <div class="card sidecard">
     <h2>${isOwner ? '玩家图例' : '我的账号'}</h2>
+    <div class="row" style="gap:6px;margin:0 0 8px">
+      <select id="sortBy" style="flex:1;min-height:32px">
+        <option value="name">按玩家名</option>
+        <option value="time">按在线时间</option>
+        <option value="chunks">按区块数据量</option>
+      </select>
+      <button id="sortDir" class="ghost" style="min-height:32px;padding:0 10px">升序</button>
+    </div>
     <div class="hint" style="margin:0 0 8px">点整块可隐藏/显示；点「定位」把对应维度缩放到他当前位置。</div>
     <div class="legend" id="legend"></div>
   </div>
@@ -1327,6 +1384,7 @@ a{color:var(--accent);text-decoration:none}
 <button id="fsExit" class="ghost">退出全屏（Esc）</button>
 </div>
 <script>
+${XN_CONFIRM_JS}
 var $=function(i){return document.getElementById(i)};
 var DIMS=[
   {id:'minecraft:overworld',cid:'overworld',name:'主世界'},
@@ -1334,6 +1392,7 @@ var DIMS=[
   {id:'minecraft:the_end',cid:'the_end',name:'末地'}
 ];
 var DATA=null, HIDDEN={}, VIEW={}, TRANS={}, COLORS={}, timer=null, DRAG=null, TOUCH=null, POINTERS={};
+var SORT={key:'name',dir:1};
 // 地图标记（标点 / 笔刷 / 圆）：按维度存方块坐标，持久化到 bot 服务器的 data/heatmap-marks.json，
 // 按登录 QQ 分开存（不同人互不可见）；每条标记都有 id / name / color，可在左侧「标记」栏里改名改色。
 var MODE='pan', DRAW=null, ERASE=null, PREVIEW={}, MARKS={}, SEL='', MARKS_SAVE=null, MARKS_READY=false;
@@ -1861,8 +1920,8 @@ function setMode(m){
 Array.prototype.forEach.call(document.querySelectorAll('#modeBar [data-mode]'),function(b){
   b.onclick=function(){setMode(b.dataset.mode)};
 });
-$('clearMarks').onclick=function(){
-  if(!confirm('清空所有维度上的标记？'))return;
+$('clearMarks').onclick=async function(){
+  if(!await xnConfirm('清空所有维度上的标记？'))return;
   MARKS={};
   SEL='';
   saveMarks();
@@ -1895,7 +1954,19 @@ function renderLegend(){
       g.last={x:p.last.x,z:p.last.z,t:Number(p.last.t||0),dim:p.dim};
     }
   });
-  names.sort();
+  // 排序：玩家名 / 在线时间（最后活动）/ 区块数据量，可升降序
+  var arr=names.map(function(n){return byName[n]});
+  var sk=SORT.key, sd=SORT.dir;
+  arr.sort(function(a,b){
+    var va,vb;
+    if(sk==='time'){va=a.last?Number(a.last.t||0):0;vb=b.last?Number(b.last.t||0):0;}
+    else if(sk==='chunks'){va=a.chunks||0;vb=b.chunks||0;}
+    else{va=String(a.name).toLowerCase();vb=String(b.name).toLowerCase();}
+    if(va<vb)return -sd;
+    if(va>vb)return sd;
+    return String(a.name).localeCompare(String(b.name),'zh-Hans-CN');
+  });
+  names=arr.map(function(g){return g.name});
   if(!names.length){$('legend').innerHTML='<span class="hint">还没有数据</span>';return;}
   // 在线名单带维度（/bridge/players 的 dim）；兼容旧结构（纯名字数组）
   var online={};
@@ -1947,6 +2018,11 @@ function renderLegend(){
     };
   });
 }
+// 图例排序控件
+$('sortBy').value=SORT.key;
+$('sortDir').textContent=SORT.dir>0?'升序':'降序';
+$('sortBy').onchange=function(){SORT.key=this.value;renderLegend()};
+$('sortDir').onclick=function(){SORT.dir=-SORT.dir;this.textContent=SORT.dir>0?'升序':'降序';renderLegend()};
 function dimName(d){
   return ({'minecraft:overworld':'主世界','minecraft:the_nether':'下界','minecraft:the_end':'末地'})[d]||d||'未知维度';
 }
@@ -2249,8 +2325,22 @@ async function route(req, res, url) {
     return sendHtml(res, 200, fs.readFileSync(HOME_FILE));
   }
 
-  // 控制面板：所有者专属；管理员 / 普通玩家按身份跳转
+  // 控制面板：所有者进来先看到和普通玩家一样的「我的账号」页，右上角「高级」才进管理控制台
   if (url.pathname === '/console' || url.pathname === '/console.html') {
+    const s = sessionOf(req);
+    if (!s) {
+      res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (s.role !== 'owner') {
+      res.writeHead(302, { Location: canAdmin(s.role) ? '/admin' : '/me', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    return sendHtml(res, 200, mePage(s));
+  }
+
+  // 高级控制台：所有者专属（原 /console 的完整管理面板）
+  if (url.pathname === '/console/advanced' || url.pathname === '/console/advanced.html') {
     const s = sessionOf(req);
     if (!s) {
       res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' });
@@ -2294,7 +2384,7 @@ async function route(req, res, url) {
     }
     // 所有者直接用主面板里的「账户管理」内嵌页，不再单独开一个页面
     if (s.role === 'owner') {
-      res.writeHead(302, { Location: '/console#accounts', 'Cache-Control': 'no-store' });
+      res.writeHead(302, { Location: '/console/advanced#accounts', 'Cache-Control': 'no-store' });
       return res.end();
     }
     return sendHtml(res, 200, adminPage(s));
