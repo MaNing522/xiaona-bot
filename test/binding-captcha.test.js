@@ -28,9 +28,15 @@ describe('startBind', () => {
     expect(r.ttlSec).toBe(300);
   });
 
+  it('中文与短ID 可以绑定', () => {
+    expect(startBind('10003', '带中文').ok).toBe(true);
+    expect(startBind('10004', 'a').ok).toBe(true);
+  });
+
   it('非法游戏ID 被拒绝，不进入待验证', () => {
-    expect(startBind('10001', 'a').ok).toBe(false);
-    expect(startBind('10001', '带中文').ok).toBe(false);
+    expect(startBind('10001', 'bad name').ok).toBe(false);
+    expect(startBind('10001', 'a'.repeat(17)).ok).toBe(false);
+    expect(startBind('10001', '小明!').ok).toBe(false);
     // 没进入待验证 → 随便发数字不该被消费
     expect(answerCaptcha('10001', '1111').handled).toBe(false);
   });

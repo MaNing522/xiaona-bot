@@ -67,7 +67,7 @@ export const AGENT_TOOLS = [
       description: '查询某个 Minecraft 玩家的统计数据（游玩时长、最后在线、活跃度等），数据来自服务器 Plan 插件。',
       parameters: {
         type: 'object',
-        properties: { name: { type: 'string', description: '玩家游戏ID，3-16 位字母/数字/下划线' } },
+        properties: { name: { type: 'string', description: '玩家游戏ID，1-16 位中英文/数字/下划线' } },
         required: ['name'],
       },
     },
@@ -81,13 +81,13 @@ export const AGENT_TOOLS = [
       description: '（仅管理员）查某个在线玩家当前的坐标（X/Y/Z）和所在维度。坐标属于玩家隐私，只在对方明确、确有正当理由时用；不要在群聊里主动扩散别人的坐标，也不要写进记忆。',
       parameters: {
         type: 'object',
-        properties: { name: { type: 'string', description: '玩家游戏ID，3-16 位字母/数字/下划线' } },
+        properties: { name: { type: 'string', description: '玩家游戏ID，1-16 位中英文/数字/下划线' } },
         required: ['name'],
       },
     },
     run: async (args, ctx) => {
       const name = String(args.name || '').trim();
-      if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return '玩家名格式不对（3-16 位字母、数字或下划线）。';
+      if (!/^[\p{L}\p{N}_]{1,16}$/u.test(name)) return '玩家名格式不对（1-16 位中英文、数字或下划线）。';
       const pos = await ctx.runCommand(`data get entity ${name} Pos`);
       let dimText = '';
       try {

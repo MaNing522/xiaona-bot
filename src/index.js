@@ -2142,7 +2142,7 @@ async function handleCommand(event, text) {
         case '/查询': {
             const target = arg.trim();
             if (!target) {
-                return sendReply(event, '❌ 用法：#查询 <玩家名>\n数据来自服务器的 Plan 插件（名字为 3-16 位字母/数字/下划线）');
+                return sendReply(event, '❌ 用法：#查询 <玩家名>\n数据来自服务器的 Plan 插件（名字为 1-16 位中英文/数字/下划线）');
             }
             // 服务器没装 Plan 时 mod 会禁用 /bridge/player，这里先拦下，别让用户看到一长串接口错误
             if (!isPlanAvailable()) {

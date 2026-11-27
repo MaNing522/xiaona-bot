@@ -13,7 +13,7 @@
   "entrypoints": {
     "main": ["com.xiaona.XiaonaMod"]
   },
-  "mixins": ["xiaona.mixins.json"],
+  "mixins": ["xiaona.mixins.json", "xiaona.names.mixins.json"],
   "depends": {
     "fabricloader": ">=0.18.1",
     "fabric-api": "*",

@@ -74,9 +74,9 @@ final class VanillaBanProvider implements BanProvider {
             try {
                 BannedPlayerList list = server.getPlayerManager().getUserBanList();
                 for (String name : names) {
-                    if (!name.matches("[A-Za-z0-9_]{3,16}")) {
+                    if (!PlayerNames.valid(name)) {
                         failed.add(name);
-                        errors.put(name, "玩家名不合法（只能是 3~16 位字母、数字、下划线）");
+                        errors.put(name, "玩家名不合法（只能是 1~16 位中英文、数字、下划线）");
                         continue;
                     }
                     try {

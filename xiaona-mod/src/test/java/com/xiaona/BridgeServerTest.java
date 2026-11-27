@@ -483,9 +483,9 @@ public class BridgeServerTest {
             assertTrue(ghost[1].contains("\"ok\":false") && ghost[1].contains("没有玩家 Ghost"),
                     "空数组应报「没有该玩家」: " + ghost[1]);
 
-            // 非法玩家名：直接 400，不去骚扰 Plan
+            // 非法玩家名：直接 400，不去骚扰 Plan（中文名是合法的，规则见 PlayerNamesTest）
             assertEquals("400", postJson(port, "/bridge/player", "{\"name\":\"a b\"}")[0]);
-            assertEquals("400", postJson(port, "/bridge/player", "{\"name\":\"\u5c0f\u94a0\"}")[0]);
+            assertEquals("400", postJson(port, "/bridge/player", "{\"name\":\"\u5c0f\u660e!\"}")[0]);
 
             // 未签名：必须 401
             HttpURLConnection raw = (HttpURLConnection) URI.create("http://127.0.0.1:" + port + "/bridge/player").toURL().openConnection();

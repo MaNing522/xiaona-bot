@@ -664,8 +664,8 @@ public class BridgeServer {
             sendJson(ex, 400, Map.of("ok", false, "error", "请求体不是合法 JSON"));
             return;
         }
-        if (!name.matches("[A-Za-z0-9_]{3,16}")) {
-            sendJson(ex, 400, Map.of("ok", false, "error", "玩家名不合法（应为 3-16 位字母/数字/下划线）"));
+        if (!PlayerNames.valid(name)) {
+            sendJson(ex, 400, Map.of("ok", false, "error", "玩家名不合法（应为 1-16 位中英文、数字或下划线）"));
             return;
         }
 

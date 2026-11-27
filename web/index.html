@@ -1460,7 +1460,7 @@ $('bdBanQqBtn').onclick=async()=>{
 $('bdBanGameBtn').onclick=async()=>{
   const player=$('bdBanPlayer').value.trim();
   const reason=$('bdBanGameReason').value.trim();
-  if(!/^[A-Za-z0-9_]{3,16}$/.test(player))return alert('游戏ID 只能是 3-16 位字母、数字或下划线');
+  if(!/^[\p{L}\p{N}_]{1,16}$/u.test(player))return alert('游戏ID 只能是 1-16 位中英文、数字或下划线');
   if(!await xnConfirm('确认在游戏内永久封禁 '+player+' ？'))return;
   try{
     await api('/api/bindings',{method:'POST',body:JSON.stringify({action:'banGame',player,reason})});
@@ -1515,7 +1515,7 @@ function acRender(){
     const qq=b.dataset.acBind;
     const inp=document.querySelector('#acList [data-ac-gid="'+qq+'"]');
     const gid=(inp&&inp.value||'').trim();
-    if(!/^[A-Za-z0-9_]{3,16}$/.test(gid))return alert('游戏ID 只能是 3-16 位字母、数字或下划线');
+    if(!/^[\p{L}\p{N}_]{1,16}$/u.test(gid))return alert('游戏ID 只能是 1-16 位中英文、数字或下划线');
     b.disabled=true;
     try{ await api('/api/admin/bind',{method:'POST',body:JSON.stringify({qq,gameId:gid})}); $('acMsg').textContent='已给 QQ '+qq+' 绑定 '+gid; acLoad(); }
     catch(err){ alert('绑定失败: '+err.message); }

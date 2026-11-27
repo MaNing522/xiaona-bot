@@ -3006,7 +3006,7 @@ async function route(req, res, url) {
     // 直接封禁 / 解封游戏ID
     if (action === 'banGame' || action === 'unbanGame') {
       const name = String(player || gameId || '').trim();
-      if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return sendJSON(res, 400, { ok: false, error: '游戏ID 格式不对' });
+      if (!/^[\p{L}\p{N}_]{1,16}$/u.test(name)) return sendJSON(res, 400, { ok: false, error: '游戏ID 格式不对' });
       if (!isMcConnected()) return sendJSON(res, 400, { ok: false, error: 'MC 服务器未连接' });
       const banned = action === 'banGame';
       const r = await banPlayers([name], banned, banned ? String(reason || '').trim() : '');
