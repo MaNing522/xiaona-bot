@@ -46,5 +46,5 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
-// 注：`gradlew build` 会同时构建根项目（1.21.11）与各子项目（1.21.1 / 1.21.8）；
-// 只构建某一个版本时用 `gradlew :fabric-1.21.1:build`。
+// 注：目前 settings.gradle 只引入根项目，`gradlew build` 只构建 1.21.11。
+// 1.21.1 / 1.21.8 子项目已在 settings.gradle 里注释掉，需要时再放开。

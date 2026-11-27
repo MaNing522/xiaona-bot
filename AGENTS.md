@@ -57,10 +57,9 @@ bot 侧：[binding.js](file:///c:/QQBot/src/binding.js) 绑定/解绑后 `notify
 ## 5. 常用命令
 
 ```powershell
-# mod：构建全部 Fabric 版本（根项目 1.21.11 + 子项目 1.21.1 / 1.21.8）
+# mod：只构建 1.21.11（子项目 1.21.1 / 1.21.8 已在 settings.gradle 注释掉，不参与构建）
 cd c:\QQBot\xiaona-mod; .\gradlew.bat build
-# 只构建某个版本：.\gradlew.bat :fabric-1.21.1:build（或 :fabric-1.21.8:build）
-# 根项目单测：.\gradlew.bat test
+# 单测：.\gradlew.bat test
 
 # bot：测试（vitest，约 112 用例）/ 静态检查
 cd c:\QQBot; npm test; npx eslint <file>
@@ -102,7 +101,7 @@ cd c:\QQBot; .\restart.bat
 - **小钠自己的 MC 客户端（2026-11 改为 headless 子进程）**：代码在 [src/mcheadless/](file:///c:/QQBot/src/mcheadless)（`headless.js` 主程序 + `baritone.js` 寻路/挖矿移植 + `altoclef/` 行为决策移植，独立 `package.json` 标 `type: commonjs`），源自仓库 `MaNing522/wclcmmlBOT`，**两边各存一份，改动要同时提交推送**。它默认 `MC_AUTOCONNECT=false`、不开自动进服，先起本机控制口 `127.0.0.1:2319`，由 [mcbot.js](file:///c:/QQBot/src/mcbot.js) 按需拉起子进程并通过 HTTP 下令：`join <host> [port] [version]` / `leave` / `goto <x> <y> <z>` 或 `goto <x> <z>` / `fly` / `get <物品> [数量]` / `mine <方块> [数量]`（`collect` 是它的别名） / `food [单位]` / `develop` / `pvp [玩家]` / `mace` / `follow` / `stop` / `xray` / `toss` / `map [半径]`（附近地形俯视 PNG） / `mapitem`（物品栏地图物品：先拿在手上等服务器下发 128×128 颜色表，再按原版 62 色 ×4 明暗渲染成 PNG） / `win`（列当前窗口槽位，玻璃板装饰自动隐藏） / `click <槽位>` / `use <槽位>`（右键手持物品，36-44 或 1-9）。**26.2 服务器的 `show_dialog` 验证题**（如 lblt.xyz 的「计算：一 + 二」）由客户端自动解析中文算式、挑对应答案的 `/lbltverify` 命令执行；`maybeCaptcha` 除 `captcha/验证码` 外还认「人机验证 / 手中地图 / 地图上的 N 位数字」。**行为决策照搬 AltoClef（Java → JS 直译）**：`altoclef/tasksystem.js` 是 `Task/TaskChain/TaskRunner/SingleTaskChain`，`tasks.js` 是赶路/挖方块/捡掉落/采矿/打猎任务，`chains.js` 是 `UserTaskChain`/`WorldSurvivalChain`（岩浆、着火、溺水）/`FoodChain`（自动吃饭）/`MLGBucketFallChain`（落地水），`index.js` 是 mineflayer 适配层 + `TaskCatalogue` 式物品映射；`headless.js` 每 50ms（20 TPS）驱动一次，只在 `patrol`/`task` 模式下跑（飞行、开发、PvP、跟随、旧采集不插手）。`get`/`mine`/`food`/`goto` 走任务链后台执行，`/state` 的 `task` 字段和 `mcbot_status` 会显示当前任务；需要合成的物品暂不支持（会明确报错）。地图由 [mapRender.js](file:///c:/QQBot/src/mcheadless/mapRender.js) 零依赖渲染（地形图扫最高方块上色 + 高度明暗 + 玩家打点；物品地图读 `map` 包累积 `pixels`），默认存到状态文件同级的 `maps/`（保留最近 20 张），路径与摘要通过 `/state` 的 `map` 字段回给小钠。账号取 `.env` 的 `MC_BOT_USER`（默认 xiaona）与 `MC_BOT_PASSWORD`，控制口 `MC_BOT_CTL_PORT`，状态落 `data/mcbot-state.json`。AI 工具对应 `mcbot_join` / `mcbot_leave` / `mcbot_status` / `mcbot_chat` / `mcbot_command` / `mcbot_cmd` / `mcbot_map`（生成地图 → 发到当前 QQ 会话 → 视觉模型看一眼画面，摘要回灌）/ `mcbot_mapitem`（同上，来源是物品栏地图）/ `mcbot_players` / `mcbot_inventory`（都 admin+，定义在 [agent.js](file:///c:/QQBot/src/agent.js)，`index.js` 挂到 `ctx.mcbot`）。旧的同进程 mineflayer 实现（`walk_to/break/place/use/login/move`）已删除。**客户端只是执行器，大脑是 AI**：`promptTools.js` 的「自己的 MC 客户端」段要求模型先 `mcbot_status` 读真实状态再决定下一步，宏指令（`develop`/`collect`）只当起点、随时可 `stop` 改路线，不要在 `headless.js` 里再焊死固定流程。
 - **目录布局（2026-10 整理）**：`start.js` 是唯一入口、留在根目录；机器人模块全部在 `src/`（主程序 `src/index.js`）。`src/paths.js` 导出 `ROOT`，所有运行时资源（`.env`、`config.json`、`prompt.txt`、`data/`、`logs/`、`voice_cache/`、`web/`、`snowluma/`）都从 `ROOT` 定位，**不写死盘符 —— 复制整个 QQBot 目录即可迁移**。`asr-venv/` 是 Python 虚拟环境，换机若基础 Python 路径不同需重建（不建也能启动，只是本地语音识别不可用）。
 - 版本号在 [xiaona-mod/build.gradle](file:///c:/QQBot/xiaona-mod/build.gradle)，**每次加功能递增**。
-- **多版本构建（Fabric）**：根项目仍是 1.21.11（源码在 `src/main/java`，产物 `build/libs/xiaona-mod-<ver>.jar`）；`fabric-1.21.1` / `fabric-1.21.8` 是子项目，构建时用 `Sync` 把「根项目共享源码 + `legacy/src/main/java` 覆盖层」合成到各自的 `build/merged-src` 再编译，产物 `fabric-<ver>/build/libs/xiaona-mod-<mc>-<ver>.jar`。
+- **只构建 1.21.11（2026-11 起）**：根项目就是 1.21.11，源码在 `src/main/java`，产物 `build/libs/xiaona-mod-<ver>.jar`；`gradlew build` 只构建它。`fabric-1.21.1` / `fabric-1.21.8` 子项目的 `settings.gradle` include 已注释掉，不参与构建（需要时再放开）。
   - `legacy/` 只放旧版（1.21.1 / 1.21.8 同代 API）确有差异的文件：`WhitelistGate`（`GameProfile` 版）、`VanillaBanProvider`（反射读 `ServerConfigEntry#getKey`）、`mixin/PlayerManagerMixin`（`checkCanJoin(SocketAddress, GameProfile)`）、`Compat`（`executeWithPrefix` / `isOperator(GameProfile)`）。
   - 共享代码里凡涉及这些差异的，一律走 `Compat`，不要直接写版本专属 API。
   - **26.x 还没支持**：Yarn 映射止于 1.21.11；26.x 用 Mojang 官方名（没有 intermediary）且要求 Java 25，需要单独做映射改写与 JDK 25 构建环境。
