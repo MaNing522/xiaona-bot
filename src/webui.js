@@ -924,7 +924,10 @@ ${XN_CONFIRM_CSS}
 </style></head><body><div class="wrap">
 <div class="head"><div class="logo">🤖</div><div><h1>我的账号</h1>
   <div class="sub">QQ ${qq}${isOwner ? ' · 所有者' : ''}</div></div>
-  ${isOwner ? '<a href="/console/advanced" style="margin-left:auto;text-decoration:none"><button type="button">高级 →</button></a>' : ''}</div>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <a href="/" style="text-decoration:none"><button type="button" class="ghost">返回主页</button></a>
+    ${isOwner ? '<a href="/console/advanced" style="text-decoration:none"><button type="button">高级 →</button></a>' : ''}
+  </div></div>
 
 <div class="card">
   <h2>我的游戏绑定</h2>
@@ -964,7 +967,7 @@ ${XN_CONFIRM_CSS}
 </div>
 
 <div class="row" style="justify-content:space-between">
-  ${canAdmin(sess.role) ? '<a class="hint" href="/admin">管理面板 →</a>' : '<span class="hint">小钠控制面板</span>'}
+  <span class="hint">小钠控制面板</span>
   <button id="logout" class="ghost">退出登录</button>
 </div>
 </div>
