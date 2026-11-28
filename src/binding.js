@@ -13,7 +13,8 @@ import { renderCaptcha } from './captcha.js';
 import { writeJsonAtomic, readJsonSafe } from './datafile.js';
 import { logger } from './logger.js';
 
-const GAME_ID = /^[A-Za-z0-9_]{3,16}$/;   // MC 正版/离线 ID 规则
+// 游戏ID 规则：1~16 个字符，允许中英文、数字、下划线（与服务器端 PlayerNames 一致）
+const GAME_ID = /^[\p{L}\p{N}_]{1,16}$/u;
 const MAX_TRIES = 5;
 
 let file = '';
@@ -290,7 +291,7 @@ export function startBind(qq, gameId) {
   if (ban) return { ok: false, error: bannedMsg(ban) };
   const id = String(gameId || '').trim();
   if (!GAME_ID.test(id)) {
-    return { ok: false, error: '游戏ID 只能是 3-16 位的字母、数字或下划线，例如 Steve' };
+    return { ok: false, error: '游戏ID 只能是 1-16 位中英文、数字或下划线，例如 Steve 或 小明' };
   }
   const ids = getGameIdsOf(key);
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
@@ -378,7 +379,7 @@ export function forceBind(qq, gameId) {
   const ban = isBanned(key);
   if (ban) return { ok: false, error: `QQ ${key} 处于封禁中，无法绑定` };
   const id = String(gameId || '').trim();
-  if (!GAME_ID.test(id)) return { ok: false, error: '游戏ID 只能是 3-16 位的字母、数字或下划线' };
+  if (!GAME_ID.test(id)) return { ok: false, error: '游戏ID 只能是 1-16 位中英文、数字或下划线' };
   const ids = getGameIdsOf(key);
   if (ids.some((x) => x.toLowerCase() === id.toLowerCase())) {
     return { ok: false, error: `QQ ${key} 已经绑定了 ${id}` };

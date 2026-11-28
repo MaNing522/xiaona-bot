@@ -29,8 +29,11 @@ describe('startBind', () => {
   });
 
   it('非法游戏ID 被拒绝，不进入待验证', () => {
-    expect(startBind('10001', 'a').ok).toBe(false);
-    expect(startBind('10001', '带中文').ok).toBe(false);
+    // 游戏ID规则已放宽为 1-16 位中英文/数字/下划线；非法 = 空 / 超长 / 含空格或符号
+    expect(startBind('10001', '').ok).toBe(false);
+    expect(startBind('10001', 'a'.repeat(17)).ok).toBe(false);
+    expect(startBind('10001', 'a b').ok).toBe(false);
+    expect(startBind('10001', 'bad!id').ok).toBe(false);
     // 没进入待验证 → 随便发数字不该被消费
     expect(answerCaptcha('10001', '1111').handled).toBe(false);
   });

@@ -42,6 +42,7 @@ import {
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const WEB_DIR = path.join(ROOT, 'web', 'index.html');
 const HOME_FILE = path.join(ROOT, 'web', 'home.html');
+const WEB_ASSETS = path.join(ROOT, 'web', 'assets');
 const HEAT_MARKS_FILE = path.join(ROOT, 'data', 'heatmap-marks.json');
 // 所有网页共用的触摸兼容基线：去掉点击高亮、禁止双击缩放延迟、避免移动端自动放大文字
 const TOUCH_CSS = `
@@ -2237,11 +2238,27 @@ function pclHomepageXaml(base) {
 }
 
 // ---------- 路由 ----------
+/** /assets/*：主页等公开静态图片（赞赏码等），只读、不需要登录 */
+function serveAsset(res, pathname) {
+  const rel = pathname.replace(/^\/\/?/, '');
+  const file = path.resolve(WEB_ASSETS, ...decodeURIComponent(rel).split('/').filter(Boolean));
+  if (!file.startsWith(WEB_ASSETS + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Not Found');
+  }
+  const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' });
+  fs.createReadStream(file).pipe(res);
+}
+
 async function route(req, res, url) {
   sweepAuth();
 
   // 健康检查：放在一切鉴权之前（探活工具不该需要登录），且不返回任何敏感信息
   if (url.pathname === '/health') return handleHealth(res);
+
+  // 公共静态图片（赞赏码等）：公开、只读
+  if (url.pathname.startsWith('/assets/')) return serveAsset(res, url.pathname);
 
   // 主页：所有人都给同一个公开主页（未登录右上角是「登录」，登录后变成「进入控制台」）
   if (url.pathname === '/' || url.pathname === '/home' || url.pathname === '/home.html') {

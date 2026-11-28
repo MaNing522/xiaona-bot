@@ -79,6 +79,8 @@ const WS_URL = process.env.ONEBOT_WS || process.env.NAPCAT_WS || 'ws://127.0.0.1
 const WS_TOKEN = process.env.ONEBOT_TOKEN || process.env.NAPCAT_TOKEN || '';
 const SAVE_DIR = process.env.SAVE_DIR || path.join(ROOT, 'data');
 const RESTART_NOTICE_FILE = path.join(SAVE_DIR, 'restart-notice.json');
+// 赞赏码（收款二维码）：主页、#赞助、AI 工具共用这一张图
+const ZAN_FILE = path.join(ROOT, 'web', 'assets', 'zan.png');
 // MC 桥（服务器侧 mod）：桥接群号，以及是否把群消息转发进游戏
 const MC_BRIDGE_GROUP = String(process.env.MC_BRIDGE_GROUP || '');
 // 图片/表情转发进游戏：只发文字占位（游戏里要显示真图得靠客户端模组，已决定不做）
@@ -1058,6 +1060,18 @@ function buildAgentCtx(key, uid = '', { images = [], notify = null, sendVoice = 
     };
     return {
         search: (q) => (q ? getSearchContext(q, searchSettings().limit) : '没有提供搜索关键词。'),
+        // 赞赏码：把收款用的赞赏码图片发到当前会话（base64，SnowLuma 在容器里也能取到）
+        sendReward: async () => {
+            if (!fs.existsSync(ZAN_FILE)) return '赞赏码图片还没配置好（缺 web/assets/zan.png），先跟对方说暂时没有。';
+            if (!sendImage) return '当前场景发不了图片，让对方在 QQ 群里发「#赞助」拿赞赏码。';
+            try {
+                await sendImage(ZAN_FILE);
+                markSent('（发了赞赏码）');
+                return '已把赞赏码发到当前会话。它是**收款用的赞赏码**（赞助/打赏），不是登录码、验证码或加群码，别解释错。';
+            } catch (e) {
+                return `赞赏码发送失败：${e.message}`;
+            }
+        },
         // 模型决定要调工具时，把它自己写的那句话（"让我看看这张图""正在搜一下"）先发给用户
         notify: (text) => {
             const t = String(text || '').trim();
@@ -1979,6 +1993,17 @@ async function handleCommand(event, text) {
         case '/帮助':
             return sendReply(event, buildHelp(r, arg));
 
+        // 赞赏码：收款用的赞赏码图片（游戏里发不了图，提示去群里）
+        case '/赞助':
+        case '/赞赏':
+        case '/打赏': {
+            if (Array.isArray(event.__replySink) || String(convKey(event)).startsWith('mc:')) {
+                return sendReply(event, '游戏里发不了图片，去 QQ 群里发「#赞助」就能收到赞赏码。');
+            }
+            if (!fs.existsSync(ZAN_FILE)) return sendReply(event, '⚠️ 赞赏码还没配置好（缺 web/assets/zan.png）。');
+            return sendReply(event, [segImageB64(fs.readFileSync(ZAN_FILE))]);
+        }
+
         // 主人：从 GitHub 拉最新代码（直连不通会自动换镜像），成功后自动重启
         case '/更新':
         case '/拉更新':
@@ -2142,7 +2167,7 @@ async function handleCommand(event, text) {
         case '/查询': {
             const target = arg.trim();
             if (!target) {
-                return sendReply(event, '❌ 用法：#查询 <玩家名>\n数据来自服务器的 Plan 插件（名字为 3-16 位字母/数字/下划线）');
+                return sendReply(event, '❌ 用法：#查询 <玩家名>\n数据来自服务器的 Plan 插件（名字为 1-16 位中英文/数字/下划线）');
             }
             // 服务器没装 Plan 时 mod 会禁用 /bridge/player，这里先拦下，别让用户看到一长串接口错误
             if (!isPlanAvailable()) {
