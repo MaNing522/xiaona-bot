@@ -2240,7 +2240,7 @@ function pclHomepageXaml(base) {
 // ---------- 路由 ----------
 /** /assets/*：主页等公开静态图片（赞赏码等），只读、不需要登录 */
 function serveAsset(res, pathname) {
-  const rel = pathname.replace(/^\/\/?/, '');
+  const rel = pathname.replace(/^\/assets\/?/, '');
   const file = path.resolve(WEB_ASSETS, ...decodeURIComponent(rel).split('/').filter(Boolean));
   if (!file.startsWith(WEB_ASSETS + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
