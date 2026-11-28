@@ -706,7 +706,8 @@ const NUM_LABELS={
 const GC_ENV={
   rateLimit:{userCooldownMs:'RL_USER_COOLDOWN_MS',userPerMinute:'RL_USER_PER_MINUTE',userPerHour:'RL_USER_PER_HOUR',userPerDay:'RL_USER_PER_DAY',groupPerMinute:'RL_GROUP_PER_MINUTE',groupPerHour:'RL_GROUP_PER_HOUR',globalMaxConcurrent:'RL_GLOBAL_CONCURRENT',globalPerMinute:'RL_GLOBAL_PER_MINUTE',queueMax:'RL_QUEUE_MAX',queueTimeoutMs:'RL_QUEUE_TIMEOUT_MS',violationsToCooldown:'RL_VIOLATIONS_TO_COOLDOWN',penaltyCooldownMs:'RL_PENALTY_COOLDOWN_MS',floodWindowMs:'RL_FLOOD_WINDOW_MS',floodCount:'RL_FLOOD_COUNT',penaltyMuteMs:'RL_PENALTY_MUTE_MS'},
 };
-// 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）const CV_NUM_KEYS={
+// 会话表单里可覆盖的数值项（与后端 chatSettings 的 NUM_KEYS 对应）
+const CV_NUM_KEYS={
   rateLimit:['userCooldownMs','userPerMinute','userPerHour','userPerDay','groupPerMinute','groupPerHour'],
   cooldown:['pokeMs','shakeMs','forwardMs','forwardDelayMs'],
   engage:['ttlMs','initiatorLeft','otherLeft'],
